@@ -56,13 +56,13 @@ MARGIN_FRACTION = float(sys.argv[2]) if len(sys.argv) > 2 else 1.0
 YAW_SPEED = float(sys.argv[3]) if len(sys.argv) > 3 else 28.0
 PITCH_SPEED = float(sys.argv[4]) if len(sys.argv) > 4 else 20.0  # angle units per frame at full stick-Y
 # Asymmetric pitch clamp (1024 = 90 deg). Looking UP is what clips through the
-# floor into the game's unrendered under-geometry (user-confirmed 2026-07-06), so
+# floor into the game's unrendered under-geometry, so
 # the up travel is limited hard; looking DOWN is harmless so it stays generous.
 PITCH_LIMIT_UP = 57       # stick-up / positive pitch (look up) - restricted (clips floor)
 PITCH_LIMIT_DOWN = -900   # stick-down / negative pitch (look down) - generous
 MOUSE_SPEED = 3.0  # yaw units per pixel of mouse-X (mouse currently disabled, see below)
 # Mouse-look via cursor-recenter fights the game's own cursor handling and makes the
-# yaw thrash (confirmed 2026-07-06). Disabled until reimplemented with raw input
+# yaw thrash. Disabled until reimplemented with raw input
 # (WM_INPUT). Stick orbit is unaffected.
 ENABLE_MOUSE = False
 
@@ -98,8 +98,8 @@ def get_screen_size():
 
 
 # Window mode via env vars (set by the .bat):
-#   MML_WINDOW = 'fullscreen' (default) | 'borderless' (centered, smaller than screen)
-#   MML_WIN_SCALE = fraction of screen HEIGHT for borderless mode (default 0.85)
+# MML_WINDOW = 'fullscreen' (default) | 'borderless' (centered, smaller than screen)
+# MML_WIN_SCALE = fraction of screen HEIGHT for borderless mode (default 0.85)
 # Borderless keeps the SCREEN aspect ratio (just scaled down), so the anamorphic
 # RATIO is identical to fullscreen - widescreen stays correct, but the window no
 # longer covers everything, so alt-tab / Win+Shift+S screenshots work normally.
@@ -110,7 +110,7 @@ WINDOW_MODE = os.environ.get("MML_WINDOW", "fullscreen").lower()
 WIN_SCALE = float(os.environ.get("MML_WIN_SCALE", "0.85"))
 SCR_W, SCR_H = get_screen_size()
 if WINDOW_MODE == "none":
-    # dxwrapper renders a 16:9 window; RATIO is aspect-based so screen size is fine.
+ # dxwrapper renders a 16:9 window; RATIO is aspect-based so screen size is fine.
     TARGET_CLIENT_W, TARGET_CLIENT_H = SCR_W, SCR_H
     WIN_X = WIN_Y = 0
 elif WINDOW_MODE == "borderless":
@@ -130,7 +130,7 @@ ASPECT = os.environ.get("MML_ASPECT", "16:9").replace(" ", "")
 CONTROLS = os.environ.get("MML_CONTROLS", "modern").strip().lower()
 ANAMORPH = 0 if ASPECT in ("4:3", "4x3", "43") else 1
 # MML_INTRO = 'play' (default: intro plays, any key/click/pad button skips it) | 'skip'
-# (bypass entirely: the 5-byte `call 0x4F9933` at 0x4A6F7E is NOP'd at spawn - README 6.7)
+# (bypass entirely: the 5-byte `call 0x4F9933` at 0x4A6F7E is NOP'd at spawn)
 INTRO = os.environ.get("MML_INTRO", "play").strip().lower()
 INTRO_SKIP = 1 if INTRO in ("skip", "off", "none", "0") else 0
 if not ANAMORPH:
@@ -141,8 +141,8 @@ print(f"Window mode: {WINDOW_MODE}  {TARGET_CLIENT_W}x{TARGET_CLIENT_H} @ ({WIN_
 
 
 def make_borderless(hwnd, x, y, target_w, target_h):
-    # Always borderless (WS_POPUP). x,y let us CENTER a sub-screen window so it's
-    # a normal alt-tab/screenshot-friendly window instead of covering everything.
+ # Always borderless (WS_POPUP). x,y let us CENTER a sub-screen window so it's
+ # a normal alt-tab/screenshot-friendly window instead of covering everything.
     style = user32.GetWindowLongA(hwnd, -16) & 0xFFFFFFFF
     new_style = (style & ~BORDER_BITS) | WS_POPUP | WS_VISIBLE
     user32.SetWindowLongA(hwnd, -16, new_style)
@@ -206,7 +206,7 @@ AIM_BUTTON = XINPUT_LB  # while held, orbit override is suspended so aim behaves
 AIM_TRIG_THRESH = 40    # LT (left trigger) is the primary AIM button now (>this = aiming)
 VK_F5 = 0x74
 
-# ---- camera-relative movement (task #D) ----
+# ---- camera-relative movement ----
 # When orbit is engaged, the LEFT stick moves the character relative to the orbit
 # camera (push toward camera-forward -> walk that way), replacing tank steering;
 # the RIGHT stick orbits. We set the real facing 0x5F83B8 to the stick direction
@@ -232,7 +232,7 @@ FACE_SIGN = 1
 # camera, so it's OFF. The real cure for the opposite-stick thrash is decoupling the
 # camera into a true orbit, not smoothing the facing.
 TURN_RATE = 0
-# Capture round (2026-07-06): print raw pad state once/sec so we can identify
+# print raw pad state once/sec so we can identify
 # which button = AIM and whether aim/menu/cutscene change the funcA caller.
 # Set False once gating is wired up.
 DEBUG_PAD = False   # [pad] button-name logger; flip True to map controller buttons
@@ -258,7 +258,7 @@ function persistAlloc(size) {
     return p;
 }
 
-// ===== GetTickCount rebase (README §3.38) - unchanged from anamorphic launcher =====
+// ===== GetTickCount rebase =====
 (function rebaseTickCount() {
     var blk = persistAlloc(64);
     var iat = ptr('0x508328');
@@ -275,7 +275,7 @@ function persistAlloc(size) {
     send({type:'info', msg:'GetTickCount rebased (60Hz timing precise).'});
 })();
 
-// ===== Frame-limiter float32 drift fix (README §6.5) =====
+// ===== Frame-limiter float32 drift fix =====
 // The limiter's threshold at 0x55BDB4 is a FLOAT32 the game advances each frame by
 // step*16.667ms (fstp dword, §4). The GetTickCount rebase makes it start near 0, but
 // once a single SESSION passes 2^23 ms (~2.33h) the float's ulp reaches 1ms and the
@@ -303,7 +303,7 @@ function persistAlloc(size) {
     send({type:'info', msg:'Frame-limiter drift fix ON (float64 threshold).'});
 })();
 
-// ===== CAPCOM.AVI intro skip (README §6.7) =====
+// ===== CAPCOM.AVI intro skip =====
 // The intro is played via mciSendStringA ('open avivideo!CAPCOM.AVI alias vfw' / 'play vfw
 // window from 0 notify') inside 0x4F9933, which pumps messages while the 'playing' flag
 // byte 0x551FA8 is set. Its own subclassed WndProc (0x4F985F) ALREADY clears that flag on
@@ -332,7 +332,7 @@ if (INTRO_SKIP) {
     }
 }
 
-// ===== Anamorphic widescreen (README §3.23) - installed only when ANAMORPH (16:9). =====
+// ===== Anamorphic widescreen - installed only when ANAMORPH (16:9). =====
 // In 4:3 mode we skip it entirely so the projection is fully vanilla (DDrawCompat handles
 // the 4:3 pillarbox), and the render stays sharp without any horizontal squeeze.
 var HY_ADDR = ptr('0x77ebdc');
@@ -364,7 +364,7 @@ if (ANAMORPH) {
     send({type:'info', msg:'4:3 mode: anamorphic squeeze OFF (vanilla projection).'});
 }
 
-// ===== HUD / DIALOGUE UN-STRETCH (README 6.3) =====
+// ===== HUD / DIALOGUE UN-STRETCH =====
 // The anamorphic squeeze only widens the 3D projection; the 2D HUD/dialogue is drawn in
 // screen space and would otherwise look horizontally FAT. Once per frame (before the walker
 // draws it) we walk the two HUD overlay buckets (ctx+0x78 = HUD, ctx+0x7c = dialogue) and
@@ -372,26 +372,26 @@ if (ANAMORPH) {
 // so it matches the widescreen. Text glyphs (opcode 0x6c) also get their hard-coded draw
 // width narrowed (handler 0x4F6373 'add eax,0xe' -> 11). Only the CORE proven packet types
 // (0x2c/0x2e/0x38 textured quads, 0x2a flat quad, 0x6c text) are touched; other types /
-// the in-game menu grid (separate render path) are left vanilla - see README 6.3.
+// the in-game menu grid (separate render path) are left vanilla
 // Gated on ANAMORPH: in 4:3 mode the HUD isn't stretched, so we leave it alone.
 if (ANAMORPH) {
     var HU_CTXP = ptr('0x77EA74');
-    // HU_WIDTH = RATIO, the same display-derived factor the 3D squeeze uses (exactly
-    // 0.75 on a 16:9 monitor). Hardcoding 0.75 here mismatched the HUD on 16:10 /
-    // ultrawide displays where the 3D adapts. (Edge-push/toast offsets stay 16:9-tuned.)
+ // HU_WIDTH = RATIO, the same display-derived factor the 3D squeeze uses (exactly
+ // 0.75 on a 16:9 monitor). Hardcoding 0.75 here mismatched the HUD on 16:10 /
+ // ultrawide displays where the 3D adapts. (Edge-push/toast offsets stay 16:9-tuned.)
     var HU_WIDTH = RATIO, HU_CENTER = 160, HU_GLYPHW = 11, HU_FSX = 300, HU_FSY = 180;
     var HU_XA = [0x8,0x10,0x18,0x20], HU_YA = [0xA,0x12,0x1A,0x22];   // 4-vert, 8-byte stride
     var HU_XB = [0x8,0xC,0x10,0x14],  HU_YB = [0xA,0xE,0x12,0x16];    // 4-vert, 4-byte stride
     var HU_TYPES = {0x2c:[HU_XA,HU_YA], 0x2e:[HU_XA,HU_YA], 0x38:[HU_XA,HU_YA], 0x2a:[HU_XB,HU_YB]};
     var HU_BUCKETS = [0x78, 0x7c];
-    // The TITLE screen uses a 640-wide space (centre 320) while gameplay is 320-wide (centre 160).
-    // Detect per-frame from the widest sprite (title reaches ~576, gameplay stays under ~304) and
-    // squeeze about the right centre, so the title menu text is centred too. 1-frame lag = fine.
+ // The TITLE screen uses a 640-wide space (centre 320) while gameplay is 320-wide (centre 160).
+ // Detect per-frame from the widest sprite (title reaches ~576, gameplay stays under ~304) and
+ // squeeze about the right centre, so the title menu text is centred too. 1-frame lag = fine.
     var HU_TITLE_THRESH = 400, HU_TITLE_CENTER = 320, HU_lastMaxX = 0, HU_fontLocked = 0;
     var HU_GW = ptr('0x4F6375'); Memory.protect(HU_GW, 1, 'rwx'); HU_GW.writeU8(HU_GLYPHW);
-    // 0x64 sprite-rect state (README 6.6): shared center for the staged-vertex hook +
-    // per-texture-metric footprint stats for the backdrop classifier (skybox / menu
-    // wallpaper tile sets are detected by their COLLECTIVE span and left stretched).
+ // 0x64 sprite-rect state: shared center for the staged-vertex hook +
+ // per-texture-metric footprint stats for the backdrop classifier (skybox / menu
+ // wallpaper tile sets are detected by their COLLECTIVE span and left stretched).
     var HU_curCenter = HU_CENTER;
     var HU_mstat = {}, HU_mblack = {};
     Interceptor.attach(ptr('0x4A70E5'), { onEnter: function () {
@@ -399,11 +399,11 @@ if (ANAMORPH) {
             var ctx = HU_CTXP.readPointer();
             var center = (HU_lastMaxX > HU_TITLE_THRESH) ? HU_TITLE_CENTER : HU_CENTER;
             HU_curCenter = center;
-            // Decide which 0x64 texture-sets are backdrops (skybox / menu wallpaper) and
-            // leave those stretched full-screen. A backdrop covers the screen in BOTH
-            // directions, so require a wide AND tall footprint. Wide-but-thin elements
-            // like the boss health bar must NOT match here, or they stay stretched while
-            // their container gets squeezed and the two drift apart.
+ // Decide which 0x64 texture-sets are backdrops (skybox / menu wallpaper) and
+ // leave those stretched full-screen. A backdrop covers the screen in BOTH
+ // directions, so require a wide AND tall footprint. Wide-but-thin elements
+ // like the boss health bar must NOT match here, or they stay stretched while
+ // their container gets squeezed and the two drift apart.
             HU_mblack = {};
             for (var mk in HU_mstat) {
                 var ms = HU_mstat[mk];
@@ -423,9 +423,9 @@ if (ANAMORPH) {
                         if (gx > fmax) fmax = gx;
                         p.add(8).writeU16((Math.round(center + (gx - center) * HU_WIDTH)) & 0xffff);
                     } else if (op === 0x64) {
-                        // tracked for the title-center pick only; the actual 0x64 transform
-                        // happens in the staged-vertex hook below (packet edits can only
-                        // crop or cram - U-span = width field)
+ // tracked for the title-center pick only; the actual 0x64 transform
+ // happens in the staged-vertex hook below (packet edits can only
+ // crop or cram - U-span = width field)
                         var rx = p.add(8).readU16(); if (rx & 0x8000) rx -= 0x10000;
                         var rw = p.add(0x10).readU16();
                         if (rx >= -320 && rx <= 704 && rw <= 640 && rx + rw > fmax) fmax = rx + rw;
@@ -452,10 +452,10 @@ if (ANAMORPH) {
             HU_lastMaxX = fmax;
         } catch (e) { /* bad list node - skip this frame */ }
     }});
-    // Player-HUD EDGE-PUSH: shove the HP bar and special-weapon bar out toward the widescreen
-    // edges. Done at the status-draw emitter 0x4364F0 (edx = X arg), which emits ONLY the player
-    // HUD - so the boss bar and map (other emitters) are never touched. BAR_L shifts sprites left
-    // of center, BAR_R those right of center (the two bars are on opposite sides). User-tuned.
+ // Player-HUD EDGE-PUSH: shove the HP bar and special-weapon bar out toward the widescreen
+ // edges. Done at the status-draw emitter 0x4364F0 (edx = X arg), which emits ONLY the player
+ // HUD - so the boss bar and map (other emitters) are never touched. BAR_L shifts sprites left
+ // of center, BAR_R those right of center (the two bars are on opposite sides). User-tuned.
     var HU_BAR_L = -50, HU_BAR_R = 60;
     Interceptor.attach(ptr('0x4364F0'), { onEnter: function () {
         var edx = this.context.edx.toUInt32();
@@ -463,21 +463,20 @@ if (ANAMORPH) {
         x += (x < HU_CENTER) ? HU_BAR_L : HU_BAR_R;
         this.context.edx = ptr(((edx & 0xffff0000) | (x & 0xffff)) >>> 0);
     }});
-    // ===== 0x64 SPRITE-RECT un-stretch (menus/UI: item grids, bar fills, borders) =====
-    // README 6.6 v6 (proven live 2026-07-12, user: "HUD looks amazing", ~95 percent).
-    // Handler 0x4F608A (dispatch stub 0x4F7A1B) = textured sprite RECT: X s16 @ +8,
-    // Y @ +0xA, U/V bytes @ +0xC/+0xD, WIDTH @ +0x10, HEIGHT @ +0x12 - a 1:1 texel
-    // blit, so packet edits can only CROP (U-span = width) or CRAM (reposition).
-    // TRUE compression = hook 0x4F6288 (inside the handler, after its 4 XYZRHW verts
-    // are staged at 0x8876C4/+0x20/+0x40/+0x60 with UVs already spanning the full
-    // texture; ESI = packet on BOTH inbound paths incl. the text handler's shared-tail
-    // weave) and squeeze the 4 staged X floats about the device-space center - the
-    // full texture maps onto the narrower quad, like the 3D anamorphic squeeze.
-    // Gates: [esi+7] must be EXACTLY 0x64 (not 0x6c text - double-transform; not 0x66
-    // world/cutscene tiles); per-metric backdrop classifier (HU_mblack, built each
-    // frame above) leaves skybox/menu-wallpaper tile sets stretched (full-bleed, no
-    // black side bars); per-tile sanity cap w<=288/h<=240 keeps skinny tall borders
-    // IN (they must squeeze with the boxes they frame).
+ // ===== 0x64 SPRITE-RECT un-stretch (menus/UI: item grids, bar fills, borders) =====
+ // Handler 0x4F608A (dispatch stub 0x4F7A1B) = textured sprite RECT: X s16 @ +8,
+ // Y @ +0xA, U/V bytes @ +0xC/+0xD, WIDTH @ +0x10, HEIGHT @ +0x12 - a 1:1 texel
+ // blit, so packet edits can only CROP (U-span = width) or CRAM (reposition).
+ // TRUE compression = hook 0x4F6288 (inside the handler, after its 4 XYZRHW verts
+ // are staged at 0x8876C4/+0x20/+0x40/+0x60 with UVs already spanning the full
+ // texture; ESI = packet on BOTH inbound paths incl. the text handler's shared-tail
+ // weave) and squeeze the 4 staged X floats about the device-space center - the
+ // full texture maps onto the narrower quad, like the 3D anamorphic squeeze.
+ // Gates: [esi+7] must be EXACTLY 0x64 (not 0x6c text - double-transform; not 0x66
+ // world/cutscene tiles); per-metric backdrop classifier (HU_mblack, built each
+ // frame above) leaves skybox/menu-wallpaper tile sets stretched (full-bleed, no
+ // black side bars); per-tile sanity cap w<=288/h<=240 keeps skinny tall borders
+ // IN (they must squeeze with the boxes they frame).
     var HU_V64X = [ptr('0x8876C4'), ptr('0x8876E4'), ptr('0x887704'), ptr('0x887724')];
     Interceptor.attach(ptr('0x4F6288'), { onEnter: function () {
         try {
@@ -510,15 +509,15 @@ if (ANAMORPH) {
 // DDrawCompat borderless-FLIP present (which an external overlay window can't draw over - the
 // same thing that blocks Win+Shift+S). Two primitive kinds, both re-linked into the HUD bucket
 // (ctx+0x78) once per frame:
-//   DOT  = flat translucent quad, opcode 0x2a -> handler 0x4F3E53. TRIANGLESTRIP (DrawPrim type
-//          5) so verts go TL,TR,BL,BR (perimeter order draws a crossing bowtie = the old "flag").
-//          W float 0.1 -> RHW 1.0 (screen-space). cmd bit1 = the semi-transparent alpha path.
-//   TEXT = game-font glyph packets, opcode 0x6c -> handler 0x4F62DF, one 0x10-byte packet per
-//          char: RGB@+4/5/6, X@+8, Y@+0xA, ASCII char@+0xC, font-page metric@+0xE. The handler
-//          rasterises+caches each glyph from (char,metric) itself. Char code is plain ASCII;
-//          advance widths come live from the game's own table 0x52DFA0. 0x6c's cmd bit2 DOUBLES
-//          the colour, so 0x80 -> full white. Metric defaults to 0x52E3C4[0]=0x7f3c and is auto-
-//          locked to a real on-screen glyph's metric the first time the un-stretch pass sees one.
+// DOT = flat translucent quad, opcode 0x2a -> handler 0x4F3E53. TRIANGLESTRIP (DrawPrim type
+// 5) so verts go TL,TR,BL,BR (perimeter order draws a crossing bowtie = the old "flag").
+// W float 0.1 -> RHW 1.0 (screen-space). cmd bit1 = the semi-transparent alpha path.
+// TEXT = game-font glyph packets, opcode 0x6c -> handler 0x4F62DF, one 0x10-byte packet per
+// char: RGB@+4/5/6, X@+8, Y@+0xA, ASCII char@+0xC, font-page metric@+0xE. The handler
+// rasterises+caches each glyph from (char,metric) itself. Char code is plain ASCII;
+// advance widths come live from the game's own table 0x52DFA0. 0x6c's cmd bit2 DOUBLES
+// the colour, so 0x80 -> full white. Metric defaults to 0x52E3C4[0]=0x7f3c and is auto-
+// locked to a real on-screen glyph's metric the first time the un-stretch pass sees one.
 // Our hook prepends AFTER the un-stretch pass has walked the bucket this frame, so it never
 // re-squeezes our packets - we pre-apply the 0.75 squeeze (sqx) ourselves. Glyphs are fixed-size
 // (font atlas) so they can't scale; the whole toast slides IN from the top on show and slides OUT
@@ -563,7 +562,7 @@ Interceptor.attach(ptr('0x4A70E5'), { onEnter: function () {
     try {
         var ctx = ptr('0x77EA74').readPointer();
         if (ctx.isNull()) return;
-        // slide IN from off the top over the first TOAST_FADE frames, hold, then slide OUT the last TOAST_FADE
+ // slide IN from off the top over the first TOAST_FADE frames, hold, then slide OUT the last TOAST_FADE
         var slide = 0;
         if (left > TOAST_DUR - TOAST_FADE) slide = (left - (TOAST_DUR - TOAST_FADE)) / TOAST_FADE * TOAST_SLIDE;
         else if (left < TOAST_FADE) slide = (TOAST_FADE - left) / TOAST_FADE * TOAST_SLIDE;
@@ -584,10 +583,10 @@ Interceptor.attach(ptr('0x4A70E5'), { onEnter: function () {
     } catch (e) { /* bad ctx this frame - skip */ }
 }});
 
-// ===== FREE-ORBIT CAMERA (task #17, stage 1 - DIAGNOSTIC BUILD) =====
+// ===== FREE-ORBIT CAMERA =====
 // The two camera-apply routines both store yaw -> 0x77EA0A then build the matrix:
-//   funcA 0x42961B: yaw arg in EBX  ([esp+0x18]=ebx -> 0x77EA0A)
-//   funcB 0x4298F6: yaw arg in EDX  (and dh,0xf; mov [0x77ea0a],dx)
+// funcA 0x42961B: yaw arg in EBX ([esp+0x18]=ebx -> 0x77EA0A)
+// funcB 0x4298F6: yaw arg in EDX (and dh,0xf; mov [0x77ea0a],dx)
 // We hook BOTH at entry, override the right register when active, and COUNT
 // calls so we can see which path actually drives the camera while walking.
 // Seed is mode-independent: on toggle-ON, Python reads current 0x77EA0A via
@@ -610,11 +609,11 @@ var ORBIT_SIGN = 1;
 // 0x5F8384 spiking (|.|>thresh; it's ~-1.0 idle/walk, ~-16 during a roll).
 var ROLL_REDIRECT = 1;
 // Per-frame recon (watch_roll) proved the roll direction is computed LIVE as facing +/- 90:
-//   right roll = facing + 1024, left roll = facing - 1024 (1024 units = 90 deg; 4096 = 360).
+// right roll = facing + 1024, left roll = facing - 1024 (1024 units = 90 deg; 4096 = 360).
 // The player struct 0x5F8364 gives us two clean signals:
-//   * +0x08 (0x5F836C) bit 0x800  = "roll in progress" (sets ~3 frames BEFORE the roll moves,
-//     stays on through recovery) -> lets us steer before the motion commits.
-//   * +0x08 bit 0x01000000        = left/right flag (1 = left roll, 0 = right roll).
+// * +0x08 (0x5F836C) bit 0x800 = "roll in progress" (sets ~3 frames BEFORE the roll moves,
+// stays on through recovery) -> lets us steer before the motion commits.
+// * +0x08 bit 0x01000000 = left/right flag (1 = left roll, 0 = right roll).
 // So we STEER the roll along the last walk direction by writing facing 0x5F83B8 each roll
 // frame to (walkAngle - offset), where offset = +1024 (right) / -1024 (left); then the
 // engine's own facing+/-90 lands exactly on walkAngle. The old field 0x5F8384 we were
@@ -633,12 +632,12 @@ var rollLastX = 0, rollLastZ = 0, rollWalkAng = 0, rollWasRolling = false, rollH
 var DODGE_LEAD = 3;              // game frames to hold LT before the A tap (lower = snappier)
 var DODGE_A_FRAMES = 2;          // game frames to hold A
 var DODGE_ZERO_LEAD = 2;         // force the standstill only this many frames before the A tap
-                                 // (so a RUN keeps its momentum through the LT lead = no dead-stop)
+ // (so a RUN keeps its momentum through the LT lead = no dead-stop)
 var DODGE_TOTAL = DODGE_LEAD + DODGE_A_FRAMES + 1;
 var DODGE_STEER_WIN = 35;        // game frames after a dodge starts during which roll-steer is
-                                 // allowed. The 0x800 bit also sets on JUMPS (fires on landing),
-                                 // so we ONLY steer inside a window opened by OUR dodge -> a plain
-                                 // jump never opens it and is left alone.
+ // allowed. The 0x800 bit also sets on JUMPS (fires on landing),
+ // so we ONLY steer inside a window opened by OUR dodge -> a plain
+ // jump never opens it and is left alone.
 var dodgePhase = 0;             // game-frame countdown (closure)
 var rollSteerWin = 0;          // game-frame countdown; >0 = a dodge is in flight, steering allowed
 var cntA = 0, cntB = 0;
@@ -663,7 +662,7 @@ rpc.exports.getroll = function() {
             ptr('0x5f8394').readS32(), ptr('0x5f8398').readS32()];  // candidate vel (+0x30/+0x34)
 };
 
-// ===== CAMERA-RELATIVE MOVEMENT (task #D) =====
+// ===== CAMERA-RELATIVE MOVEMENT =====
 // Real player facing = 0x5F83B8 (16.16 fixed; angle = high word). Writing it turns
 // the character (validated). MML is tank-style (moves along facing), so to get
 // camera-relative movement we (a) WRITE the facing to the left-stick direction
@@ -695,62 +694,62 @@ rpc.exports.setmove = function(face, fwd, active) {
 };
 
 Interceptor.attach(ptr('0x42961b'), { onEnter: function () {
-    // Game-frame heartbeat: the XInput hook compares this to detect a stalled funcA
-    // (pause/transition) and then IGNORES the funcA-computed injection flags, which
-    // would otherwise go stale and hold LT / zero the stick indefinitely.
+ // Game-frame heartbeat: the XInput hook compares this to detect a stalled funcA
+ // (pause/transition) and then IGNORES the funcA-computed injection flags, which
+ // would otherwise go stale and hold LT / zero the stick indefinitely.
     frameTick.writeS32((frameTick.readS32() + 1) & 0x3fffffff);
     if (CAM_DEBUG) {
         cntA++;
         var ra = this.returnAddress.toUInt32().toString(16);
         callers[ra] = (callers[ra] || 0) + 1;
     }
-    // Frame-synced facing write: set the player facing 0x5F83B8 here (once/frame)
-    // so it can't race the game's own per-frame movement update. GATED on moveGate
-    // (the player-movement heartbeat 0x4B53D3) so we DON'T rotate the character
-    // during dialogue/cutscene locks - the gate decays when that update stops.
-    // update the position-moving credit (opens the facing gate at a standstill start,
-    // before moveGate's heartbeat catches up; stays closed during dialogue = static)
+ // Frame-synced facing write: set the player facing 0x5F83B8 here (once/frame)
+ // so it can't race the game's own per-frame movement update. GATED on moveGate
+ // (the player-movement heartbeat 0x4B53D3) so we DON'T rotate the character
+ // during dialogue/cutscene locks - the gate decays when that update stops.
+ // update the position-moving credit (opens the facing gate at a standstill start,
+ // before moveGate's heartbeat catches up; stays closed during dialogue = static)
     var px = ptr('0x77e998').readS32(), pz = ptr('0x77e9a0').readS32();
     if (px !== lastPX.readS32() || pz !== lastPZ.readS32()) posMoveCredit.writeS32(4);
     else { var pc = posMoveCredit.readS32(); if (pc > 0) posMoveCredit.writeS32(pc - 1); }
     lastPX.writeS32(px); lastPZ.writeS32(pz);
     var g = moveGate.readS32();
     if (moveActive.readS32() && !rollLatch.readS32() && (g > 0 || posMoveCredit.readS32() > 0)) {
-        // 12-bit angle in the high word; mask 0xfff so (<<16) stays a positive uint32
-        // (0x8000<<16 would go negative in JS and writeU32 would reject it).
-        // Suppressed while rollLatch is set so it can't fight the roll-steer facing.
+ // 12-bit angle in the high word; mask 0xfff so (<<16) stays a positive uint32
+ // (0x8000<<16 would go negative in JS and writeU32 would reject it).
+ // Suppressed while rollLatch is set so it can't fight the roll-steer facing.
         ptr('0x5f83b8').writeU32((moveFace.readS32() & 0xfff) << 16);
     }
     if (g > 0) moveGate.writeS32(g - 1);
-    // Decide whether the hook may override the LEFT stick with forward. Gate it like the
-    // facing write (player-movement heartbeat / position-change credit) so it stands down in
-    // MENUS (player never moves -> both stay 0 -> raw stick reaches the menu = down works).
-    // moveStartGrace bridges the idle->walk bootstrap: at a stick-push from rest the credit
-    // isn't set yet, so grant a few forced-forward frames until the position starts changing.
+ // Decide whether the hook may override the LEFT stick with forward. Gate it like the
+ // facing write (player-movement heartbeat / position-change credit) so it stands down in
+ // MENUS (player never moves -> both stay 0 -> raw stick reaches the menu = down works).
+ // moveStartGrace bridges the idle->walk bootstrap: at a stick-push from rest the credit
+ // isn't set yet, so grant a few forced-forward frames until the position starts changing.
     var ma = moveActive.readS32();
     if (ma && !movePrev) moveStartGrace = MOVE_START_GRACE;
     movePrev = ma;
     injectFwd.writeS32((ma && (moveGate.readS32() > 0 || posMoveCredit.readS32() > 0 || moveStartGrace > 0)) ? 1 : 0);
     if (moveStartGrace > 0) moveStartGrace--;
-    // ===== DARK-SOULS DODGE ROLL: steer the roll along the walk direction =====
+ // ===== DARK-SOULS DODGE ROLL: steer the roll along the walk direction =====
     if (ROLL_REDIRECT) {
         var pxr = ptr('0x5f8380').readS32(), pzr = ptr('0x5f8388').readS32();  // player X/Z (16.16)
         var st = ptr(ROLL_STATE).readU32();
-        // rolling = roll-in-progress bit set, NOT aiming, and inside a dodge-opened window.
-        // The 0x800 bit is a general action bit set during aim (=> !camSuppress gate) AND on
-        // jumps (fires on landing => rollSteerWin gate: only OUR dodge opens the window, so a
-        // plain jump's landing is left alone). We steer every (windowed) roll moving or not
-        // so a dodge out of a run works; rollLatch tells move-facing writers to stand down.
-        // NOTE: 0x5F8384 (+0x20) is the player's Y HEIGHT, not a velocity - it reads ~-1 on
-        // downtown ground but ~-769 on the elevated sector, so the old |.|<ROLL_JUMP_VEL
-        // guard wrongly killed steering at height (=> vanilla 90-deg side roll). Dropped.
+ // rolling = roll-in-progress bit set, NOT aiming, and inside a dodge-opened window.
+ // The 0x800 bit is a general action bit set during aim (=> !camSuppress gate) AND on
+ // jumps (fires on landing => rollSteerWin gate: only OUR dodge opens the window, so a
+ // plain jump's landing is left alone). We steer every (windowed) roll moving or not
+ // so a dodge out of a run works; rollLatch tells move-facing writers to stand down.
+ // NOTE: 0x5F8384 (+0x20) is the player's Y HEIGHT, not a velocity - it reads ~-1 on
+ // downtown ground but ~-769 on the elevated sector, so the old |.|<ROLL_JUMP_VEL
+ // guard wrongly killed steering at height (=> vanilla 90-deg side roll). Dropped.
         var rolling = ((st & 0x800) !== 0) && !camSuppress.readS32() && (rollSteerWin > 0);
         rollLatch.writeS32(rolling ? 1 : 0);
         if (rolling) {
-            // While the roll is TRAVELLING, face sideways (walkAng -/+ 90) so the engine's
-            // own +/-90 lands travel on walkAng. Once it STOPS moving (recovery frames),
-            // face the travel dir (walkAng, register +2048) right away so there's no
-            // stationary-sideways moment before the end snap -> no jarring correction.
+ // While the roll is TRAVELLING, face sideways (walkAng -/+ 90) so the engine's
+ // own +/-90 lands travel on walkAng. Once it STOPS moving (recovery frames),
+ // face the travel dir (walkAng, register +2048) right away so there's no
+ // stationary-sideways moment before the end snap -> no jarring correction.
             var mdx = pxr - rollLastX, mdz = pzr - rollLastZ;
             if (!rollWasRolling) rollHasMoved = false;      // reset at roll start
             var moved2 = mdx * mdx + mdz * mdz;
@@ -766,14 +765,14 @@ Interceptor.attach(ptr('0x42961b'), { onEnter: function () {
             ptr('0x5f83b8').writeU32(faceTgt << 16);
         } else {
             if (rollWasRolling) {
-                // roll just ended: face where we actually rolled. rollWalkAng is a TRAVEL
-                // (position) angle; the VISUAL facing = register + 2048 (same 180 offset as
-                // FACE_OFFSET in movement), so to face the roll dir the register is +2048.
+ // roll just ended: face where we actually rolled. rollWalkAng is a TRAVEL
+ // (position) angle; the VISUAL facing = register + 2048 (same 180 offset as
+ // FACE_OFFSET in movement), so to face the roll dir the register is +2048.
                 ptr('0x5f83b8').writeU32(((rollWalkAng + 2048) & 0xfff) << 16);
             }
-            // normal locomotion: continuously learn the world walk heading from the
-            // position delta so it's fresh when a roll starts (the roll needs a standstill,
-            // so the last-known heading = the direction the player was just walking).
+ // normal locomotion: continuously learn the world walk heading from the
+ // position delta so it's fresh when a roll starts (the roll needs a standstill,
+ // so the last-known heading = the direction the player was just walking).
             var wdx = pxr - rollLastX, wdz = pzr - rollLastZ;
             if ((wdx * wdx + wdz * wdz) > (ROLL_MOVE_MIN * ROLL_MOVE_MIN)) {
                 rollWalkAng = Math.round(Math.atan2(wdx, wdz) * 2048.0 / Math.PI) & 0xfff;
@@ -782,10 +781,10 @@ Interceptor.attach(ptr('0x42961b'), { onEnter: function () {
         rollLastX = pxr; rollLastZ = pzr;
         rollWasRolling = rolling;
     }
-    // ===== DODGE trigger state machine (game-frame paced; hook mirrors the flags) =====
-    // Only START a dodge from a NEUTRAL/grounded state: the 0x800 bit is set while jumping/
-    // rolling/aiming, so requiring it CLEAR means X in the air (or mid-action) is a no-op and
-    // can't leave a dodge window open that fires the sideways steer on landing.
+ // ===== DODGE trigger state machine (game-frame paced; hook mirrors the flags) =====
+ // Only START a dodge from a NEUTRAL/grounded state: the 0x800 bit is set while jumping/
+ // rolling/aiming, so requiring it CLEAR means X in the air (or mid-action) is a no-op and
+ // can't leave a dodge window open that fires the sideways steer on landing.
     if (dodgeReq.readS32() && dodgePhase === 0) {
         if (!(ptr(ROLL_STATE).readU32() & 0x800)) { dodgePhase = DODGE_TOTAL; rollSteerWin = DODGE_STEER_WIN; }
         dodgeReq.writeS32(0);   // consume the request either way (discard if airborne)
@@ -795,22 +794,22 @@ Interceptor.attach(ptr('0x42961b'), { onEnter: function () {
         var df = DODGE_TOTAL - dodgePhase;                 // 0-based game-frame index in window
         dodgeInjLT.writeS32(1);                            // LT (rotate) held the whole window
         dodgeInjA.writeS32((df >= DODGE_LEAD && df < DODGE_LEAD + DODGE_A_FRAMES) ? 1 : 0);
-        // hold the run through the lead; only force the standstill just before the A tap
+ // hold the run through the lead; only force the standstill just before the A tap
         dodgeZero.writeS32((df >= DODGE_LEAD - DODGE_ZERO_LEAD) ? 1 : 0);
         dodgePhase--;
     } else {
         dodgeInjLT.writeS32(0); dodgeInjA.writeS32(0); dodgeZero.writeS32(0);
     }
-    // Override only when active AND not suppressed. Suppress = aim mode: we let
-    // the game drive the camera so aim direction and view agree; Python keeps our
-    // held yaw/pitch tracking the live camera meanwhile, so releasing aim = no snap.
+ // Override only when active AND not suppressed. Suppress = aim mode: we let
+ // the game drive the camera so aim direction and view agree; Python keeps our
+ // held yaw/pitch tracking the live camera meanwhile, so releasing aim = no snap.
     if (camActive.readS32() && !camSuppress.readS32()) {
         this.context.ebx = ptr(camYaw.readS32() & 0xffff);      // yaw
         this.context.ecx = ptr(camPitchEcx.readS32() & 0xffff); // pitch
         if (ORBIT_TRUE) {
-            // Rotate the camera-to-target offset so the camera sits behind the LOOK
-            // (camYaw), not behind the facing-derived angle 0x77E960. delta cancels
-            // the facing drift; we then set 0x77E960 = camYaw so re-entry is idempotent.
+ // Rotate the camera-to-target offset so the camera sits behind the LOOK
+ // (camYaw), not behind the facing-derived angle 0x77E960. delta cancels
+ // the facing drift; we then set 0x77E960 = camYaw so re-entry is idempotent.
             var camAz = ptr('0x77e960').readU32() & 0xfff;
             var yaw = camYaw.readS32() & 0xfff;
             var delta = (yaw - camAz) & 0xfff;
@@ -870,9 +869,9 @@ if (CAM_DEBUG) setInterval(function () {
 (function hookXInputSwap() {
     var LB = 0x0100, A_BTN = 0x1000, X_BTN = 0x4000;
     var TRIG_ON = 40;        // analog trigger considered "pressed" above this
-    // Dodge = synthesize the vanilla roll (hold camera-rotate trigger, THEN tap jump). The
-    // timing is run by funcA in GAME frames (DODGE_LEAD/DODGE_A_FRAMES above); this hook only
-    // detects the physical-X edge (-> dodgeReq) and mirrors funcA's dodgeInj* flags.
+ // Dodge = synthesize the vanilla roll (hold camera-rotate trigger, THEN tap jump). The
+ // timing is run by funcA in GAME frames (DODGE_LEAD/DODGE_A_FRAMES above); this hook only
+ // detects the physical-X edge (-> dodgeReq) and mirrors funcA's dodgeInj* flags.
     function attachTo(addr, modname) {
         var dodgePrevX = false;   // for physical-X rising-edge detection (persists across polls)
         var lastFt = -1, ftStale = 0;   // funcA-heartbeat freshness (see below)
@@ -883,13 +882,13 @@ if (CAM_DEBUG) setInterval(function () {
                 if (retval.toInt32() !== 0) return;   // ERROR_DEVICE_NOT_CONNECTED etc.
                 var buf = this.buf;
                 if (buf.isNull()) return;
-                // ===== D-PAD -> LEFT STICK (menu navigation + movement, both modes) =====
-                // The LEFT stick already drives both menu cursors and movement (user-confirmed);
-                // the D-pad drives neither. So when the physical D-pad is pressed, feed the LEFT
-                // stick axes full-deflection in that direction -> the D-pad behaves exactly like
-                // the left stick. Runs BEFORE the orbit-mode early-return so it works in vanilla
-                // too. In modern gameplay the movement injection below may still override the
-                // stick while you're actively moving - fine; in menus it passes straight through.
+ // ===== D-PAD -> LEFT STICK (menu navigation + movement, both modes) =====
+ // The LEFT stick already drives both menu cursors and movement (user-confirmed);
+ // the D-pad drives neither. So when the physical D-pad is pressed, feed the LEFT
+ // stick axes full-deflection in that direction -> the D-pad behaves exactly like
+ // the left stick. Runs BEFORE the orbit-mode early-return so it works in vanilla
+ // too. In modern gameplay the movement injection below may still override the
+ // stick while you're actively moving - fine; in menus it passes straight through.
                 var dpb = buf.add(4).readU16();
                 var ddx = ((dpb & 0x0008) ? 1 : 0) - ((dpb & 0x0004) ? 1 : 0);   // right - left
                 var ddy = ((dpb & 0x0001) ? 1 : 0) - ((dpb & 0x0002) ? 1 : 0);   // up - down
@@ -898,39 +897,39 @@ if (CAM_DEBUG) setInterval(function () {
                     buf.add(10).writeS16(ddy * 32767);    // LY (XInput: up = positive)
                 }
                 if (!camActive.readS32()) return;      // mod off -> untouched (vanilla)
-                // FRESHNESS: dodgeInj*/injectFwd are computed by the once-per-frame funcA
-                // hook. If the game stops running funcA (pause menu, transition), those
-                // flags go STALE - acting on them would hold LT / zero the stick until
-                // gameplay resumes. If funcA hasn't ticked in ~30 polls, ignore them all.
+ // FRESHNESS: dodgeInj*/injectFwd are computed by the once-per-frame funcA
+ // hook. If the game stops running funcA (pause menu, transition), those
+ // flags go STALE - acting on them would hold LT / zero the stick until
+ // gameplay resumes. If funcA hasn't ticked in ~30 polls, ignore them all.
                 var ft = frameTick.readS32();
                 if (ft === lastFt) { if (ftStale < 1000) ftStale++; } else { ftStale = 0; lastFt = ft; }
                 var fresh = ftStale < 30;
-                // XINPUT_STATE: +4 wButtons, +6 LT, +7 RT, +8 LX, +10 LY, +12 RX, +14 RY
+ // XINPUT_STATE: +4 wButtons, +6 LT, +7 RT, +8 LX, +10 LY, +12 RX, +14 RY
                 var btn = buf.add(4).readU16();
                 var physX  = (btn & X_BTN) !== 0;                 // vanilla SHOOT -> now DODGE
                 var physLT = buf.add(6).readU8() > TRIG_ON;       // -> AIM (read before we zero it)
                 var physRT = buf.add(7).readU8() > TRIG_ON;       // -> SHOOT
 
-                // ---- BUTTON REMAP ----
-                // Kill ALL vanilla trigger-rotate in orbit mode (orbit replaced it). LT is
-                // re-synthesized below only for the dodge; RT becomes shoot; LT becomes aim.
+ // ---- BUTTON REMAP ----
+ // Kill ALL vanilla trigger-rotate in orbit mode (orbit replaced it). LT is
+ // re-synthesized below only for the dodge; RT becomes shoot; LT becomes aim.
                 buf.add(6).writeU8(0); buf.add(7).writeU8(0);     // no trigger-rotate in orbit mode
                 var out = btn & ~X_BTN;                            // X is dodge now, never shoots
                 if (physRT) out |= X_BTN;                          // RT -> shoot (synthesize X)
-                // AIM = physical LT (new) OR physical LB (kept as harmless fallback). The game
-                // aims off its LB button, so synthesize LB when aiming; the L<->R swap below
-                // then runs the game's left-stick aim off the RIGHT stick.
+ // AIM = physical LT (new) OR physical LB (kept as harmless fallback). The game
+ // aims off its LB button, so synthesize LB when aiming; the L<->R swap below
+ // then runs the game's left-stick aim off the RIGHT stick.
                 var aiming = physLT || ((btn & LB) !== 0);
                 if (aiming) out |= LB;
 
-                // ---- DODGE: physical X edge (not while aiming) -> ask funcA to run the roll
-                // trigger (game-frame paced). The hook only MIRRORS funcA's dodgeInj* flags. ----
+ // ---- DODGE: physical X edge (not while aiming) -> ask funcA to run the roll
+ // trigger (game-frame paced). The hook only MIRRORS funcA's dodgeInj* flags. ----
                 var xEdge = physX && !dodgePrevX;
                 dodgePrevX = physX;
                 if (xEdge && !aiming) { dodgeReq.writeS32(1); dodgeReqAge = 0; }
-                // TTL: funcA normally consumes a request within one game frame. If it sits
-                // unconsumed (funcA stalled = pause menu), expire it - otherwise X pressed
-                // in a menu would fire a phantom roll the moment gameplay resumes.
+ // TTL: funcA normally consumes a request within one game frame. If it sits
+ // unconsumed (funcA stalled = pause menu), expire it - otherwise X pressed
+ // in a menu would fire a phantom roll the moment gameplay resumes.
                 if (dodgeReq.readS32()) { if (++dodgeReqAge > 20) dodgeReq.writeS32(0); }
                 else dodgeReqAge = 0;
                 var dodging = fresh && dodgeInjLT.readS32() !== 0;
@@ -938,26 +937,26 @@ if (CAM_DEBUG) setInterval(function () {
                 if (fresh && dodgeInjA.readS32()) out |= A_BTN;   // press A
                 buf.add(4).writeU16(out);
 
-                // ---- LEFT STICK ----
+ // ---- LEFT STICK ----
                 if (fresh && dodgeZero.readS32()) {
-                    // force standstill so the game's roll gate accepts it even mid-run
+ // force standstill so the game's roll gate accepts it even mid-run
                     buf.add(8).writeS16(0); buf.add(10).writeS16(0);
                 } else if (aiming) {
-                    // AIM: swap L<->R so the game's left-stick aim runs off the right stick
+ // AIM: swap L<->R so the game's left-stick aim runs off the right stick
                     var lx = buf.add(8).readS16(),  ly = buf.add(10).readS16();
                     var rx = buf.add(12).readS16(), ry = buf.add(14).readS16();
                     buf.add(8).writeS16(rx);  buf.add(10).writeS16(ry);
                     buf.add(12).writeS16(lx); buf.add(14).writeS16(ly);
                 } else if (fresh && moveActive.readS32() && injectFwd.readS32()) {
-                    // MOVE: override the left stick to (0, forward) while walking in gameplay.
-                    // - LX=0 so the game never tank-turns; LY=forward so it walks along the
-                    //   facing Python set. The raw physical stick (meaningless tank input in
-                    //   camera-relative mode) never leaks.
-                    // - Gated (in funcA) on the player-movement heartbeat / position credit so
-                    //   it STANDS DOWN in menus (where the player never moves) -> the raw stick
-                    //   reaches the menu and DOWN works again. A short grace bridges walk-start.
-                    // - moveActive (refreshed at 60Hz from Python, independent of funcA) plus
-                    //   the freshness guard make a stale injectFwd harmless.
+ // MOVE: override the left stick to (0, forward) while walking in gameplay.
+ // - LX=0 so the game never tank-turns; LY=forward so it walks along the
+ // facing Python set. The raw physical stick (meaningless tank input in
+ // camera-relative mode) never leaks.
+ // - Gated (in funcA) on the player-movement heartbeat / position credit so
+ // it STANDS DOWN in menus (where the player never moves) -> the raw stick
+ // reaches the menu and DOWN works again. A short grace bridges walk-start.
+ // - moveActive (refreshed at 60Hz from Python, independent of funcA) plus
+ // the freshness guard make a stale injectFwd harmless.
                     buf.add(8).writeS16(0);
                     buf.add(10).writeS16(moveFwd.readS32());
                 }
@@ -971,8 +970,8 @@ if (CAM_DEBUG) setInterval(function () {
             var mods = Process.enumerateModules();
             for (var i = 0; i < mods.length; i++) {
                 if (!/xinput/i.test(mods[i].name)) continue;
-                // Frida-version-agnostic: prefer the module-instance method
-                // (module.findExportByName), fall back to getExportByName.
+ // Frida-version-agnostic: prefer the module-instance method
+ // (module.findExportByName), fall back to getExportByName.
                 var m = mods[i], ex = null;
                 if (typeof m.findExportByName === 'function') ex = m.findExportByName('XInputGetState');
                 else if (typeof m.getExportByName === 'function') { try { ex = m.getExportByName('XInputGetState'); } catch (e) {} }
@@ -980,8 +979,8 @@ if (CAM_DEBUG) setInterval(function () {
             }
             scanErrs = 0;   // a clean pass = any earlier errors were transient
         } catch (e) {
-            // Transient (module-list churn while DLLs load) - keep polling; only a
-            // PERSISTENT error (~15s of consecutive failures) disables the remap.
+ // Transient (module-list churn while DLLs load) - keep polling; only a
+ // PERSISTENT error (~15s of consecutive failures) disables the remap.
             if (++scanErrs >= 60) {
                 clearInterval(iv);
                 send({type:'info', msg:'Input remap hook FAILED to install (persistent error): ' + e});
@@ -1010,9 +1009,9 @@ rpc.exports.dispose = function () {
 send({type:'info', msg:'All runtime mods armed. Press F5 (or click L3/R3) to toggle the orbit camera.'});
 """  % (INTRO_SKIP, CLOSER_FACTOR, RATIO, ANAMORPH, 1 if CAM_DEBUG else 0)
 # NOTE: the JS placeholders are POSITIONAL, in order of appearance in the template:
-#   %d INTRO_SKIP (intro block, near the top) -> %f CLOSER_FACTOR -> %f RATIO ->
-#   %d ANAMORPH -> %d CAM_DEBUG (anamorphic section). A mis-ordered tuple silently
-#   shuffles every constant (the 0.1 pre-ship bug that turned ANAMORPH off).
+# %d INTRO_SKIP (intro block, near the top) -> %f CLOSER_FACTOR -> %f RATIO ->
+# %d ANAMORPH -> %d CAM_DEBUG (anamorphic section). A mis-ordered tuple silently
+# shuffles every constant (the 0.1 pre-ship bug that turned ANAMORPH off).
 
 # ------------------------- shared state -------------------------
 state = {"yaw": 0, "pitch": 0, "active": 0, "facing": 0, "run": True}
@@ -1094,7 +1093,7 @@ def input_thread(script):
     mouse_armed = False   # becomes true once we've centered the cursor for a clean first delta
     last_pad_dbg = 0.0
     while state["run"]:
-        # ---- toggle (F5 key or L3/R3 stick click), edge-triggered ----
+ # ---- toggle (F5 key or L3/R3 stick click), edge-triggered ----
         f5 = bool(user32.GetAsyncKeyState(VK_F5) & 0x8000)
         click = False
         rx = ry = 0
@@ -1111,7 +1110,7 @@ def input_thread(script):
                 buttons = st.Gamepad.wButtons
                 lt = st.Gamepad.bLeftTrigger
                 rt = st.Gamepad.bRightTrigger
-        # ---- capture round: log held buttons/triggers once/sec ----
+ # ---- capture round: log held buttons/triggers once/sec ----
         if DEBUG_PAD and (buttons or lt > 30 or rt > 30):
             now = time.time()
             if now - last_pad_dbg >= 1.0:
@@ -1127,7 +1126,7 @@ def input_thread(script):
             with lock:
                 going_on = not state["active"]
             if going_on:
-                # seed yaw+pitch from live camera (mode-independent) so there's no snap
+ # seed yaw+pitch from live camera (mode-independent) so there's no snap
                 try:
                     cam = script.exports_sync.getcam()
                     yaw_seed = int(cam[0])
@@ -1153,9 +1152,9 @@ def input_thread(script):
                 except Exception:
                     pass
         prev_key, prev_click = f5, click
-        # ---- aim mode: while LB is held, hand the camera back to the game so aim
-        #      and view agree. We stop overriding (suppress) AND keep our held
-        #      yaw/pitch tracking the live camera, so releasing aim doesn't snap. ----
+ # ---- aim mode: while LB is held, hand the camera back to the game so aim
+ # and view agree. We stop overriding (suppress) AND keep our held
+ # yaw/pitch tracking the live camera, so releasing aim doesn't snap. ----
         with lock:
             active_now = state["active"]
         aiming = bool(buttons & AIM_BUTTON) or (lt > AIM_TRIG_THRESH)  # LT (new) or LB (fallback)
@@ -1169,7 +1168,7 @@ def input_thread(script):
                     state["pitch"] = _clamp(psig, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP)
             except Exception:
                 pass
-        # ---- integrate right stick: X -> yaw, Y -> pitch (skipped while aiming) ----
+ # ---- integrate right stick: X -> yaw, Y -> pitch (skipped while aiming) ----
         if not (active_now and aiming):
             if abs(rx) > RX_DEADZONE:
                 norm = (abs(rx) - RX_DEADZONE) / (32767.0 - RX_DEADZONE)
@@ -1178,12 +1177,12 @@ def input_thread(script):
                     state["yaw"] = int(state["yaw"] + step) & 0xffff
             if abs(ry) > RX_DEADZONE:
                 norm = (abs(ry) - RX_DEADZONE) / (32767.0 - RX_DEADZONE)
-                # stick UP (ry>0) tilts the view UP; flip here if it feels inverted
+ # stick UP (ry>0) tilts the view UP; flip here if it feels inverted
                 step = PITCH_SPEED * norm * (1 if ry > 0 else -1)
                 with lock:
                     state["pitch"] = _clamp(int(state["pitch"] + step), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP)
-        # ---- mouse-X orbit (only when active + game focused; recenter cursor for
-        #      relative deltas so it doesn't drift to a screen edge) ----
+ # ---- mouse-X orbit (only when active + game focused; recenter cursor for
+ # relative deltas so it doesn't drift to a screen edge) ----
         if ENABLE_MOUSE and state["active"] and game_hwnd and user32.GetForegroundWindow() == game_hwnd:
             pt = wintypes.POINT()
             user32.GetCursorPos(ctypes.byref(pt))
@@ -1196,9 +1195,9 @@ def input_thread(script):
             mouse_armed = True
         else:
             mouse_armed = False
-        # ---- camera-relative movement: LEFT stick moves relative to the orbit
-        #      camera; RIGHT stick orbits. Active only while orbiting and not aiming.
-        #      Set facing 0x5F83B8 = orbit_yaw + stick_direction, feed forward=|stick|. ----
+ # ---- camera-relative movement: LEFT stick moves relative to the orbit
+ # camera; RIGHT stick orbits. Active only while orbiting and not aiming.
+ # Set facing 0x5F83B8 = orbit_yaw + stick_direction, feed forward=|stick|. ----
         moving = False
         fwd = 0
         facing = 0
@@ -1224,17 +1223,17 @@ def input_thread(script):
             except Exception:
                 r = None
             if r:
-                # r = [roll800, leftFlag, walkAng, liveFacing, X, Z, Yint, +0x28,+0x2c,+0x30,+0x34]
+ # r = [roll800, leftFlag, walkAng, liveFacing, X, Z, Yint, +0x28,+0x2c,+0x30,+0x34]
                 st = "ROLL" if r[0] else "----"
                 print(f"[roll] 0x800={st} walkAng={r[2]:4d} facing={r[3]:4d} pXZ=({r[4]},{r[5]}) "
                       f"o28={r[7]:9d} o2c={r[8]:9d} o30={r[9]:9d} o34={r[10]:9d}")
         prev_moving = moving
         try:
-            # facing is applied frame-synced inside the funcA hook (no async race)
+ # facing is applied frame-synced inside the funcA hook (no async race)
             script.exports_sync.setmove(facing, fwd, 1 if moving else 0)
         except Exception:
             pass
-        # ---- push to the hook ----
+ # ---- push to the hook ----
         with lock:
             y = state["yaw"] & 0xffff
             pitch_ecx = (-state["pitch"]) & 0xffff   # funcA negates ECX -> angle0, so pre-negate
