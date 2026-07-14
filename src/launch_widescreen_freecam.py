@@ -458,13 +458,19 @@ if (ANAMORPH) {
  // edges. Done at the status-draw emitter 0x4364F0 (edx = X arg), which emits ONLY the player
  // HUD - so the boss bar and map (other emitters) are never touched. BAR_L shifts sprites left
  // of center, BAR_R those right of center (the two bars are on opposite sides). User-tuned.
-    var HU_BAR_L = -50, HU_BAR_R = 60;
-    Interceptor.attach(ptr('0x4364F0'), { onEnter: function () {
-        var edx = this.context.edx.toUInt32();
-        var x = edx & 0xffff; if (x & 0x8000) x -= 0x10000;
-        x += (x < HU_CENTER) ? HU_BAR_L : HU_BAR_R;
-        this.context.edx = ptr(((edx & 0xffff0000) | (x & 0xffff)) >>> 0);
-    }});
+    // Disabled: this pushed the player HP/special bars out to the widescreen edges, but the
+    // boss health bar's frame goes through the same emitter and was getting pushed +60 while
+    // its fill stayed put, so the boss bar came apart. Off = both bars sit centered, boss bar
+    // intact. (Could be restored later gated by on-screen Y to skip the top-of-screen boss bar.)
+    var HU_BAR_L = 0, HU_BAR_R = 0;
+    if (HU_BAR_L !== 0 || HU_BAR_R !== 0) {
+        Interceptor.attach(ptr('0x4364F0'), { onEnter: function () {
+            var edx = this.context.edx.toUInt32();
+            var x = edx & 0xffff; if (x & 0x8000) x -= 0x10000;
+            x += (x < HU_CENTER) ? HU_BAR_L : HU_BAR_R;
+            this.context.edx = ptr(((edx & 0xffff0000) | (x & 0xffff)) >>> 0);
+        }});
+    }
  // ===== 0x64 SPRITE-RECT un-stretch (menus/UI: item grids, bar fills, borders) =====
  // Handler 0x4F608A (dispatch stub 0x4F7A1B) = textured sprite RECT: X s16 @ +8,
  // Y @ +0xA, U/V bytes @ +0xC/+0xD, WIDTH @ +0x10, HEIGHT @ +0x12 - a 1:1 texel
