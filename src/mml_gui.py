@@ -19,7 +19,7 @@ import time
 
 VANILLA_SHA256 = "cb0228dfcb3416ed48b6ec8c4b5cdb659c05e104a8e2e7c2b1720cc97d203324"
 PATCHED_SHA256 = "4b583cd622524997b5431fcda5b26cd775b98a489f85984338d293eb32c69406"
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)
