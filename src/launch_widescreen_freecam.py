@@ -399,12 +399,16 @@ if (ANAMORPH) {
             var ctx = HU_CTXP.readPointer();
             var center = (HU_lastMaxX > HU_TITLE_THRESH) ? HU_TITLE_CENTER : HU_CENTER;
             HU_curCenter = center;
-            // classify last frame's 0x64 metrics: screen-covering chunky tile sets =
-            // backdrops -> left stretched; skinny border strips always squeeze.
+            // Decide which 0x64 texture-sets are backdrops (skybox / menu wallpaper) and
+            // leave those stretched full-screen. A backdrop covers the screen in BOTH
+            // directions, so require a wide AND tall footprint. Wide-but-thin elements
+            // like the boss health bar must NOT match here, or they stay stretched while
+            // their container gets squeezed and the two drift apart.
             HU_mblack = {};
             for (var mk in HU_mstat) {
                 var ms = HU_mstat[mk];
-                if ((ms[1] - ms[0]) >= 300 && (ms[4] >= 6 || (ms[3] - ms[2]) >= 200) && ms[5] > 20) HU_mblack[mk] = 1;
+                var xspan = ms[1] - ms[0], yspan = ms[3] - ms[2];
+                if (xspan >= 300 && yspan >= 180 && ms[5] > 20) HU_mblack[mk] = 1;
             }
             HU_mstat = {};
             var fmax = -99999;
