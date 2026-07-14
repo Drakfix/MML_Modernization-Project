@@ -387,7 +387,8 @@ if (ANAMORPH) {
  // The TITLE screen uses a 640-wide space (centre 320) while gameplay is 320-wide (centre 160).
  // Detect per-frame from the widest sprite (title reaches ~576, gameplay stays under ~304) and
  // squeeze about the right centre, so the title menu text is centred too. 1-frame lag = fine.
-    var HU_TITLE_THRESH = 400, HU_TITLE_CENTER = 320, HU_lastMaxX = 0, HU_fontLocked = 0;
+    var HU_TITLE_THRESH = 400, HU_TITLE_MID = 240, HU_TITLE_CENTER = 320;
+    var HU_lastMaxX = 0, HU_lastMinX = 0, HU_fontLocked = 0;
     var HU_GW = ptr('0x4F6375'); Memory.protect(HU_GW, 1, 'rwx'); HU_GW.writeU8(HU_GLYPHW);
  // 0x64 sprite-rect state: shared center for the staged-vertex hook +
  // per-texture-metric footprint stats for the backdrop classifier (skybox / menu
@@ -397,7 +398,12 @@ if (ANAMORPH) {
     Interceptor.attach(ptr('0x4A70E5'), { onEnter: function () {
         try {
             var ctx = HU_CTXP.readPointer();
-            var center = (HU_lastMaxX > HU_TITLE_THRESH) ? HU_TITLE_CENTER : HU_CENTER;
+            // The title screen sits centered in the 640-wide space (its content is around
+            // X=320), while gameplay stays centered near 160 even when a wide boss HUD reaches
+            // far to the right. So detect the title by where the content is CENTERED, not just
+            // how far right it reaches - a boss bar out at X~444 must NOT read as the title.
+            var lastMid = (HU_lastMinX + HU_lastMaxX) / 2;
+            var center = (HU_lastMaxX > HU_TITLE_THRESH && lastMid > HU_TITLE_MID) ? HU_TITLE_CENTER : HU_CENTER;
             HU_curCenter = center;
             // Classify last frame's 0x64 metrics: screen-covering chunky tile sets are
             // backdrops (skybox / menu wallpaper) and stay stretched full-screen.
@@ -407,7 +413,7 @@ if (ANAMORPH) {
                 if ((ms[1] - ms[0]) >= 300 && (ms[4] >= 6 || (ms[3] - ms[2]) >= 200) && ms[5] > 20) HU_mblack[mk] = 1;
             }
             HU_mstat = {};
-            var fmax = -99999;
+            var fmax = -99999, fmin = 99999;
             for (var b = 0; b < HU_BUCKETS.length; b++) {
                 var p = ctx.add(HU_BUCKETS[b]).readPointer(), n = 0;
                 while ((p.toUInt32() & 1) === 0 && n < 8000) {
@@ -416,7 +422,7 @@ if (ANAMORPH) {
                     if (op === 0x6c) {                       // TEXT glyph: single X @ +8
                         if (!HU_fontLocked) { FONT_METRIC = p.add(0xe).readU16(); HU_fontLocked = 1; }  // real font page for our toast
                         var gx = p.add(8).readU16(); if (gx & 0x8000) gx -= 0x10000;
-                        if (gx > fmax) fmax = gx;
+                        if (gx > fmax) fmax = gx; if (gx < fmin) fmin = gx;
                         p.add(8).writeU16((Math.round(center + (gx - center) * HU_WIDTH)) & 0xffff);
                     } else if (op === 0x64) {
  // tracked for the title-center pick only; the actual 0x64 transform
@@ -424,7 +430,7 @@ if (ANAMORPH) {
  // crop or cram - U-span = width field)
                         var rx = p.add(8).readU16(); if (rx & 0x8000) rx -= 0x10000;
                         var rw = p.add(0x10).readU16();
-                        if (rx >= -320 && rx <= 704 && rw <= 640 && rx + rw > fmax) fmax = rx + rw;
+                        if (rx >= -320 && rx <= 704 && rw <= 640) { if (rx + rw > fmax) fmax = rx + rw; if (rx < fmin) fmin = rx; }
                     } else {
                         var t = HU_TYPES[op];
                         if (t) {
@@ -436,7 +442,7 @@ if (ANAMORPH) {
                                 xs[i] = x; if (x<xlo)xlo=x; if (x>xhi)xhi=x; if (y<ylo)ylo=y; if (y>yhi)yhi=y;
                             }
                             if (!((xhi-xlo) >= HU_FSX && (yhi-ylo) >= HU_FSY)) {   // skip fullscreen bg/fade
-                                if (xhi > fmax) fmax = xhi;
+                                if (xhi > fmax) fmax = xhi; if (xlo < fmin) fmin = xlo;
                                 for (var j = 0; j < nv; j++)
                                     p.add(xoff[j]).writeU16((Math.round(center + (xs[j]-center)*HU_WIDTH)) & 0xffff);
                             }
@@ -445,7 +451,7 @@ if (ANAMORPH) {
                     p = p.readPointer();   // next @ +0
                 }
             }
-            HU_lastMaxX = fmax;
+            HU_lastMaxX = fmax; HU_lastMinX = fmin;
         } catch (e) { /* bad list node - skip this frame */ }
     }});
  // Player-HUD EDGE-PUSH: shove the HP bar and special-weapon bar out toward the widescreen
