@@ -31,6 +31,11 @@ import ctypes
 import threading
 from ctypes import wintypes
 
+# Bumped on every runner change. Printed at launch so it is always clear which build of
+# this file actually ran (a stale copy in an install's Modernization/ folder has burned
+# us more than once).
+RUNNER_BUILD = "2026-07-14b boss-bar Y-band edge-push gate"
+
 def _find_game_dir():
     """Locate the game folder: MML_GAME_DIR env override, else walk up from this
     script (dev layout: RE-notes/tools/, release layout: Modernization/), else cwd."""
@@ -455,16 +460,19 @@ if (ANAMORPH) {
         } catch (e) { /* bad list node - skip this frame */ }
     }});
  // Player-HUD EDGE-PUSH: shove the HP bar and special-weapon bar out toward the widescreen
- // edges. Done at the status-draw emitter 0x4364F0 (edx = X arg), which emits ONLY the player
- // HUD - so the boss bar and map (other emitters) are never touched. BAR_L shifts sprites left
- // of center, BAR_R those right of center (the two bars are on opposite sides). User-tuned.
-    // Disabled: this pushed the player HP/special bars out to the widescreen edges, but the
-    // boss health bar's frame goes through the same emitter and was getting pushed +60 while
-    // its fill stayed put, so the boss bar came apart. Off = both bars sit centered, boss bar
-    // intact. (Could be restored later gated by on-screen Y to skip the top-of-screen boss bar.)
-    var HU_BAR_L = 0, HU_BAR_R = 0;
+ // edges. Done at the status-draw emitter 0x4364F0 (edx = X arg, ebx = Y arg). BAR_L shifts
+ // sprites left of center, BAR_R those right of center (the two bars sit on opposite sides).
+ // User-tuned. The boss health bar's frame and cap pieces come through this same emitter and
+ // the push tore them off their fill (which is drawn by a different emitter and never moves).
+ // Live emitter capture showed a clean split by screen row: every player-HUD piece sits at
+ // Y>=116 (HP bar 116-136, weapon icons 121/136, special gauge 190) while the boss bar row
+ // is Y=16 - so the push only applies from HU_BAR_YMIN down and the whole boss bar keeps its
+ // native position (the uniform un-stretch above still keeps it proportioned).
+    var HU_BAR_L = -50, HU_BAR_R = 60, HU_BAR_YMIN = 100;
     if (HU_BAR_L !== 0 || HU_BAR_R !== 0) {
         Interceptor.attach(ptr('0x4364F0'), { onEnter: function () {
+            var y = this.context.ebx.toUInt32() & 0xffff; if (y & 0x8000) y -= 0x10000;
+            if (y >= 0 && y < HU_BAR_YMIN) return;      // top-of-screen row = boss gauge
             var edx = this.context.edx.toUInt32();
             var x = edx & 0xffff; if (x & 0x8000) x -= 0x10000;
             x += (x < HU_CENTER) ? HU_BAR_L : HU_BAR_R;
@@ -1283,7 +1291,7 @@ script = session.create_script(JS)
 script.on('message', on_message)
 script.load()
 device.resume(pid)
-print(f"Spawned PID {pid}. Widescreen + free-cam armed from the start.")
+print(f"Spawned PID {pid}. Widescreen + free-cam armed from the start. [runner {RUNNER_BUILD}]")
 if INTRO_SKIP:
     print("Intro video: bypassed entirely (MML_INTRO=skip).")
 else:
