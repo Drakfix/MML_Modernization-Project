@@ -1,0 +1,21 @@
+# DDrawCompat config - WIDESCREEN mode (copied into place by Play - Widescreen.bat).
+# Stretch-to-fill: DisplayAspectRatio=display distorts the 4:3 render across the whole
+# screen; the Frida anamorphic FOV patch (launch_anamorphic_widescreen.py) pre-squeezes
+# the image so the stretch cancels out into correct 16:9 proportions.
+# See RE-notes/README.md §3.29/§3.32.
+
+AltTabFix               = keepvidmem
+CpuAffinity             = all
+FullscreenMode          = borderless
+DisplayResolution       = desktop
+DisplayAspectRatio      = display
+LogLevel                = info
+
+# High-res internal rendering (2026-07-04): rasterize the 3D scene at display
+# resolution while the game still sees 640x480 logically - none of the §3.1-§3.22
+# surface-widening bugs apply, the scaling happens below the game's perception.
+# High-res internal rendering (re-enabled 2026-07-04 after full exoneration in the
+# §3.36 bisect - the cutscene crash was the task-pool overrun, not scaling):
+ResolutionScale         = display
+ResolutionScaleFilter   = bilinear
+RenderColorDepth        = 32

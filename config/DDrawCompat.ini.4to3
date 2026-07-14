@@ -1,0 +1,16 @@
+# DDrawCompat config - CLASSIC 4:3 mode (copied into place by Play - Classic 4-3.bat).
+# Aspect-preserving: the 4:3 render is pillarboxed, NOT stretched, since classic mode
+# has no anamorphic FOV pre-squeeze to cancel a stretch.
+# See RE-notes/README.md §3.29/§3.32.
+
+AltTabFix               = keepvidmem
+CpuAffinity             = all
+FullscreenMode          = borderless
+DisplayResolution       = desktop
+DisplayAspectRatio      = 4:3
+LogLevel                = info
+
+# High-res internal rendering (2026-07-04) - same as the widescreen variant
+ResolutionScale         = display
+ResolutionScaleFilter   = bilinear
+RenderColorDepth        = 32

@@ -1,0 +1,358 @@
+"""Maintainer build tool: regenerate the release package and the patch manifest.
+
+Diffs a vanilla and a patched MEGAMAN.EXE to produce the byte-patch table (only this
+project's own bytes), writes src/patch_manifest.py, and assembles the runtime package
+(wrappers, config templates, launcher, intro, licenses) that the installer bundles.
+
+Requires a working game folder containing MEGAMAN.EXE.orig (vanilla), the patched
+MEGAMAN.EXE, the wrapper DLLs and the intro. Set its path with MML_GAME_DIR. End users
+do not run this; the committed patch_manifest.py is the input to the installer build.
+"""
+import hashlib
+import os
+import shutil
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC = os.path.join(REPO, "src")
+CONFIG = os.path.join(REPO, "config")
+LICENSES = os.path.join(REPO, "licenses")
+OUTDIR = os.path.join(REPO, "dist", "release")
+GUI_EXE = os.path.join(REPO, "dist", "MML Launcher.exe")
+
+# Game-specific inputs (the copyrighted executable, the redistributable wrapper DLLs and
+# the intro) come from the maintainer's game folder, set via MML_GAME_DIR.
+GAME = os.environ.get("MML_GAME_DIR")
+if not GAME or not os.path.isfile(os.path.join(GAME, "MEGAMAN.EXE")):
+    raise SystemExit("Set MML_GAME_DIR to your game folder (with MEGAMAN.EXE and the wrappers).")
+VANILLA = os.path.join(GAME, "MEGAMAN.EXE.orig")
+PATCHED = os.path.join(GAME, "MEGAMAN.EXE")
+CUSTOM_AVI = os.path.join(GAME, "CAPCOM.AVI")
+
+DLL_FILES = ["ddraw.dll", "dinput.dll", "dsound.dll", "dsoal-aldrv.dll"]        # from GAME
+CONFIG_FILES = ["DDrawCompat.ini.16to9", "DDrawCompat.ini.4to3"]               # from CONFIG
+LAUNCHER_FILES = ["mml_launcher.py", "launch_widescreen_freecam.py", "mml_gui.py"]  # from SRC
+
+van = open(VANILLA, "rb").read()
+pat = open(PATCHED, "rb").read()
+assert len(van) == len(pat), "size mismatch - the patch model assumes same-size files"
+
+runs = []
+i = 0
+n = len(van)
+while i < n:
+    if van[i] != pat[i]:
+        j = i
+        while j < n and van[j] != pat[j]:
+            j += 1
+        runs.append((i, pat[i:j]))
+        i = j
+    else:
+        i += 1
+
+total = sum(len(b) for _, b in runs)
+van_sha = hashlib.sha256(van).hexdigest()
+pat_sha = hashlib.sha256(pat).hexdigest()
+avi_sha = hashlib.sha256(open(CUSTOM_AVI, "rb").read()).hexdigest()
+
+# ---- assemble the package tree ----
+gf = os.path.join(OUTDIR, "game-files")
+mod = os.path.join(gf, "Modernization")
+os.makedirs(mod, exist_ok=True)
+shutil.copyfile(CUSTOM_AVI, os.path.join(OUTDIR, "CAPCOM.AVI"))
+for fn in DLL_FILES:
+    shutil.copyfile(os.path.join(GAME, fn), os.path.join(gf, fn))
+for fn in CONFIG_FILES:
+    shutil.copyfile(os.path.join(CONFIG, fn), os.path.join(gf, fn))
+for fn in LAUNCHER_FILES:
+    shutil.copyfile(os.path.join(SRC, fn), os.path.join(mod, fn))
+with open(os.path.join(gf, "Play - MML.bat"), "w") as f:
+    f.write('@echo off\n'
+            'REM Fallback CLI chooser (needs Python + frida). The normal way to play\n'
+            'REM is double-clicking "MML Launcher.exe" (self-contained).\n'
+            'title Mega Man Legends - Modernization Project\n'
+            'cd /d "%~dp0"\n'
+            'python "Modernization\\mml_launcher.py"\n'
+            'pause\n')
+if os.path.exists(GUI_EXE):
+    shutil.copyfile(GUI_EXE, os.path.join(gf, "MML Launcher.exe"))
+else:
+    print("WARNING: dist/MML Launcher.exe missing - run build_gui.bat first; package will be CLI-only")
+
+# Third-party license texts + attribution. THIRD-PARTY-NOTICES.txt is placed at the game
+# folder root; the full license texts go into a licenses/ subfolder. Both install with the
+# rest of game-files/.
+NOTICES = os.path.join(REPO, "THIRD-PARTY-NOTICES.txt")
+if os.path.isfile(NOTICES):
+    shutil.copyfile(NOTICES, os.path.join(gf, "THIRD-PARTY-NOTICES.txt"))
+if os.path.isdir(LICENSES):
+    lic_dst = os.path.join(gf, "licenses")
+    os.makedirs(lic_dst, exist_ok=True)
+    for fn in os.listdir(LICENSES):
+        src = os.path.join(LICENSES, fn)
+        if not os.path.isfile(src):
+            continue
+        if fn == "THIRD-PARTY-NOTICES.txt":
+            continue
+        shutil.copyfile(src, os.path.join(lic_dst, fn))
+    print("bundled third-party licenses + THIRD-PARTY-NOTICES.txt")
+else:
+    print("WARNING: licenses/ missing - run fetch_licenses.py before packaging")
+
+table = ",\n".join(f'    (0x{off:X}, "{data.hex()}")' for off, data in runs)
+
+# our stack's dll hashes (so the applier can tell OUR files from a repack's wrappers)
+our_dlls = {}
+for fn in ["ddraw.dll", "dinput.dll", "dsound.dll", "dsoal-aldrv.dll"]:
+    our_dlls[fn] = hashlib.sha256(open(os.path.join(gf, fn), "rb").read()).hexdigest()
+our_dlls_table = ",\n".join(f'    "{k}": "{v}"' for k, v in our_dlls.items())
+
+# ---- shared patch manifest (imported by mml_installer.py so the GUI setup uses the
+# SAME patch data as the CLI applier; both regenerate from one make_patcher.py run) ----
+MANIFEST = f'''"""Patch manifest - GENERATED by make_patcher.py, do not edit."""
+VANILLA_SHA256 = "{van_sha}"
+PATCHED_SHA256 = "{pat_sha}"
+INTRO_SHA256 = "{avi_sha}"
+EXE_SIZE = {len(van)}
+PATCH_COUNT = {len(runs)}
+PATCH_BYTES = {total}
+PATCHES = [
+{table}
+]
+HOOK_DLL_NAMES = [
+    "ddraw.dll", "dinput.dll", "dinput8.dll", "dsound.dll", "d3d8.dll", "d3d9.dll",
+    "d3d11.dll", "dxgi.dll", "winmm.dll", "dciman32.dll", "dxwrapper.dll",
+    "opengl32.dll", "version.dll", "d3dimm.dll",
+]
+OUR_DLLS = {{
+{our_dlls_table}
+}}
+'''
+open(os.path.join(SRC, "patch_manifest.py"), "w", encoding="utf-8").write(MANIFEST)
+
+APPLIER = f'''"""Mega Man Legends Modernization Project - installer (generated, do not edit).
+
+Installs the Modernization Project onto YOUR OWN copy of the Mega Man Legends PC port
+(CD-ROM release). Contains NO Capcom code or data - only this project's changes.
+
+Steps:
+  1. Verify your MEGAMAN.EXE is the supported build (SHA-256), back it up as
+     MEGAMAN.EXE.vanilla-backup, apply {len(runs)} byte-range patches ({total} bytes),
+     verify the result (auto-restores the backup on any mismatch).
+  2. Install the Modernization intro video (your original CAPCOM.AVI is kept as
+     CAPCOM.AVI.original). Skip with --no-intro.
+  3. Install the runtime stack (DDrawCompat/Xidi/DSOAL wrappers, config templates,
+     the Modernization launcher, Play - MML.bat). Any FOREIGN wrapper DLLs from a
+     repack (dxwrapper, dgVoodoo2, ReShade, ENB shims...) are auto-detected by name
+     +hash and QUARANTINED to Modernization/quarantined-wrappers (moved, not deleted;
+     move them back to undo). Skip all of step 3 with --no-runtime.
+
+Usage:  python apply_modernization_patch.py [path-to-game-folder] [--no-intro] [--no-runtime]
+        (default folder = the current directory)
+Requires on this machine: Python 3 and 'pip install frida' (for the launcher).
+"""
+import hashlib
+import os
+import shutil
+import sys
+
+VANILLA_SHA256 = "{van_sha}"
+PATCHED_SHA256 = "{pat_sha}"
+EXE_SIZE = {len(van)}
+INTRO_SHA256 = "{avi_sha}"
+
+# DLL names a wrapper/shim could use to hook this DirectDraw-era game. Anything in the
+# game folder with one of these names that is NOT our own file (hash below) is a foreign
+# wrapper (dxwrapper, dgVoodoo2, ReShade, ENB, repack shims...) and will CONFLICT with
+# our stack - it gets QUARANTINED (moved, never deleted) to Modernization/quarantined-wrappers.
+HOOK_DLL_NAMES = [
+    "ddraw.dll", "dinput.dll", "dinput8.dll", "dsound.dll", "d3d8.dll", "d3d9.dll",
+    "d3d11.dll", "dxgi.dll", "winmm.dll", "dciman32.dll", "dxwrapper.dll",
+    "opengl32.dll", "version.dll", "d3dimm.dll",
+]
+OUR_DLLS = {{
+{our_dlls_table}
+}}
+
+PATCHES = [
+{table}
+]
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def fail(msg):
+    print("ERROR:", msg)
+    sys.exit(1)
+
+
+def patch_exe(game):
+    exe = os.path.join(game, "MEGAMAN.EXE")
+    if not os.path.exists(exe):
+        fail("MEGAMAN.EXE not found here. Run from (or point at) your game folder.")
+    size = os.path.getsize(exe)
+    digest = sha256(exe)
+    if digest == PATCHED_SHA256:
+        print("MEGAMAN.EXE is already fully patched.")
+        return
+    if size != EXE_SIZE or digest != VANILLA_SHA256:
+        fail(
+            "This MEGAMAN.EXE is a build this patch does not know.\\n"
+            f"  size: {{size}}  sha256: {{digest}}\\n"
+            "  No changes were made. Please report this hash to the project so your\\n"
+            "  version can be supported (different CD prints/regions have different exes)."
+        )
+    backup = os.path.join(game, "MEGAMAN.EXE.vanilla-backup")
+    if not os.path.exists(backup):
+        shutil.copyfile(exe, backup)
+        print(f"Backup written: {{backup}}")
+    data = bytearray(open(exe, "rb").read())
+    for off, hexbytes in PATCHES:
+        blob = bytes.fromhex(hexbytes)
+        data[off:off + len(blob)] = blob
+    open(exe, "wb").write(data)
+    if sha256(exe) != PATCHED_SHA256:
+        shutil.copyfile(backup, exe)
+        fail("Patched result failed verification - your original exe was RESTORED.")
+    print(f"MEGAMAN.EXE patched OK ({len(runs)} ranges, {total} bytes) and verified.")
+
+
+def install_intro(game, pkg):
+    src = os.path.join(pkg, "CAPCOM.AVI")
+    dst = os.path.join(game, "CAPCOM.AVI")
+    if not os.path.exists(src):
+        print("Intro video: CAPCOM.AVI not found next to this script - skipped.")
+        return
+    if os.path.exists(dst) and sha256(dst) == INTRO_SHA256:
+        print("Intro video: already installed.")
+        return
+    keep = os.path.join(game, "CAPCOM.AVI.original")
+    if os.path.exists(dst) and not os.path.exists(keep):
+        shutil.move(dst, keep)
+        print(f"Original intro kept as: {{keep}}")
+    shutil.copyfile(src, dst)
+    print("Modernization intro video installed.")
+
+
+def quarantine_foreign_wrappers(game):
+    """Move any hook-named DLL that isn't ours (repack wrappers: dxwrapper, dgVoodoo2,
+    ReShade, ENB...) into Modernization/quarantined-wrappers. Nothing is deleted -
+    moving the files back restores the previous setup."""
+    qdir = os.path.join(game, "Modernization", "quarantined-wrappers")
+    moved = []
+    for fn in os.listdir(game):
+        low = fn.lower()
+        if low not in HOOK_DLL_NAMES:
+            continue
+        path = os.path.join(game, fn)
+        if not os.path.isfile(path):
+            continue
+        if low in OUR_DLLS and sha256(path) == OUR_DLLS[low]:
+            continue                       # already our own file
+        os.makedirs(qdir, exist_ok=True)
+        dst = os.path.join(qdir, fn)
+        i = 2
+        while os.path.exists(dst):
+            base, ext = os.path.splitext(fn)
+            dst = os.path.join(qdir, f"{{base}}.{{i}}{{ext}}")
+            i += 1
+        shutil.move(path, dst)
+        moved.append(fn)
+    if moved:
+        print(f"Foreign wrapper DLLs quarantined ({{', '.join(moved)}}) -> {{qdir}}")
+        print("  (they would conflict with the Modernization stack; move them back to undo)")
+
+
+def install_runtime(game, pkg):
+    gf = os.path.join(pkg, "game-files")
+    if not os.path.isdir(gf):
+        print("Runtime stack: game-files folder not found next to this script - skipped.")
+        return
+    quarantine_foreign_wrappers(game)
+    copied = 0
+    for root, dirs, files in os.walk(gf):
+        rel = os.path.relpath(root, gf)
+        tgt = game if rel == "." else os.path.join(game, rel)
+        os.makedirs(tgt, exist_ok=True)
+        for fn in files:
+            shutil.copyfile(os.path.join(root, fn), os.path.join(tgt, fn))
+            copied += 1
+    print(f"Runtime stack installed ({{copied}} files: wrappers, configs, launcher, Play - MML.bat).")
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    game = os.path.abspath(args[0] if args else ".")
+    pkg = os.path.dirname(os.path.abspath(__file__))
+    print(f"Game folder: {{game}}")
+    patch_exe(game)
+    if "--no-intro" in sys.argv:
+        print("Intro video: skipped (--no-intro).")
+    else:
+        install_intro(game, pkg)
+    if "--no-runtime" in sys.argv:
+        print("Runtime stack: skipped (--no-runtime).")
+    else:
+        install_runtime(game, pkg)
+    print()
+    print("DONE. To play: double-click 'MML Launcher.exe' in the game folder.")
+    print("(Nothing else to install - the launcher is self-contained. 'Play - MML.bat'")
+    print(" is a fallback CLI chooser that needs Python 3 + 'pip install frida'.)")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+out = os.path.join(OUTDIR, "apply_modernization_patch.py")
+open(out, "w", encoding="utf-8").write(APPLIER)
+
+with open(os.path.join(OUTDIR, "README.txt"), "w") as f:
+    f.write(f"""Mega Man Legends Modernization Project - install package (pre-0.1 staging)
+============================================================================
+
+Install:  python apply_modernization_patch.py <path-to-your-game-folder>
+Then:     double-click 'MML Launcher.exe' in the game folder - self-contained,
+          nothing else to install. ('Play - MML.bat' = fallback CLI chooser,
+          needs Python 3 + 'pip install frida'.)
+Requires: your own install of the Mega Man Legends PC port (CD-ROM release).
+
+What the installer does:
+  1. Hash-verifies your MEGAMAN.EXE (supported build sha256 {van_sha},
+     size {len(van):,}) - unknown builds are refused untouched; please report their
+     hash so support can be added. Backs up, applies {len(runs)} byte-range patches
+     ({total} bytes: widescreen visibility windows, enlarged render queues/tables,
+     ordering-table overflow fix, terrain depth-gate rescue), verifies, and
+     auto-restores the backup on any mismatch.
+  2. Installs the Modernization intro video (original kept as CAPCOM.AVI.original).
+  3. Installs the runtime stack: DDrawCompat (ddraw.dll), Xidi (dinput.dll),
+     DSOAL (dsound.dll + dsoal-aldrv.dll), config templates, the Modernization
+     launcher (Modernization/) and 'Play - MML.bat'. Foreign wrapper DLLs from
+     repacks (dxwrapper, dgVoodoo2, ReShade, ENB...) are auto-detected and
+     quarantined to Modernization/quarantined-wrappers (moved, never deleted -
+     move them back to restore the old setup).
+
+Flags: --no-intro / --no-runtime
+
+This package contains NO Capcom code or data - only this project's own changes
+plus redistributable open-source wrappers.
+TODO before public release: include DDrawCompat / Xidi / DSOAL license files
+(DSOAL is GPL - license + source link required).
+
+Regenerate this package after any change:  python RE-notes/tools/make_patcher.py
+""")
+
+print(f"vanilla  sha256: {van_sha}")
+print(f"patched  sha256: {pat_sha}")
+print(f"intro    sha256: {avi_sha}")
+print(f"{len(runs)} differing runs, {total} patch bytes total")
+print(f"package assembled in: {OUTDIR}")
+for root, dirs, files in os.walk(OUTDIR):
+    for fn in files:
+        p = os.path.join(root, fn)
+        print(f"  {os.path.relpath(p, OUTDIR):50s} {os.path.getsize(p):>10,} bytes")

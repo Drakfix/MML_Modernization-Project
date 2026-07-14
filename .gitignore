@@ -1,0 +1,38 @@
+# Build output
+/dist/
+/release/
+*.spec
+__pycache__/
+*.pyc
+*.egg-info/
+
+# PyInstaller work dirs
+build/*/
+!build/*.bat
+
+# Never commit the game or any of its data
+MEGAMAN.EXE
+*.exe
+*.avi
+*.AVI
+*.mcd
+*.MCD
+*.CFG
+/BGM/
+/DAT/
+/SPH/
+# Local live config written from the templates in config/
+/DDrawCompat.ini
+
+# Third-party wrapper binaries (obtained separately, see THIRD-PARTY-NOTICES.txt)
+ddraw.dll
+dinput.dll
+dsound.dll
+dsoal-aldrv.dll
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+*.swp
