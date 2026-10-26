@@ -67,6 +67,44 @@ the game window, so the shim centres it at 4:3 on the black window.
 `renderer=ddrawcompat` hands DirectDraw back to the DDrawCompat wrapper like 0.1 did. `gfx.h` is the backend interface, so another backend
 (GLES/Vulkan for Android) can sit behind the same code.
 
+### 60 fps (frame interpolation)
+
+`[video] interp=1` (the launcher's Frame rate option, Modern renderer only). The
+game still thinks at 30 frames a second; for every game frame we also show one
+in between, with everything halfway between the last two frames. A frame
+starts reacting to your input at the same moment as before, it just gets an
+extra frame of motion.
+
+- `gte_capture.c` records every vertex the game's software GTE projects, with an
+  identity (which code drew it, its model coordinates, how many times that pair
+  came up earlier in the frame), its camera-space position and where it landed
+  on screen. It also grabs the world-to-camera transform from the terrain.
+- `interp.c` (portable) matches those identities with the previous frame.
+  Geometry the game builds in screen space around a projected point (grass,
+  sprite cards) or that the near clippers rebuilt gets its 3D position back
+  from screen position + depth and moves with the camera, plus whatever the
+  nearest matched vertex did on top of that.
+- `frame_rec.c` (portable, only uses `gfx.h`) records the frame's draw calls while
+  they're drawn, replays them into a second target with every vertex blended
+  halfway, shows that frame, and shows the game's own frame 16.7 ms later.
+- Background layers (the sky) are handled by `bglayer.c`: the game keeps their
+  scroll with sub-pixel precision but drew the tiles at whole pixels, so the sky
+  moved in steps. We add the dropped fraction back (smooth even at 30 fps,
+  `smooth_sky=1`) and blend with the real scroll, which stays right when the
+  tile grid wraps around.
+
+The game's frame limiter used to spin a CPU core waiting for the next frame on a
+timer that only ticks every 15.6 ms; it now gets a 1 ms clock and sleeps.
+
+`[video] gpu=display` renders on the GPU the monitor is connected to instead of
+the fastest one (laptops with two GPUs). Note that on some laptops Windows
+composites every frame of any borderless fullscreen window, which shows up as
+"Desktop Window Manager" GPU use; that's the price of alt-tab and screenshots
+working.
+
+Debug: `[debug] interp_census=1`, `interp_mid_only=1` (show only the in-between
+frames), `interp_timing=1` (log frame pacing).
+
 ### Distance fog
 
 `[video] fog=original|light|off` (the launcher's Distance fog option). The game
@@ -122,6 +160,8 @@ for comparisons.
 - `src/display.c` native widescreen: wide mode/viewport/clear rect + per-primitive placement in DrawPrimitive
 - `src/ddshim.c` DirectDraw 4 / Direct3D 3 implementation (renderer=mml)
 - `src/gfx.h`, `src/gfx_d3d11.c`, `shaders/game.hlsl` rendering backend interface + Direct3D 11 backend
+- `src/gte_capture.c`, `src/interp.c`, `src/frame_rec.c` 60 fps frame interpolation
+- `src/bglayer.c` smooth background layers (the sky)
 - `src/fog.c` distance fog options
 - `src/lod.c` always full-detail models
 - `src/terrain.c` near-plane clipping for terrain (the floor holes)

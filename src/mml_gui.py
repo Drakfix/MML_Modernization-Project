@@ -10,6 +10,7 @@ It can also create a Desktop shortcut that starts the game with the saved settin
 without showing this window.
 """
 import ctypes
+import ctypes.wintypes
 import hashlib
 import json
 import os
@@ -93,7 +94,7 @@ LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
 DEFAULTS = {"renderer": "mml", "window": "fullscreen",
             "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
-            "lod": "full"}
+            "lod": "full", "fps": "60"}
 
 
 def load_settings():
@@ -263,6 +264,7 @@ def write_mml_ini(s, width):
             "anisotropy": aniso,
             "fog": s["fog"],
             "lod": s["lod"],
+            "interp": 1 if s["fps"] == "60" else 0,
         },
         "controls": {"mode": s["controls"]},
         "general": {"intro": s["intro"]},
@@ -324,7 +326,7 @@ class App:
         root.title("Mega Man Legends - Modernization Project")
         root.configure(bg=BG)
         root.resizable(False, False)
-        root.geometry(f"{W}x{H}")
+        root.geometry(f"{W}x{H}+{self.centered_pos()}")
         try:
             root.iconbitmap(self.res_path("mml.ico"))
         except Exception:
@@ -377,7 +379,7 @@ class App:
 
         option("Renderer", "renderer",
                [("Modern (Direct3D 11)", "mml"), ("Compatibility", "ddrawcompat")],
-               "Modern = alt-tab, screenshots + windowed work")
+               "Modern = 60 fps, alt-tab, screenshots, windowed")
         pair = tk.Frame(col, bg=BG)
         pair.pack(fill="x", pady=2)
         option("Display", "window",
@@ -385,7 +387,10 @@ class App:
         option("Upscaling", "scalefilter",
                [("Bilinear", "bilinear"), ("Nearest", "nearest")], row=pair, side="right")
         option("Resolution", "res", RES_CHOICES, "Display = your monitor (recommended)")
-        option("Aspect ratio", "aspect", [("16:9 Widescreen", "16:9"), ("4:3 Classic", "4:3")])
+        pair3 = tk.Frame(col, bg=BG)
+        pair3.pack(fill="x", pady=2)
+        option("Aspect ratio", "aspect", [("16:9 Wide", "16:9"), ("4:3 Classic", "4:3")], row=pair3, side="left")
+        option("Frame rate", "fps", [("60 fps", "60"), ("30 fps", "30")], row=pair3, side="right")
         option("Controls", "controls",
                [("Modern twin-stick", "modern"), ("Vanilla (1997)", "vanilla")],
                "LT aim · RT shoot · X dodge · F5 orbit")
@@ -425,6 +430,19 @@ class App:
                                        font=("Segoe UI", 9), fill=DIM, text="")
 
         self.refresh_status()
+
+    @staticmethod
+    def centered_pos():
+        """Centre in the screen's work area (above the taskbar), never above its top."""
+        try:
+            r = ctypes.wintypes.RECT()
+            ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(r), 0)   # SPI_GETWORKAREA
+            title = 40   # title bar + borders
+            x = r.left + max(0, (r.right - r.left - W) // 2)
+            y = r.top + max(0, (r.bottom - r.top - H - title) // 2)
+            return f"{x}+{y}"
+        except Exception:
+            return "100+40"
 
     @staticmethod
     def res_path(name):

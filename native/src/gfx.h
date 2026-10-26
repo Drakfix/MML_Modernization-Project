@@ -45,6 +45,7 @@ typedef struct {
     int stretch;                  /* fill the window instead of keeping the game's aspect */
     int no_fog;                   /* ignore the game's fog */
     int fog_from_w;               /* fog depth = 1/rhw instead of z */
+    int gpu_display;              /* render on the GPU driving the monitor, not the fastest one */
 } gfx_options;
 
 int gfx_init(HWND game_window, int app_w, int app_h, const gfx_options *opt);
@@ -63,3 +64,7 @@ void gfx_draw(int prim, const gfx_vertex *v, int count);
 /* clear in the game's coordinates; rect NULL = everything */
 void gfx_clear(const RECT *rect, int color_too, uint32_t color, int depth_too, float depth);
 void gfx_present(void);
+/* frame interpolation: 0 = the game's frame, 1 = a second scene target for the
+ * in-between frame. Draws and clears go to the target in use. */
+void gfx_use_target(int t);
+void gfx_present_target(int t);

@@ -124,11 +124,18 @@ static void *shifted(DWORD fvf, const void *verts, DWORD count)
     return g_vbuf;
 }
 
+/* the game's own vertices for the draw in progress, before any shifting */
+const void *g_display_raw_verts;
+
 static HRESULT WINAPI hooked_draw_prim(void *dev, DWORD type, DWORD fvf, void *verts, DWORD count, DWORD flags)
 {
     void *v = shifted(fvf, verts, count);
+    HRESULT hr;
     g_draw_calls++;
-    return g_draw_prim(dev, type, fvf, v ? v : verts, count, flags);
+    g_display_raw_verts = verts;
+    hr = g_draw_prim(dev, type, fvf, v ? v : verts, count, flags);
+    g_display_raw_verts = NULL;
+    return hr;
 }
 
 static HRESULT WINAPI hooked_draw_indexed(void *dev, DWORD type, DWORD fvf, void *verts, DWORD vcount,
@@ -137,6 +144,11 @@ static HRESULT WINAPI hooked_draw_indexed(void *dev, DWORD type, DWORD fvf, void
     void *v = shifted(fvf, verts, vcount);
     g_indexed_calls++;
     return g_draw_indexed(dev, type, fvf, v ? v : verts, vcount, idx, icount, flags);
+}
+
+float display_world_shift(void)
+{
+    return g_active ? g_offset_x : 0.0f;
 }
 
 int display_native_width(void)

@@ -51,11 +51,14 @@ static struct {
     IDXGISwapChain1 *swap;
     ID3D11RenderTargetView *back_rtv;
     int back_w, back_h;
-    /* scene target */
-    ID3D11Texture2D *scene, *scene_resolved, *depth;
-    ID3D11RenderTargetView *scene_rtv;
-    ID3D11ShaderResourceView *scene_srv;
-    ID3D11DepthStencilView *dsv;
+    /* scene targets: 0 = the game's frame, 1 = the in-between frame (made on first use) */
+    struct {
+        ID3D11Texture2D *scene, *scene_resolved, *depth;
+        ID3D11RenderTargetView *scene_rtv;
+        ID3D11ShaderResourceView *scene_srv;
+        ID3D11DepthStencilView *dsv;
+    } tg[2];
+    int cur, tg_used[2];
     int scene_w, scene_h;
     /* pipeline */
     ID3D11VertexShader *vs, *blit_vs;
@@ -80,12 +83,35 @@ static struct {
 
 /* ---------------------------------------------------------------- setup */
 
+/* the GPU whose outputs include the monitor the window is on */
+static IDXGIAdapter1 *display_adapter(IDXGIFactory1 *f1)
+{
+    HMONITOR mon = MonitorFromWindow(g.hwnd, MONITOR_DEFAULTTOPRIMARY);
+    IDXGIAdapter1 *a;
+    UINT i, j;
+    for (i = 0; IDXGIFactory1_EnumAdapters1(f1, i, &a) != DXGI_ERROR_NOT_FOUND; i++) {
+        IDXGIOutput *o;
+        for (j = 0; IDXGIAdapter1_EnumOutputs(a, j, &o) != DXGI_ERROR_NOT_FOUND; j++) {
+            DXGI_OUTPUT_DESC od;
+            int match = SUCCEEDED(IDXGIOutput_GetDesc(o, &od)) && od.Monitor == mon;
+            IDXGIOutput_Release(o);
+            if (match)
+                return a;
+        }
+        IDXGIAdapter1_Release(a);
+    }
+    return NULL;
+}
+
 static IDXGIAdapter1 *pick_adapter(IDXGIFactory1 *f1)
 {
     IDXGIFactory6 *f6 = NULL;
     IDXGIAdapter1 *a = NULL;
-    /* prefer the high-performance GPU (the dGPU on laptops with two) */
-    if (SUCCEEDED(IDXGIFactory1_QueryInterface(f1, &IID_IDXGIFactory6, (void **)&f6))) {
+    /* gpu=display: render where the picture is shown, so nothing gets copied
+     * between GPUs (laptops with two); else prefer the high-performance GPU */
+    if (g.opt.gpu_display)
+        a = display_adapter(f1);
+    if (!a && SUCCEEDED(IDXGIFactory1_QueryInterface(f1, &IID_IDXGIFactory6, (void **)&f6))) {
         IDXGIFactory6_EnumAdapterByGpuPreference(f6, 0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
                                                  &IID_IDXGIAdapter1, (void **)&a);
         IDXGIFactory6_Release(f6);
@@ -177,12 +203,15 @@ static int make_back(void)
 
 static void release_scene(void)
 {
-    REL(g.scene_srv);
-    REL(g.scene_rtv);
-    REL(g.dsv);
-    REL(g.scene);
-    REL(g.scene_resolved);
-    REL(g.depth);
+    int t;
+    for (t = 0; t < 2; t++) {
+        REL(g.tg[t].scene_srv);
+        REL(g.tg[t].scene_rtv);
+        REL(g.tg[t].dsv);
+        REL(g.tg[t].scene);
+        REL(g.tg[t].scene_resolved);
+        REL(g.tg[t].depth);
+    }
 }
 
 /* scene size: the game's aspect, as tall as the window (or N x its mode) */
@@ -198,7 +227,20 @@ static void scene_size(int *w, int *h)
     if (*h > 16384) *h = 16384;
 }
 
+static int make_target(int t);
+
+/* (re)create every scene target in use */
 static int make_scene(void)
+{
+    int t, ok = 1;
+    g.tg_used[0] = 1;
+    for (t = 0; t < 2; t++)
+        if (g.tg_used[t])
+            ok &= make_target(t);
+    return ok;
+}
+
+static int make_target(int t)
 {
     D3D11_TEXTURE2D_DESC d;
     int w, h;
@@ -217,28 +259,29 @@ static int make_scene(void)
     d.SampleDesc.Count = samples;
     d.Usage = D3D11_USAGE_DEFAULT;
     d.BindFlags = D3D11_BIND_RENDER_TARGET | (samples == 1 ? D3D11_BIND_SHADER_RESOURCE : 0);
-    if (FAILED(ID3D11Device_CreateTexture2D(g.dev, &d, NULL, &g.scene)))
+    if (FAILED(ID3D11Device_CreateTexture2D(g.dev, &d, NULL, &g.tg[t].scene)))
         return 0;
-    ID3D11Device_CreateRenderTargetView(g.dev, (ID3D11Resource *)g.scene, NULL, &g.scene_rtv);
+    ID3D11Device_CreateRenderTargetView(g.dev, (ID3D11Resource *)g.tg[t].scene, NULL, &g.tg[t].scene_rtv);
     if (samples > 1) {
         d.SampleDesc.Count = 1;
         d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        ID3D11Device_CreateTexture2D(g.dev, &d, NULL, &g.scene_resolved);
-        ID3D11Device_CreateShaderResourceView(g.dev, (ID3D11Resource *)g.scene_resolved, NULL, &g.scene_srv);
+        ID3D11Device_CreateTexture2D(g.dev, &d, NULL, &g.tg[t].scene_resolved);
+        ID3D11Device_CreateShaderResourceView(g.dev, (ID3D11Resource *)g.tg[t].scene_resolved, NULL, &g.tg[t].scene_srv);
     } else {
-        ID3D11Device_CreateShaderResourceView(g.dev, (ID3D11Resource *)g.scene, NULL, &g.scene_srv);
+        ID3D11Device_CreateShaderResourceView(g.dev, (ID3D11Resource *)g.tg[t].scene, NULL, &g.tg[t].scene_srv);
     }
     d.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
     d.SampleDesc.Count = samples;
     d.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-    if (FAILED(ID3D11Device_CreateTexture2D(g.dev, &d, NULL, &g.depth)))
+    if (FAILED(ID3D11Device_CreateTexture2D(g.dev, &d, NULL, &g.tg[t].depth)))
         return 0;
-    ID3D11Device_CreateDepthStencilView(g.dev, (ID3D11Resource *)g.depth, NULL, &g.dsv);
+    ID3D11Device_CreateDepthStencilView(g.dev, (ID3D11Resource *)g.tg[t].depth, NULL, &g.tg[t].dsv);
     g.scene_w = w;
     g.scene_h = h;
-    log_printf("gfx: scene %dx%d (%ux MSAA) for the game's %dx%d, window %dx%d", w, h, samples, g.app_w, g.app_h,
-               g.back_w, g.back_h);
-    return g.scene_rtv && g.scene_srv && g.dsv;
+    if (t == 0)
+        log_printf("gfx: scene %dx%d (%ux MSAA) for the game's %dx%d, window %dx%d", w, h, samples, g.app_w, g.app_h,
+                   g.back_w, g.back_h);
+    return g.tg[t].scene_rtv && g.tg[t].scene_srv && g.tg[t].dsv;
 }
 
 static ID3D11SamplerState *make_sampler(D3D11_FILTER f, D3D11_TEXTURE_ADDRESS_MODE a, UINT aniso)
@@ -524,7 +567,7 @@ static void bind_scene(void)
     vp.Height = (float)g.scene_h;
     vp.MinDepth = 0;
     vp.MaxDepth = 1;
-    ID3D11DeviceContext_OMSetRenderTargets(g.ctx, 1, &g.scene_rtv, g.dsv);
+    ID3D11DeviceContext_OMSetRenderTargets(g.ctx, 1, &g.tg[g.cur].scene_rtv, g.tg[g.cur].dsv);
     ID3D11DeviceContext_RSSetViewports(g.ctx, 1, &vp);
     ID3D11DeviceContext_RSSetState(g.ctx, g.raster);
     ID3D11DeviceContext_IASetInputLayout(g.ctx, g.layout);
@@ -632,14 +675,35 @@ void gfx_clear(const RECT *rect, int color_too, uint32_t color, int depth_too, f
         c[1] = ((color >> 8) & 0xFF) / 255.0f;
         c[2] = (color & 0xFF) / 255.0f;
         c[3] = 1.0f;
-        ID3D11DeviceContext_ClearRenderTargetView(g.ctx, g.scene_rtv, c);
+        ID3D11DeviceContext_ClearRenderTargetView(g.ctx, g.tg[g.cur].scene_rtv, c);
     }
     if (depth_too)
-        ID3D11DeviceContext_ClearDepthStencilView(g.ctx, g.dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, depth, 0);
+        ID3D11DeviceContext_ClearDepthStencilView(g.ctx, g.tg[g.cur].dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, depth, 0);
     bind_scene();
 }
 
 void gfx_present(void)
+{
+    gfx_present_target(g.cur);
+}
+
+void gfx_use_target(int t)
+{
+    if (!g.ready || t < 0 || t > 1)
+        return;
+    if (!g.tg_used[t]) {
+        g.tg_used[t] = 1;
+        if (!make_target(t)) {
+            log_printf("gfx: second scene target failed");
+            g.tg_used[t] = 0;
+            return;
+        }
+    }
+    g.cur = t;
+    bind_scene();
+}
+
+void gfx_present_target(int t)
 {
     static const float black[4] = { 0, 0, 0, 1 };
     D3D11_VIEWPORT vp;
@@ -648,9 +712,11 @@ void gfx_present(void)
     double sx, sy, s;
     if (!g.ready)
         return;
-    if (g.scene_resolved)
-        ID3D11DeviceContext_ResolveSubresource(g.ctx, (ID3D11Resource *)g.scene_resolved, 0,
-                                               (ID3D11Resource *)g.scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
+    if (t < 0 || t > 1 || !g.tg_used[t])
+        t = 0;
+    if (g.tg[t].scene_resolved)
+        ID3D11DeviceContext_ResolveSubresource(g.ctx, (ID3D11Resource *)g.tg[t].scene_resolved, 0,
+                                               (ID3D11Resource *)g.tg[t].scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
     /* follow the window size */
     GetClientRect(g.hwnd, &rc);
     if (rc.right > 0 && rc.bottom > 0 && (rc.right != g.back_w || rc.bottom != g.back_h)) {
@@ -684,7 +750,7 @@ void gfx_present(void)
     ID3D11DeviceContext_IASetPrimitiveTopology(g.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ID3D11DeviceContext_VSSetShader(g.ctx, g.blit_vs, NULL, 0);
     ID3D11DeviceContext_PSSetShader(g.ctx, g.blit_ps, NULL, 0);
-    ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &g.scene_srv);
+    ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &g.tg[t].scene_srv);
     ID3D11DeviceContext_PSSetSamplers(g.ctx, 0, 1, g.opt.nearest_upscale ? &g.smp_blit_point : &g.smp_blit_linear);
     ID3D11DeviceContext_Draw(g.ctx, 3, 0);
     ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &none);

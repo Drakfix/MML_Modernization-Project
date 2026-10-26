@@ -7,3 +7,6 @@ float mml_hud_ratio(void);
 /* Projection distance the game's perspective divide uses for X (the
  * anamorphic mode pre-squeezes X through a shadow copy of H). */
 float mml_h_x(void);
+
+/* Sleep with sub-millisecond precision (high-resolution waitable timer). */
+void mml_sleep_ms(double ms);

@@ -26,6 +26,10 @@
 
 #include "ddshim.h"
 #include "display.h"
+#include "interp.h"
+#include "frame_rec.h"
+#include "bglayer.h"
+#include "mml.h"
 #include "gfx.h"
 #include "hook.h"
 #include "log.h"
@@ -175,9 +179,20 @@ struct surface {
     surface *attached;     /* primary -> back buffer, back buffer -> Z */
     gfx_tex *tex;
     int dirty;
+    unsigned used_frame;   /* interp census: last frame this texture was drawn with */
     DDCOLORKEY ck;
     int has_ck;
 };
+
+static unsigned g_frame_no = 1, g_midframe_uploads;
+int g_interp_census;
+int g_smooth_bg;   /* [video] smooth_sky: bglayer.c is installed */
+#define G_FRAME_STEP_ADDR 0x77EAC1u   /* byte: 60 Hz ticks per game frame (2 = 30 fps) */
+#define G_GTE_NEAR_ADDR  0x77EBC0u
+#define G_GTE_H_ADDR     0x77EBDCu
+#define G_GTE_OFX_ADDR   0x77EBCCu
+#define G_GTE_OFY_ADDR   0x77EBD0u
+static unsigned g_iv_exact, g_iv_borrowed, g_iv_static;
 
 struct device {
     void **vt;
@@ -269,6 +284,8 @@ static void upload(surface *s)
     gfx_tex_upload(s->tex, rgba, s->w, s->h);
     free(rgba);
     s->dirty = 0;
+    if (s->used_frame == g_frame_no)
+        g_midframe_uploads++;   /* drawn with already this frame, now changed */
 }
 
 static void set_pf_1555(DDPIXELFORMAT *pf)
@@ -347,7 +364,7 @@ static ULONG surf_release_obj(surface *s)
     if (n == 0) {
         if (s->kind == K_PRIMARY && s->attached)
             surf_release_obj(s->attached);
-        gfx_tex_destroy(s->tex);
+        rec_tex_destroy(s->tex);
         free(s->mem);
         free(s);
     }
@@ -506,7 +523,7 @@ static HRESULT WINAPI s_blt(void **i, LPRECT dr, void **srci, LPRECT sr, DWORD f
             /* 16-bit 565 fill colour to 0xRRGGBB */
             uint32_t rgb = ((c >> 11 & 0x1F) * 255 / 31) << 16 | ((c >> 5 & 0x3F) * 255 / 63) << 8 | (c & 0x1F) * 255 / 31;
             ensure_gfx(s->dd);
-            gfx_clear(dr, 1, rgb, 0, 1.0f);
+            rec_clear(dr, 1, rgb, 0, 1.0f);
         } else if (s->mem) {
             int x, y, bpp = s->pf.dwRGBBitCount / 8;
             RECT r = { 0, 0, s->w, s->h };
@@ -520,7 +537,7 @@ static HRESULT WINAPI s_blt(void **i, LPRECT dr, void **srci, LPRECT sr, DWORD f
     }
     if (flags & DDBLT_DEPTHFILL) {
         ensure_gfx(s->dd);
-        gfx_clear(dr, 0, 0, 1, 1.0f);
+        rec_clear(dr, 0, 0, 1, 1.0f);
         return DD_OK;
     }
     if (src)
@@ -547,7 +564,8 @@ static HRESULT WINAPI s_flip(void **i, void **target, DWORD flags)
     surface *s = FROM(surface, vt4, i);
     (void)target; (void)flags;
     ensure_gfx(s->dd);
-    gfx_present();
+    /* with interpolation: in-between frame(s) first, the game's frame half a tick later */
+    rec_present(*(volatile uint8_t *)G_FRAME_STEP_ADDR);
     return DD_OK;
 }
 
@@ -729,14 +747,14 @@ static HRESULT WINAPI vp_clear(void **i, DWORD n, LPD3DRECT rects, DWORD flags)
 {
     viewport *v = FROM(viewport, vt, i);
     (void)n; (void)rects;
-    gfx_clear(NULL, (flags & D3DCLEAR_TARGET) != 0, bg_color(v), (flags & D3DCLEAR_ZBUFFER) != 0, 1.0f);
+    rec_clear(NULL, (flags & D3DCLEAR_TARGET) != 0, bg_color(v), (flags & D3DCLEAR_ZBUFFER) != 0, 1.0f);
     return D3D_OK;
 }
 
 static HRESULT WINAPI vp_clear2(void **i, DWORD n, LPD3DRECT rects, DWORD flags, D3DCOLOR color, D3DVALUE z, DWORD st)
 {
     (void)i; (void)n; (void)rects; (void)st;
-    gfx_clear(NULL, (flags & D3DCLEAR_TARGET) != 0, color & 0xFFFFFF, (flags & D3DCLEAR_ZBUFFER) != 0, z);
+    rec_clear(NULL, (flags & D3DCLEAR_TARGET) != 0, color & 0xFFFFFF, (flags & D3DCLEAR_ZBUFFER) != 0, z);
     return D3D_OK;
 }
 
@@ -887,7 +905,9 @@ static void prepare_texture(device *d)
     surface *t = d->tex;
     if (t && t->dirty)
         upload(t);
-    gfx_set_texture(t ? t->tex : NULL);
+    if (t)
+        t->used_frame = g_frame_no;
+    rec_texture(t ? t->tex : NULL);
 }
 
 /* [debug] fog_debug=1: log what fogged geometry looks like (fog distance source research) */
@@ -968,10 +988,22 @@ static void probe(const device *d, int pt, const gfx_vertex *v, DWORD n)
     }
 }
 
+static void bg_frame(void);
+
 void ddshim_frame(void)
 {
     static unsigned frames;
     static unsigned clamp_frames;
+    static unsigned interp_frames;
+    g_frame_no++;
+    if (rec_enabled())
+        bg_frame();
+    if (g_interp_census && ++interp_frames % 60 == 0) {
+        log_printf("interp census: world vertices exact %u, borrowed %u, static %u; textures changed mid-frame %u (60 frames)",
+                   g_iv_exact, g_iv_borrowed, g_iv_static, g_midframe_uploads);
+        g_midframe_uploads = 0;
+        g_iv_exact = g_iv_borrowed = g_iv_static = 0;
+    }
     if (g_fog_debug && ++clamp_frames % 60 == 0) {
         log_printf("clamped-vertex triangles dropped: %u (of %u in draws that had one)", g_dropped_tris, g_world_tris);
         g_dropped_tris = g_world_tris = 0;
@@ -1034,9 +1066,169 @@ static DWORD filter_clamped(int pt, const gfx_vertex *v, DWORD n, gfx_vertex *ou
     return m;
 }
 
+/* Interpolation: where each world vertex of this draw was one game tick ago,
+ * in final screen coordinates. Vertices the GTE projected know their own
+ * previous camera-space position; ones the game built in screen space around
+ * a projected point (grass, sprites, clipped terrain) borrow the motion of the
+ * nearest one that does; anything else stays put. */
+
+static const rec_prev *world_prevs(const gfx_vertex *v, const gfx_vertex *raw, DWORD n)
+{
+    static rec_prev out[4096];
+    float hx = mml_h_x(), hy = *(const float *)G_GTE_H_ADDR, near_z = *(const float *)G_GTE_NEAR_ADDR;
+    float ofx = (float)*(const int32_t *)G_GTE_OFX_ADDR, ofy = (float)*(const int32_t *)G_GTE_OFY_ADDR;
+    DWORD k;
+    if (n > sizeof out / sizeof out[0])
+        return NULL;
+    for (k = 0; k < n; k++) {
+        interp_vec3 c, p;
+        float sx = raw[k].x * 0.5f, sy = raw[k].y * 0.5f;
+        int how = 0;
+        out[k].valid = 0;
+        if (interp_lookup(sx, sy, &c, &p) == 2) {
+            how = 1;
+        } else if (!(raw[k].z == 0.1f && raw[k].rhw == 1.0f) && raw[k].z < 0.98f) {
+            /* not captured: rebuild its camera-space position from screen + depth */
+            c.z = raw[k].z * 16384.0f;
+            c.x = (sx - ofx) * c.z / hx;
+            c.y = (sy - ofy) * c.z / hy;
+            if (c.z >= near_z && interp_estimate_prev(&c, sx, sy, &p))
+                how = 2;
+        }
+        if (how && c.z >= near_z && p.z >= near_z) {
+            float dsx = hx * (p.x / p.z - c.x / c.z), dsy = hy * (p.y / p.z - c.y / c.z);
+            if (dsx > -80.0f && dsx < 80.0f && dsy > -80.0f && dsy < 80.0f) {
+                out[k].x = v[k].x + 2.0f * dsx;
+                out[k].y = v[k].y + 2.0f * dsy;
+                out[k].z = v[k].z * (p.z / c.z);
+                out[k].valid = 1;
+            }
+        }
+        if (!out[k].valid)
+            g_iv_static++;
+        else if (how == 1)
+            g_iv_exact++;
+        else
+            g_iv_borrowed++;
+    }
+    return out;
+}
+
+/* Interpolation for 2D backgrounds (the sky): the game scrolls them with the
+ * camera once per tick, so match each to the previous frame's draw with the
+ * same bucket, order in it, texture and size, and blend their positions too. */
+#define BG_MAX 256
+#define BG_VERTS 8
+typedef struct {
+    int bucket, ord;
+    gfx_tex *tex;
+    DWORD n;
+    float x[BG_VERTS], y[BG_VERTS];
+} bg_draw;
+static bg_draw g_bg[2][BG_MAX];
+static int g_nbg[2], g_bg_cur, g_bg_ord[8];
+/* the layer's scroll since last frame, from its first cleanly matched draw */
+static float g_bg_dx[8], g_bg_dy[8];
+static int g_bg_has_d[8];
+static float g_bg_last_dx[8], g_bg_last_dy[8];   /* last frame's, for tiles drawn before any match */
+static int g_bg_last_has[8];
+
+static void bg_frame(void)
+{
+    g_bg_cur ^= 1;
+    g_nbg[g_bg_cur] = 0;
+    memset(g_bg_ord, 0, sizeof g_bg_ord);
+    {
+        int b;
+        for (b = 0; b < 8; b++) {
+            g_bg_last_has[b] = g_bg_has_d[b];
+            g_bg_last_dx[b] = g_bg_dx[b];
+            g_bg_last_dy[b] = g_bg_dy[b];
+        }
+    }
+    memset(g_bg_has_d, 0, sizeof g_bg_has_d);
+}
+
+static const rec_prev *background_prevs(const gfx_vertex *v, DWORD n, gfx_tex *tex)
+{
+    if (g_interp_census && (g_frame_no % 150) == 0) {
+        DWORD q;
+        log_printf("bg draw: bucket %d op %02X pkt %p n %lu tex %p", g_cur_bucket, g_cur_pkt ? g_cur_pkt[7] : 0,
+                   (const void *)g_cur_pkt, n, (void *)tex);
+        for (q = 0; q < n; q++)
+            log_printf("   v%lu  x %.3f y %.3f  u %.4f v %.4f", q, v[q].x, v[q].y, v[q].u, v[q].v);
+    }
+    static rec_prev out[BG_VERTS];
+    const bg_draw *old = g_bg[g_bg_cur ^ 1];
+    bg_draw *mine;
+    int b = g_cur_bucket, ord, j, found = -1;
+    DWORD k;
+    if (b < 0 || b > 7 || n > BG_VERTS || g_nbg[g_bg_cur] >= BG_MAX)
+        return NULL;
+    ord = g_bg_ord[b]++;
+    mine = &g_bg[g_bg_cur][g_nbg[g_bg_cur]++];
+    mine->bucket = b;
+    mine->ord = ord;
+    mine->tex = tex;
+    mine->n = n;
+    for (k = 0; k < n; k++) {
+        mine->x[k] = v[k].x;
+        mine->y[k] = v[k].y;
+    }
+    for (j = 0; j < g_nbg[g_bg_cur ^ 1]; j++)
+        if (old[j].bucket == b && old[j].ord == ord && old[j].tex == tex && old[j].n == n) {
+            found = j;
+            break;
+        }
+    int own = 0;
+    float odx = 0.0f, ody = 0.0f;
+    if (found >= 0) {
+        /* a clean match moves every vertex by the same small amount */
+        float dx0 = old[found].x[0] - v[0].x, dy0 = old[found].y[0] - v[0].y;
+        int clean = dx0 > -160.0f && dx0 < 160.0f && dy0 > -120.0f && dy0 < 120.0f;
+        for (k = 1; k < n && clean; k++) {
+            float ex = old[found].x[k] - v[k].x - dx0, ey = old[found].y[k] - v[k].y - dy0;
+            clean = ex > -0.5f && ex < 0.5f && ey > -0.5f && ey < 0.5f;
+        }
+        if (clean) {
+            own = 1;
+            odx = dx0;
+            ody = dy0;
+            if (!g_bg_has_d[b]) {
+                g_bg_dx[b] = dx0;
+                g_bg_dy[b] = dy0;
+                g_bg_has_d[b] = 1;
+            }
+        }
+    }
+    /* textured tiles of the layer that wrapped around or have no match scroll with the rest */
+    if (!own) {
+        if (!tex)
+            return NULL;   /* untextured (fades, boxes) never borrow the scroll */
+        if (g_bg_has_d[b]) {
+            odx = g_bg_dx[b];
+            ody = g_bg_dy[b];
+        } else if (g_bg_last_has[b]) {
+            odx = g_bg_last_dx[b];
+            ody = g_bg_last_dy[b];
+        } else {
+            return NULL;
+        }
+    }
+    for (k = 0; k < n; k++) {
+        out[k].x = v[k].x + odx;
+        out[k].y = v[k].y + ody;
+        out[k].z = v[k].z;
+        out[k].valid = 1;
+    }
+    return out;
+}
+
 static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LPVOID verts, DWORD n, DWORD flags)
 {
     device *d = FROM(device, vt, i);
+    const rec_prev *prevs = NULL;
+    int layer_tile = 0, fvf_ok_for_layers = fvf == (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1);
     gfx_state s;
     static volatile LONG warned;
     (void)flags;
@@ -1048,11 +1240,43 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
     ensure_gfx(d->dd);
     device_state(d, &s);
     prepare_texture(d);
-    gfx_set_state(&s);
+    rec_state(&s);
     if (g_fog_debug)
         fog_debug(&s, (const gfx_vertex *)verts, n);
-    if (g_probe_armed)
-        probe(d, (int)pt, (const gfx_vertex *)verts, n);
+    if (g_smooth_bg && g_cur_pkt && n <= 8 && fvf_ok_for_layers) {
+        /* background layer tiles (the sky): sub-pixel position, and its real scroll for blending */
+        static gfx_vertex fixed[8];
+        static rec_prev bprev[8];
+        float ox, oy, px, py, sc = 1.0f;
+        int bl = bglayer_offsets((const void *)g_cur_pkt, &ox, &oy, &px, &py);
+        if (bl) {
+            const gfx_vertex *raw = g_display_raw_verts ? (const gfx_vertex *)g_display_raw_verts
+                                                        : (const gfx_vertex *)verts;
+            DWORD k;
+            if (n >= 2 && raw[1].x != raw[0].x)
+                sc = (((const gfx_vertex *)verts)[1].x - ((const gfx_vertex *)verts)[0].x) / (raw[1].x - raw[0].x);
+            for (k = 0; k < n; k++) {
+                fixed[k] = ((const gfx_vertex *)verts)[k];
+                fixed[k].x += ox * sc;
+                fixed[k].y += oy;
+                bprev[k].x = fixed[k].x + px * sc;
+                bprev[k].y = fixed[k].y + py;
+                bprev[k].z = fixed[k].z;
+                bprev[k].valid = bl == 2;
+            }
+            verts = fixed;
+            if (rec_enabled())
+                prevs = bprev;
+            layer_tile = 1;
+        }
+    }
+    if (layer_tile)
+        ;
+    else if (rec_enabled() && g_cur_bucket == 4)
+        prevs = world_prevs((const gfx_vertex *)verts,
+                            g_display_raw_verts ? (const gfx_vertex *)g_display_raw_verts : (const gfx_vertex *)verts, n);
+    else if (rec_enabled() && g_cur_bucket >= 5)
+        prevs = background_prevs((const gfx_vertex *)verts, n, d->tex ? d->tex->tex : NULL);
     if (g_drop_clamped && g_cur_bucket == 4 && (pt == D3DPT_TRIANGLESTRIP || pt == D3DPT_TRIANGLELIST)) {
         static gfx_vertex tmp[3 * 2048];
         DWORD k;
@@ -1062,11 +1286,11 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
         if (k < n) {   /* only rebuild draws that actually contain a clamped vertex */
             DWORD m = filter_clamped((int)pt, (const gfx_vertex *)verts, n, tmp, 3 * 2048);
             if (m)
-                gfx_draw(GFX_TRILIST, tmp, (int)m);
+                rec_draw(GFX_TRILIST, tmp, NULL, (int)m);
             return D3D_OK;
         }
     }
-    gfx_draw((int)pt, (const gfx_vertex *)verts, (int)n);
+    rec_draw((int)pt, (const gfx_vertex *)verts, prevs, (int)n);
     return D3D_OK;
 }
 

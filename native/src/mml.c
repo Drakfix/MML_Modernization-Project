@@ -13,6 +13,7 @@
  *   - modern controls + orbit indicator (controls.c, toast.c)
  */
 #include <windows.h>
+#include <intrin.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +32,9 @@
 #include "terrain.h"
 #include "fog.h"
 #include "lod.h"
+#include "gte_capture.h"
+#include "frame_rec.h"
+#include "bglayer.h"
 
 #define MML_NATIVE_BUILD "0.2.0-dev (native widescreen)"
 
@@ -144,15 +148,59 @@ static void install_widescreen(void)
 static DWORD(WINAPI *g_real_gettickcount)(void);
 static DWORD g_tick_base;
 
+/* The game paces its frames with GetTickCount, which only advances every
+ * ~15.6 ms, so its 33.3 ms frames really came out as 31 or 47 ms. A 1 ms
+ * clock from the performance counter makes them even (and lets the 60 fps
+ * interpolation space its frames evenly). Starting near 0 also keeps the
+ * game's float frame-limiter threshold precise. */
+static LARGE_INTEGER g_qpc_base, g_qpc_freq;
+
+#define G_SPIN_RET 0x4A7132u   /* game_frame: do { t = GetTickCount(); } while (t < threshold); */
+static HANDLE g_wait_timer;
+
+/* Sleep for ms with sub-millisecond precision (no busy waiting). */
+void mml_sleep_ms(double ms)
+{
+    LARGE_INTEGER due;
+    if (ms <= 0.0)
+        return;
+    if (!g_wait_timer)
+        g_wait_timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+    if (!g_wait_timer) {
+        Sleep((DWORD)ms);
+        return;
+    }
+    due.QuadPart = -(LONGLONG)(ms * 10000.0);   /* relative, 100 ns units */
+    if (SetWaitableTimer(g_wait_timer, &due, 0, NULL, NULL, FALSE))
+        WaitForSingleObject(g_wait_timer, INFINITE);
+}
+
 static DWORD WINAPI rebased_gettickcount(void)
 {
-    return g_real_gettickcount() - g_tick_base;
+    LARGE_INTEGER now;
+    double ms;
+    if (!g_qpc_freq.QuadPart)
+        return g_real_gettickcount() - g_tick_base;
+    QueryPerformanceCounter(&now);
+    ms = (double)(now.QuadPart - g_qpc_base.QuadPart) * 1000.0 / (double)g_qpc_freq.QuadPart;
+    /* the game waits for its next frame by spinning on this call: sleep instead */
+    if ((uintptr_t)_ReturnAddress() == G_SPIN_RET) {
+        double left = *(float *)G_FRAME_LIMITER_TH - ms;
+        if (left > 1.5 && left < 200.0) {
+            mml_sleep_ms(left - 1.0);
+            QueryPerformanceCounter(&now);
+            ms = (double)(now.QuadPart - g_qpc_base.QuadPart) * 1000.0 / (double)g_qpc_freq.QuadPart;
+        }
+    }
+    return (DWORD)ms;
 }
 
 static double g_limiter_acc;
 static int g_limiter_init;
 
 static unsigned g_frames;
+static int g_interp_on, g_bglayer_on;
+extern int g_interp_census, g_smooth_bg;
 
 static void limiter_frame(void);
 
@@ -167,7 +215,23 @@ static void on_frame(regs_t *r)
             GetClientRect(w, &rc);
         log_printf("frame hook alive: 300 frames, limiter threshold %.1f ms, gfx path flags %08X, fg client %ldx%ld",
                    *(float *)G_FRAME_LIMITER_TH, *(unsigned *)0x88787Cu, rc.right, rc.bottom);
+        {
+            static const char *shims[] = { "apphelp.dll", "AcLayers.dll", "AcGenral.dll", "AcXtrnal.dll",
+                                           "AcSpecfc.dll", "ddraw.dll", "dxgi.dll", "d3d9.dll" };
+            char line[256] = "";
+            size_t k;
+            for (k = 0; k < sizeof shims / sizeof shims[0]; k++)
+                if (GetModuleHandleA(shims[k])) {
+                    strcat_s(line, sizeof line, shims[k]);
+                    strcat_s(line, sizeof line, " ");
+                }
+            log_printf("loaded: %s", line);
+        }
     }
+    if (g_interp_on)
+        gte_capture_frame_end();
+    if (g_bglayer_on)
+        bglayer_frame_end();
     limiter_frame();
     apicensus_frame();
     ddshim_frame();
@@ -204,6 +268,8 @@ static void install_timing(void)
     } else {
         g_real_gettickcount = (DWORD(WINAPI *)(void))real;
         g_tick_base = g_real_gettickcount();
+        QueryPerformanceFrequency(&g_qpc_freq);
+        QueryPerformanceCounter(&g_qpc_base);
         mem_write(G_IAT_GETTICKCOUNT, &mine, sizeof mine);
         log_printf("timing: GetTickCount rebased");
     }
@@ -306,6 +372,11 @@ static void init(void)
             o.vsync = GetPrivateProfileIntA("video", "vsync", 0, g_ini);
             o.no_fog = GetPrivateProfileIntA("video", "no_fog", 0, g_ini);
             o.fog_from_w = GetPrivateProfileIntA("video", "fog_from_w", 0, g_ini);
+            {
+                char gpu[16];
+                ini_string("video", "gpu", "performance", gpu, sizeof gpu);
+                o.gpu_display = _stricmp(gpu, "display") == 0;
+            }
             g_fog_debug = GetPrivateProfileIntA("debug", "fog_debug", 0, g_ini);
             g_drop_clamped = GetPrivateProfileIntA("video", "drop_clamped", 1, g_ini);
             {
@@ -314,7 +385,36 @@ static void init(void)
                 if (pr[0])
                     sscanf_s(pr, "%d,%d", &g_probe_x, &g_probe_y);
             }
+            /* Per-monitor DPI aware: otherwise on a scaled display (4K at 200%) Windows
+             * hands us a 1080p window and the desktop compositor stretches every frame
+             * up to the real resolution, which is blurry and costs a lot of GPU. */
+            {
+                typedef BOOL(WINAPI *set_ctx_t)(HANDLE);
+                set_ctx_t set_ctx = (set_ctx_t)GetProcAddress(GetModuleHandleA("user32.dll"),
+                                                              "SetProcessDpiAwarenessContext");
+                typedef UINT(WINAPI *get_dpi_t)(void);
+                get_dpi_t get_dpi = (get_dpi_t)GetProcAddress(GetModuleHandleA("user32.dll"), "GetDpiForSystem");
+                BOOL ok = set_ctx ? set_ctx((HANDLE)-4 /* PER_MONITOR_AWARE_V2 */) : FALSE;
+                DWORD err = GetLastError();
+                log_printf("video: per-monitor DPI aware %s (error %lu); screen %dx%d, system DPI %u", ok ? "ON" : "failed",
+                           err, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), get_dpi ? get_dpi() : 0);
+            }
             ddshim_install(&o);
+            /* [video] smooth_sky=1: background layers scroll sub-pixel smooth */
+            if (GetPrivateProfileIntA("video", "smooth_sky", 1, g_ini) && bglayer_install())
+                g_bglayer_on = g_smooth_bg = 1;
+            /* [video] interp=1: 60 fps by drawing an in-between frame per game tick */
+            {
+                int want = GetPrivateProfileIntA("video", "interp", 1, g_ini);
+                g_interp_census = GetPrivateProfileIntA("debug", "interp_census", 0, g_ini);
+                if ((want || g_interp_census) && gte_capture_install(g_interp_census)) {
+                    g_interp_on = 1;
+                    rec_enable(want);
+                    rec_debug(GetPrivateProfileIntA("debug", "interp_mid_only", 0, g_ini),
+                              GetPrivateProfileIntA("debug", "interp_timing", 0, g_ini));
+                    log_printf("interp: %s", want ? "60 fps interpolation ON" : "census only");
+                }
+            }
         }
     }
     log_printf("init done");
