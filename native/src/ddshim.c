@@ -187,6 +187,8 @@ struct surface {
 static unsigned g_frame_no = 1, g_midframe_uploads;
 int g_interp_census;
 int g_smooth_bg;   /* [video] smooth_sky: bglayer.c is installed */
+int g_blend_census;   /* [debug] blend_census: what the 3D world draws semi-transparent */
+static struct { uint8_t op, blend, src, dst; unsigned draws, verts; float z0, z1; } g_bc[32];
 #define G_FRAME_STEP_ADDR 0x77EAC1u   /* byte: 60 Hz ticks per game frame (2 = 30 fps) */
 #define G_GTE_NEAR_ADDR  0x77EBC0u
 #define G_GTE_H_ADDR     0x77EBDCu
@@ -994,8 +996,17 @@ void ddshim_frame(void)
 {
     static unsigned frames;
     static unsigned clamp_frames;
-    static unsigned interp_frames;
+    static unsigned interp_frames, bc_frames;
     g_frame_no++;
+    if (g_blend_census && ++bc_frames % 60 == 0) {
+        int k;
+        log_printf("blend census: camera mode %d scripted %d distance %d pitch %d (60 frames)",
+                   *(uint8_t *)0x77E955u, *(uint8_t *)0x77E956u, *(int32_t *)0x77E95Cu, *(int32_t *)0x77E964u);
+        for (k = 0; k < 32 && g_bc[k].draws; k++)
+            log_printf("   world op %02X blend %d (%d,%d): %u draws %u verts z %.4f..%.4f", g_bc[k].op, g_bc[k].blend,
+                       g_bc[k].src, g_bc[k].dst, g_bc[k].draws, g_bc[k].verts, g_bc[k].z0, g_bc[k].z1);
+        memset(g_bc, 0, sizeof g_bc);
+    }
     if (rec_enabled())
         bg_frame();
     if (g_interp_census && ++interp_frames % 60 == 0) {
@@ -1268,6 +1279,27 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
             if (rec_enabled())
                 prevs = bprev;
             layer_tile = 1;
+        }
+    }
+    if (g_blend_census && g_cur_bucket == 4) {
+        uint8_t op = g_cur_pkt ? (uint8_t)(g_cur_pkt[7] & 0xFC) : 0;
+        int k;
+        for (k = 0; k < 32 && g_bc[k].draws &&
+                    !(g_bc[k].op == op && g_bc[k].blend == s.blend && g_bc[k].src == s.src_blend && g_bc[k].dst == s.dst_blend); k++)
+            ;
+        if (k < 32) {
+            DWORD q;
+            if (!g_bc[k].draws) {
+                g_bc[k].op = op; g_bc[k].blend = s.blend; g_bc[k].src = s.src_blend; g_bc[k].dst = s.dst_blend;
+                g_bc[k].z0 = 1e9f; g_bc[k].z1 = -1e9f;
+            }
+            g_bc[k].draws++;
+            g_bc[k].verts += n;
+            for (q = 0; q < n; q++) {
+                float z = ((const gfx_vertex *)verts)[q].z;
+                if (z < g_bc[k].z0) g_bc[k].z0 = z;
+                if (z > g_bc[k].z1) g_bc[k].z1 = z;
+            }
         }
     }
     if (layer_tile)

@@ -35,6 +35,7 @@
 #include "gte_capture.h"
 #include "frame_rec.h"
 #include "bglayer.h"
+#include "watch.h"
 
 #define MML_NATIVE_BUILD "0.2.0-dev (native widescreen)"
 
@@ -199,8 +200,8 @@ static double g_limiter_acc;
 static int g_limiter_init;
 
 static unsigned g_frames;
-static int g_interp_on, g_bglayer_on;
-extern int g_interp_census, g_smooth_bg;
+static int g_interp_on, g_bglayer_on, g_player_log;
+extern int g_interp_census, g_smooth_bg, g_blend_census;
 
 static void limiter_frame(void);
 
@@ -232,6 +233,19 @@ static void on_frame(regs_t *r)
         gte_capture_frame_end();
     if (g_bglayer_on)
         bglayer_frame_end();
+    watch_frame();
+    if (g_player_log) {
+        /* dev: log every player state change (player struct 0x5F8364) */
+        static uint32_t last = 0xFFFFFFFF;
+        const uint8_t *pl = (const uint8_t *)0x5F8364u;
+        uint32_t now = pl[9] | pl[10] << 8 | (uint32_t)pl[0xAC] << 16 | (uint32_t)pl[0x174] << 24;
+        if (now != last) {
+            log_printf("player: state %d sub %d anim %02X flags174 %02X 16b %02X 177 %02X held %04X press %04X",
+                       pl[9], pl[10], pl[0xAC], pl[0x174], pl[0x16B], pl[0x177],
+                       *(const uint16_t *)(pl + 0x11C), *(const uint16_t *)(pl + 0x11E));
+            last = now;
+        }
+    }
     limiter_frame();
     apicensus_frame();
     ddshim_frame();
@@ -335,6 +349,13 @@ static void init(void)
     controls_install(_stricmp(controls, "vanilla") != 0, intro_plays);
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, g_ini))
         controls_debug_pad();
+    {
+        char w[128];
+        ini_string("debug", "watch", "", w, sizeof w);
+        if (w[0])
+            watch_configure(w);
+    }
+    g_player_log = GetPrivateProfileIntA("debug", "player_log", 0, g_ini);
     if (GetPrivateProfileIntA("debug", "census", 0, g_ini))
         census_enable();
     {
@@ -400,6 +421,7 @@ static void init(void)
                 log_printf("video: per-monitor DPI aware %s (error %lu); screen %dx%d, system DPI %u", ok ? "ON" : "failed",
                            err, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), get_dpi ? get_dpi() : 0);
             }
+            g_blend_census = GetPrivateProfileIntA("debug", "blend_census", 0, g_ini);
             ddshim_install(&o);
             /* [video] smooth_sky=1: background layers scroll sub-pixel smooth */
             if (GetPrivateProfileIntA("video", "smooth_sky", 1, g_ini) && bglayer_install()) {
