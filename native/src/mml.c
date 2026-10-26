@@ -28,6 +28,7 @@
 #include "mml.h"
 #include "packets.h"
 #include "toast.h"
+#include "terrain.h"
 
 #define MML_NATIVE_BUILD "0.2.0-dev (native widescreen)"
 
@@ -66,6 +67,11 @@ float mml_hud_ratio(void)
 }
 static volatile float g_shadow_h_x;
 static int g_h_set_logs;
+
+float mml_h_x(void)
+{
+    return g_widescreen_on ? g_shadow_h_x : *(float *)G_GTE_H_FLOAT;
+}
 
 static void on_h_set(regs_t *r)
 {
@@ -165,6 +171,7 @@ static void on_frame(regs_t *r)
     ddshim_frame();
     display_frame();
     toast_frame();
+    terrain_frame();
 }
 
 static void limiter_frame(void)
@@ -261,6 +268,10 @@ static void init(void)
         controls_debug_pad();
     if (GetPrivateProfileIntA("debug", "census", 0, g_ini))
         census_enable();
+    if (GetPrivateProfileIntA("video", "terrain_clip", 1, g_ini))
+        terrain_clip_install(ini_float("debug", "clip_near_scale", 1.0f));
+    if (GetPrivateProfileIntA("debug", "clip_census", 0, g_ini))
+        terrain_census_enable();
     if (GetPrivateProfileIntA("debug", "api_census", 0, g_ini))
         apicensus_install();
     {

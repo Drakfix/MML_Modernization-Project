@@ -67,9 +67,28 @@ the game window, so the shim centres it at 4:3 on the black window.
 `renderer=ddrawcompat` hands DirectDraw back to the DDrawCompat wrapper like 0.1 did. `gfx.h` is the backend interface, so another backend
 (GLES/Vulkan for Android) can sit behind the same code.
 
+### Terrain near clipping
+
+The game never clips terrain against the camera. Its software GTE flattens any
+vertex closer than the near distance onto the near plane, and one behind the
+camera also gets depth 0, so the whole polygon ends up with junk depth. The old
+driver threw those polygons away, which is where the holes in the floor at low
+camera angles came from. `terrain.c` fixes that for both renderers: right after
+the game builds a terrain polygon it rebuilds the polygon's vertices in camera
+space from the cell's model data, and if one is too close it tags the packet
+(a NaN in the depth field pointing at the saved vertices). When the tagged
+polygon is drawn it gets clipped at the near plane, with float UVs, and drawn
+as triangles. Vertices that didn't need clipping keep the game's own screen
+position, so clipped polygons meet their neighbours exactly. `[video]
+terrain_clip=0` turns it off.
+
 Dev settings (`[debug]`): `remote_pad=1` lets tools press pad buttons through
 shared memory (`tools\dev\drive.ps1` uses it to play the game for screenshot
-tests), `census=1` logs what every frame draws, per ordering-table bucket.
+tests), `census=1` logs what every frame draws, per ordering-table bucket,
+`clip_census=1` logs the terrain clipper's numbers (including how far its
+rebuilt vertices land from the game's own, which should be 0), and
+`clip_near_scale=N` pushes the terrain clip plane N times further out so you can
+see the clipping work.
 
 ## Layout
 
@@ -77,6 +96,7 @@ tests), `census=1` logs what every frame draws, per ordering-table bucket.
 - `src/display.c` native widescreen: wide mode/viewport/clear rect + per-primitive placement in DrawPrimitive
 - `src/ddshim.c` DirectDraw 4 / Direct3D 3 implementation (renderer=mml)
 - `src/gfx.h`, `src/gfx_d3d11.c`, `shaders/game.hlsl` rendering backend interface + Direct3D 11 backend
+- `src/terrain.c` near-plane clipping for terrain (the floor holes)
 - `src/apicensus.c` dev tool: counts every DirectDraw/Direct3D call the game makes
 - `src/packets.c` which display-list packet and bucket is being drawn (walker hooks, HUD sprite tags, deferred draws) + the census
 - `src/controls.c` orbit camera, camera-relative movement, aim, dodge, button remap

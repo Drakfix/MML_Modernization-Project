@@ -22,12 +22,10 @@ included, without emulation.
   own small implementation on top of Direct3D 11. Proper borderless window, screenshots and
   alt-tab work, it picks the fast GPU on laptops. The intro video plays centred on it, and
   the launcher has Renderer and Display (fullscreen/windowed) options.
+- The floor holes are fixed for real: terrain polygons that reach past the camera now get
+  clipped at the near plane like the game already does for objects, instead of thrown away.
 
-**Next up:**
-
-- Fix the floor holes for real. We finally know what they are: the terrain is never clipped
-  against the camera, so polygons with a corner behind the camera get thrown away. Clipping
-  them like the game already does for objects should close the holes.
+**Next up:** the 2.0 wishlist.
 
 **The 2.0 wishlist:**
 

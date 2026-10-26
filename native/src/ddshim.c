@@ -1002,9 +1002,9 @@ void ddshim_frame(void)
  * pixels off-screen. The old pipeline's driver silently discarded such
  * triangles (they exceed the rasterizer's coordinate range), which is where
  * the "holes in the floor at low camera angles" come from. A modern GPU clips
- * them properly instead, so they'd show up as huge wrong polygons. Drop any
- * world triangle with a clamped vertex, matching the old look, until the
- * terrain gets real near-plane clipping. */
+ * them properly instead, so they'd show up as huge wrong polygons. terrain.c
+ * now clips those polygons before they get here; this drop is the safety net
+ * for anything it doesn't cover (or terrain_clip=0), matching the old look. */
 int g_drop_clamped = 1;
 
 static int clamped(const gfx_vertex *v)
