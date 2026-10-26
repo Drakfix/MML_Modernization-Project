@@ -35,6 +35,7 @@ typedef struct {
     const uint8_t *first, *last;   /* this frame's tile packets */
     int slot;
     double x, y;                   /* exact scroll, 320x240 pixels */
+    int xi, yi;                    /* the whole-pixel scroll the game drew the tiles with */
     double w, h;                   /* panorama size in pixels */
 } layer_rec;
 
@@ -43,6 +44,28 @@ static layer_rec g_recs[3][MAX_LAYERS];
 static int g_n[3], g_build, g_draw = -1, g_prev = -1;
 static uint8_t *g_open;            /* layer whose tiles are being generated */
 static int16_t g_saved_x, g_saved_y;
+static double g_lost_x;            /* scroll the game's integer math dropped, for g_open */
+
+/* The game computes a camera-following layer's scroll as
+ *   X = (((speed * counter) >> 8) + (parallax / w^2 + yaw + base) * 8 & 0x7FFF) * w * 64
+ * (FUN_004E7ABD; counter 0x77EA70, parallax accumulator 0x77EA78 grows with how
+ * far the camera moved). Both divisions throw away their remainder, so while
+ * walking the sky advanced in 0.625 px jumps with a stall every few ticks, and
+ * the slow cloud drift went 1,1,1,0. Put the remainders back. */
+#define G_LAYER_COUNTER  0x77EA70u
+#define G_LAYER_PARALLAX 0x77EA78u
+
+static double lost_scroll(const uint8_t *layer, int w)
+{
+    int32_t speed = *(const int32_t *)(layer + 0x1E) >> 16;
+    uint32_t drift = (uint32_t)(speed * *(const int32_t *)G_LAYER_COUNTER);
+    int32_t par = *(const int32_t *)G_LAYER_PARALLAX, w2 = w * w;
+    double units8;
+    if (layer[1] != 0 || w2 <= 0)
+        return 0.0;   /* self-scrolling layers keep their own exact position */
+    units8 = (double)(drift & 0xFF) / 256.0 + 8.0 * ((double)par / w2 - (double)(par / w2));
+    return units8 * w * 64.0 / 65536.0;   /* 320x240 pixels */
+}
 
 static void on_layer_tiles(regs_t *r)
 {
@@ -55,6 +78,7 @@ static void on_layer_tiles(regs_t *r)
     g_open = layer;
     g_saved_x = *xi;
     g_saved_y = *yi;
+    g_lost_x = lost_scroll(layer, w);
     /* one tile back, wrapped so the tile index the loop derives stays in range */
     *xi = (int16_t)(((int)*xi - 32 + w * 32) % (w * 32));
     *yi = (int16_t)(((int)*yi - 32 + h * 32) % (h * 32));
@@ -75,14 +99,29 @@ static void on_layer_link(regs_t *r)
     e->first = (const uint8_t *)(uintptr_t)r->edx;
     e->last = (const uint8_t *)(uintptr_t)r->ebx;
     e->slot = (int)(((uintptr_t)layer - LAYER_POOL) / LAYER_SIZE);
-    e->x = (double)*(int32_t *)(layer + 4) / 65536.0;
+    e->x = (double)*(int32_t *)(layer + 4) / 65536.0 + g_lost_x;
+    e->xi = g_saved_x;
+    e->yi = g_saved_y;
     e->y = (double)*(int32_t *)(layer + 8) / 65536.0;
     e->w = (double)((*(int32_t *)(layer + 0x22) >> 16) * 32);
     e->h = (double)((*(int32_t *)(layer + 0x24) >> 16) * 32);
 }
 
+int g_bglayer_log;   /* debug: log each layer's exact scroll every frame */
+
 void bglayer_frame_end(void)
 {
+    if (g_bglayer_log) {
+        int i;
+        for (i = 0; i < g_n[g_build] && i < 2; i++)
+        {
+            const uint8_t *L = (const uint8_t *)(LAYER_POOL + g_recs[g_build][i].slot * LAYER_SIZE);
+            log_printf("bglayer: slot %d x %.4f yaw %d ea78 %d ea70 %d speed %d base %d w %d auto %d",
+                       g_recs[g_build][i].slot, g_recs[g_build][i].x, (int)*(int16_t *)0x77EA0Au,
+                       *(int32_t *)0x77EA78u, *(int32_t *)0x77EA70u, *(int32_t *)(L + 0x1e) >> 16,
+                       *(int32_t *)(L + 0x1a) >> 16, *(int32_t *)(L + 0x22) >> 16, L[1]);
+        }
+    }
     int old_prev = g_prev, next;
     g_prev = g_draw;
     g_draw = g_build;
@@ -121,8 +160,8 @@ int bglayer_offsets(const void *pkt, float *ox, float *oy, float *px, float *py)
     /* the tiles came out one tile too far right (the spare column/row) and
      * without the fraction of a pixel the integer scroll dropped. Projector
      * space is 320x240, the vertices are in 640x480: x2. */
-    *ox = (float)(2.0 * (-32.0 - (e->x - (double)(int)e->x)));
-    *oy = (float)(2.0 * (-32.0 - (e->y - (double)(int)e->y)));
+    *ox = (float)(2.0 * (-32.0 - wrap(e->x - e->xi, e->w)));
+    *oy = (float)(2.0 * (-32.0 - wrap(e->y - e->yi, e->h)));
     if (g_prev < 0)
         return 1;
     for (i = 0; i < g_n[g_prev]; i++)

@@ -401,8 +401,11 @@ static void init(void)
             }
             ddshim_install(&o);
             /* [video] smooth_sky=1: background layers scroll sub-pixel smooth */
-            if (GetPrivateProfileIntA("video", "smooth_sky", 1, g_ini) && bglayer_install())
+            if (GetPrivateProfileIntA("video", "smooth_sky", 1, g_ini) && bglayer_install()) {
+                extern int g_bglayer_log;
                 g_bglayer_on = g_smooth_bg = 1;
+                g_bglayer_log = GetPrivateProfileIntA("debug", "bglayer_log", 0, g_ini);
+            }
             /* [video] interp=1: 60 fps by drawing an in-between frame per game tick */
             {
                 int want = GetPrivateProfileIntA("video", "interp", 1, g_ini);
