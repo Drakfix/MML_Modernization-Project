@@ -1,12 +1,13 @@
 """Graphical launcher front-end.
 
 A single-window launcher over the key art: pick resolution, aspect ratio, controls,
-texture filtering, antialiasing and intro behaviour, then Play. Selections are written to
-DDrawCompat.ini and passed to launch_widescreen_freecam.py through the environment.
+texture filtering, antialiasing and intro behaviour, then Play. Selections are written
+to mml.ini (read by mml.dll, which the patched MEGAMAN.EXE loads itself) and to
+DDrawCompat.ini, then the game is started directly. The launcher is only a settings
+screen: running MEGAMAN.EXE on its own uses the last saved settings.
 
-When run as the packaged executable it re-invokes itself with --run-game and executes the
-runner inside its own interpreter (no console; output goes to launcher.log). It can also
-create a Desktop shortcut that launches straight into the game with the saved settings.
+It can also create a Desktop shortcut that starts the game with the saved settings
+without showing this window.
 """
 import ctypes
 import hashlib
@@ -17,9 +18,9 @@ import sys
 import threading
 import time
 
-VANILLA_SHA256 = "cb0228dfcb3416ed48b6ec8c4b5cdb659c05e104a8e2e7c2b1720cc97d203324"
-PATCHED_SHA256 = "4b583cd622524997b5431fcda5b26cd775b98a489f85984338d293eb32c69406"
-VERSION = "0.1.3"
+import patch_manifest as M
+
+VERSION = "0.2.0-dev"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)
@@ -41,44 +42,27 @@ def find_game_dir():
 
 
 GAME_DIR = find_game_dir()
+SETTINGS = os.path.join(GAME_DIR or BASE, "Modernization", "settings.json")
 
 
-def _find_runner():
-    for cand in (os.path.join(BASE, "launch_widescreen_freecam.py"),
-                 os.path.join(BASE, "Modernization", "launch_widescreen_freecam.py"),
-                 os.path.join(GAME_DIR or ".", "Modernization", "launch_widescreen_freecam.py")):
-        if os.path.exists(cand):
-            return cand
-    return os.path.join(BASE, "launch_widescreen_freecam.py")
+def clean_child_env():
+    """Environment for the game process. A frozen (PyInstaller) launcher puts its temp
+    extraction dir (64-bit runtime DLLs) on PATH and in its own DLL search path; the
+    32-bit game must not see either, or it loads the wrong-architecture VCRUNTIME and
+    dies with 'Machine Type Mismatch'."""
+    try:
+        ctypes.windll.kernel32.SetDllDirectoryW(None)
+    except Exception:
+        pass
+    env = dict(os.environ)
+    for k in list(env):
+        if k.startswith("_PYI") or k in ("_MEIPASS", "_MEIPASS2"):
+            env.pop(k, None)
+    env["PATH"] = os.pathsep.join(
+        p for p in env.get("PATH", "").split(os.pathsep)
+        if p and not os.path.basename(p.rstrip("\\/ ")).upper().startswith("_MEI"))
+    return env
 
-
-RUNNER = _find_runner()
-SETTINGS = os.path.join(os.path.dirname(RUNNER), "settings.json")
-
-def strip_pyinstaller_from_path():
-    """CRITICAL: PyInstaller prepends its onefile temp-extraction dir (full of 64-bit
-    support DLLs like VCRUNTIME140.dll) to PATH. The 32-bit MEGAMAN.EXE we spawn inherits
-    that PATH and loads the WRONG-architecture DLLs -> 'Machine Type Mismatch' + DSOUND
-    entry-point errors + game death (which frida then reports as a failed injection).
-    Remove every _MEI* extraction dir from PATH so the game finds its own/system DLLs -
-    exactly the clean environment the Play-MML.bat (system python) path already had."""
-    parts = os.environ.get("PATH", "").split(os.pathsep)
-    clean = [p for p in parts
-             if not os.path.basename(p.rstrip("\\/ ")).upper().startswith("_MEI")]
-    os.environ["PATH"] = os.pathsep.join(clean)
-
-
-# ---------- --run-game mode (frozen exe hosts the runner in-process) ----------
-if "--run-game" in sys.argv:
-    import runpy
-    strip_pyinstaller_from_path()
-    sys.argv = [RUNNER]           # the runner parses argv[1..] as floats - hide our flag
-    log = open(os.path.join(os.path.dirname(RUNNER), "launcher.log"), "a",
-               buffering=1, encoding="utf-8")
-    sys.stdout = sys.stderr = log
-    print(f"\n--- session {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
-    runpy.run_path(RUNNER, run_name="__main__")
-    sys.exit(0)
 
 import tkinter as tk  # noqa: E402
 
@@ -100,8 +84,12 @@ ART_X, ART_Y = 28, 86
 COL_X, COL_W = 512, 468
 PLAY_X, PLAY_Y = 512, 784
 
-RES_CHOICES = [("Display", "display"), ("1x", "640x480"), ("2x", "1280x960"),
-               ("3x", "1920x1440"), ("4x", "2560x1920"), ("5x", "3200x2400")]
+# DDrawCompat ResolutionScale: "display" = your monitor's resolution, app(N) = N times
+# the game's own mode (640x480 in 4:3, e.g. 854x480 in widescreen).
+RES_CHOICES = [("Display", "display"), ("1x", "app(1)"), ("2x", "app(2)"),
+               ("3x", "app(3)"), ("4x", "app(4)"), ("5x", "app(5)")]
+LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
+              "2560x1920": "app(4)", "3200x2400": "app(5)"}   # 0.1.x settings.json values
 DEFAULTS = {"res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off"}
 
@@ -113,11 +101,13 @@ def load_settings():
         s.update({k: v for k, v in data.items() if k in DEFAULTS})
     except Exception:
         pass
+    s["res"] = LEGACY_RES.get(s["res"], s["res"])
     return s
 
 
 def save_settings(s):
     try:
+        os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
         json.dump(s, open(SETTINGS, "w", encoding="utf-8"), indent=1)
     except Exception:
         pass
@@ -131,35 +121,32 @@ def sha256(path):
     return h.hexdigest()
 
 
+def native_width():
+    """Width of the native widescreen mode: 480 lines at the primary monitor's aspect,
+    rounded to an even number. Written to both mml.ini and DDrawCompat.ini so the game
+    asks for exactly the mode DDrawCompat allows."""
+    u = ctypes.windll.user32
+    sw, sh = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+    if sw <= 0 or sh <= 0:
+        return 854
+    return (int(480.0 * sw / sh + 0.5) + 1) & ~1
+
+
 def start_game(s):
-    """Write the DDrawCompat config from settings s and spawn the runtime launcher
-    (the frozen exe re-invokes itself with --run-game; dev uses python). Returns the
+    """Write mml.ini + DDrawCompat.ini from settings s and start the game. Returns the
     Popen handle, or None if the game folder can't be found. Shared by the GUI PLAY
     button and the --play direct-launch mode."""
     if not GAME_DIR:
         return None
-    write_ini(s)
-    env = dict(os.environ)
-    # Let the spawned launcher exe do its OWN PyInstaller onefile extraction. Without this,
-    # the child inherits our bootloader vars (_PYI_* / _MEIPASS2) and REUSES this process's
-    # _MEI temp dir - which gets deleted the instant we exit, so the child crashes with
-    # "base_library.zip not found" (verified: scratchpad/probe3). That is why the --play
-    # shortcut - whose parent exits immediately - failed, while the GUI PLAY (window stays
-    # open) survived by luck. Stripping these forces the child to extract its own dir.
-    for k in list(env):
-        if k.startswith("_PYI") or k == "_MEIPASS2":
-            env.pop(k, None)
-    env["MML_GAME_DIR"] = GAME_DIR
-    env["MML_ASPECT"] = s["aspect"]
-    env["MML_CONTROLS"] = s["controls"]
-    env["MML_INTRO"] = s["intro"]
-    logf = open(os.path.join(os.path.dirname(RUNNER), "launcher.log"), "a",
-                buffering=1, encoding="utf-8")
-    logf.write(f"\n--- session {time.strftime('%Y-%m-%d %H:%M:%S')} {json.dumps(s)} ---\n")
-    cmd = [sys.executable, "--run-game"] if FROZEN else [sys.executable, RUNNER]
-    flags = subprocess.CREATE_NO_WINDOW if FROZEN else 0
-    return subprocess.Popen(cmd, cwd=GAME_DIR, env=env, stdout=logf, stderr=logf,
-                            creationflags=flags)
+    width = native_width()
+    write_ini(s, width)
+    write_mml_ini(s, width)
+    log = os.path.join(GAME_DIR, "Modernization", "launcher.log")
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} v{VERSION} width {width} {json.dumps(s)}\n")
+    return subprocess.Popen([os.path.join(GAME_DIR, "MEGAMAN.EXE")], cwd=GAME_DIR,
+                            env=clean_child_env())
 
 
 def make_play_shortcut():
@@ -185,7 +172,7 @@ def make_play_shortcut():
     return lnk
 
 
-def write_ini(s):
+def write_ini(s, width):
     base = os.path.join(GAME_DIR, "DDrawCompat.ini.16to9")
     out_path = os.path.join(GAME_DIR, "DDrawCompat.ini")
     overrides = {
@@ -194,6 +181,8 @@ def write_ini(s):
         "resolutionscalefilter": f"ResolutionScaleFilter   = {'bilinear' if s['scalefilter'] == 'bilinear' else 'point'}\n",
         "texturefilter": f"TextureFilter           = {s['texfilter']}\n",
         "antialiasing": f"Antialiasing            = {s['aa']}\n",
+        # native widescreen asks for {width}x480, and DDrawCompat only allows listed modes
+        "supportedresolutions": f"SupportedResolutions    = native, 640x480, 800x600, 1024x768, {width}x480\n",
     }
     lines, seen = [], set()
     with open(base, encoding="utf-8", errors="replace") as f:
@@ -209,6 +198,40 @@ def write_ini(s):
             lines.append(text)
     with open(out_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
+
+
+def write_mml_ini(s, width):
+    """Settings for mml.dll. Any [debug] section already in the file is kept."""
+    path = os.path.join(GAME_DIR, "mml.ini")
+    debug = []
+    try:
+        section = None
+        for line in open(path, encoding="utf-8", errors="replace"):
+            st = line.strip()
+            if st.startswith("[") and st.endswith("]"):
+                section = st[1:-1].strip().lower()
+            if section == "debug":
+                debug.append(line if line.endswith("\n") else line + "\n")
+    except OSError:
+        pass
+    text = (
+        "; Mega Man Legends Modernization - settings, read by mml.dll when the game starts.\n"
+        "; Written by the launcher every time you press Play; edit by hand if you like.\n\n"
+        "[video]\n"
+        f"aspect={'16:9' if s['aspect'] == '16:9' else '4:3'}\n"
+        "mode=native\n"
+        f"native_width={width}\n"
+        "hud_edges=1\n"
+        "closer_factor=0.859375\n\n"
+        "[controls]\n"
+        f"mode={s['controls']}\n\n"
+        "[general]\n"
+        f"intro={s['intro']}\n"
+    )
+    if debug:
+        text += "\n" + "".join(debug)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 def pad_connected():
@@ -362,9 +385,11 @@ class App:
             c.itemconfigure(self.exe_item, text="●  Game not found - put this launcher in the game folder", fill=RED)
         else:
             digest = sha256(os.path.join(GAME_DIR, "MEGAMAN.EXE"))
-            if digest == PATCHED_SHA256:
+            if digest == M.PATCHED_SHA256:
                 c.itemconfigure(self.exe_item, text="●  Game: Modernized  ✓", fill=GREEN)
-            elif digest == VANILLA_SHA256:
+            elif digest in M.PREVIOUS_PATCHED_SHA256:
+                c.itemconfigure(self.exe_item, text="●  Game: older Modernization version - run the new installer", fill=AMBER)
+            elif digest == M.VANILLA_SHA256:
                 c.itemconfigure(self.exe_item, text="●  Game: vanilla exe - run the installer first", fill=AMBER)
             else:
                 c.itemconfigure(self.exe_item, text="●  Game: unknown exe build - see README", fill=AMBER)
@@ -390,9 +415,9 @@ class App:
         self.proc = start_game(self.settings)
         self.canvas.itemconfigure(
             self.foot_item,
-            text="Launched!  F5 or L3/R3 = orbit camera · any button skips the intro\n"
-                 "Closing this window removes the mods (the game keeps running, vanilla).")
-        self.root.iconify()
+            text="Launched!  F5 or L3/R3 = orbit camera · any button skips the intro")
+        # the game runs on its own now (mml.dll loads with it); nothing left to do here
+        self.root.after(1500, self.root.destroy)
 
     def make_shortcut(self):
         save_settings(self.settings)

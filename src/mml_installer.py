@@ -18,7 +18,7 @@ import sys
 import patch_manifest as M
 
 APP_NAME = "Mega Man Legends - Modernization Project"
-VERSION = "0.1.3"
+VERSION = "0.2.0-dev"
 
 
 def _res_dir():
@@ -63,6 +63,18 @@ def detect_game_folder():
 
 HOOK_DLL_NAMES = [n.lower() for n in M.HOOK_DLL_NAMES]
 
+# Files from the 0.1.x (Frida) runtime. Left in place, an old "Play - MML.bat" or the
+# old launcher would attach Frida on top of mml.dll and both would patch the game, so
+# an upgrade moves them to Modernization/legacy-0.1 (moved, never deleted).
+LEGACY_FILES = [
+    "Play - MML.bat",
+    os.path.join("Modernization", "launch_widescreen_freecam.py"),
+    os.path.join("Modernization", "mml_launcher.py"),
+    os.path.join("Modernization", "mml_gui.py"),
+]
+# Config the user may have edited by hand; installed only if missing.
+KEEP_IF_PRESENT = {"mml.ini"}
+
 
 def do_install(game_dir, add_desktop_shortcut, log):
     """Patch + install into game_dir. `log(msg, frac)` reports progress (frac 0..1).
@@ -77,22 +89,28 @@ def do_install(game_dir, add_desktop_shortcut, log):
     digest = sha256(exe)
     if digest == M.PATCHED_SHA256:
         log("Game already patched - keeping it.", 0.30)
-    elif os.path.getsize(exe) != M.EXE_SIZE or digest != M.VANILLA_SHA256:
+    elif digest != M.VANILLA_SHA256 and digest not in M.PREVIOUS_PATCHED_SHA256:
         return False, ("This MEGAMAN.EXE is a version the patch doesn't recognize, so nothing\n"
                        "was changed. Please report this to the project:\n  " + digest)
     else:
+        # Vanilla, or patched by an earlier release: the current runs overwrite every
+        # byte an earlier release touched, so both land on the same verified result.
+        vanilla = digest == M.VANILLA_SHA256
         backup = os.path.join(game_dir, "MEGAMAN.EXE.vanilla-backup")
-        if not os.path.exists(backup):
+        if vanilla and not os.path.exists(backup):
             shutil.copyfile(exe, backup)
-        log("Backing up and patching the game...", 0.12)
-        data = bytearray(open(exe, "rb").read())
+        log("Backing up and patching the game..." if vanilla
+            else "Upgrading the game patch from an earlier version...", 0.12)
+        before = open(exe, "rb").read()
+        data = bytearray(before[:M.EXE_SIZE])
         for off, hexbytes in M.PATCHES:
             blob = bytes.fromhex(hexbytes)
             data[off:off + len(blob)] = blob
+        data += bytes.fromhex(M.EXE_TAIL)
         open(exe, "wb").write(data)
         if sha256(exe) != M.PATCHED_SHA256:
-            shutil.copyfile(backup, exe)
-            return False, "The patch did not verify - your original game was restored."
+            open(exe, "wb").write(before)
+            return False, "The patch did not verify - your game was put back the way it was."
         log("Game patched and verified.", 0.30)
 
     # 2. quarantine foreign wrapper DLLs -----------------------------------------
@@ -118,6 +136,13 @@ def do_install(game_dir, add_desktop_shortcut, log):
         log(f"Set aside a conflicting '{fn}'.", 0.42)
 
     # 3. runtime stack ------------------------------------------------------------
+    for rel in LEGACY_FILES:
+        old = os.path.join(game_dir, rel)
+        if os.path.isfile(old):
+            ldir = os.path.join(game_dir, "Modernization", "legacy-0.1")
+            os.makedirs(ldir, exist_ok=True)
+            shutil.move(old, os.path.join(ldir, os.path.basename(rel)))
+            log(f"Retired the old launcher file '{os.path.basename(rel)}'.", 0.50)
     log("Installing the widescreen + controls files...", 0.55)
     gf = os.path.join(res, "game-files")
     copied = 0
@@ -126,7 +151,10 @@ def do_install(game_dir, add_desktop_shortcut, log):
         tgt = game_dir if rel == "." else os.path.join(game_dir, rel)
         os.makedirs(tgt, exist_ok=True)
         for fn in files:
-            shutil.copyfile(os.path.join(root, fn), os.path.join(tgt, fn))
+            dst = os.path.join(tgt, fn)
+            if fn.lower() in KEEP_IF_PRESENT and os.path.exists(dst):
+                continue
+            shutil.copyfile(os.path.join(root, fn), dst)
             copied += 1
     log(f"Installed {copied} files.", 0.80)
 

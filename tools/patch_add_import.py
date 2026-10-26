@@ -7,6 +7,7 @@ copy. Every existing import thunk stays where it was, so code that calls
 through the old IAT slots (e.g. GetTickCount at 0x508328) is unaffected.
 
 Usage: python patch_add_import.py IN.EXE OUT.EXE [DLL] [SYMBOL]
+Also importable: add_import(data, dll, symbol) -> bytes (used by make_patcher.py).
 """
 import struct
 import sys
@@ -18,14 +19,19 @@ def align(v, a):
     return (v + a - 1) // a * a
 
 
-def main():
-    if len(sys.argv) < 3:
-        sys.exit(__doc__)
-    src, dst = sys.argv[1], sys.argv[2]
-    dll = (sys.argv[3] if len(sys.argv) > 3 else "mml.dll").encode()
-    sym = (sys.argv[4] if len(sys.argv) > 4 else "mml_entry").encode()
+def has_import_section(data):
+    """True if the exe already carries our .mmli import section."""
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    nsec = struct.unpack_from("<H", data, pe + 6)[0]
+    tab = pe + 24 + struct.unpack_from("<H", data, pe + 20)[0]
+    return any(data[tab + 40 * i:tab + 40 * i + 8].rstrip(b"\0") == SECTION_NAME for i in range(nsec))
 
-    d = bytearray(open(src, "rb").read())
+
+def add_import(data, dll="mml.dll", symbol="mml_entry"):
+    """Return a copy of exe `data` that also imports dll!symbol."""
+    d = bytearray(data)
+    dll = dll.encode()
+    sym = symbol.encode()
     pe = struct.unpack_from("<I", d, 0x3C)[0]
     nsec = struct.unpack_from("<H", d, pe + 6)[0]
     optsz = struct.unpack_from("<H", d, pe + 20)[0]
@@ -60,7 +66,7 @@ def main():
         o += 20
     names = [d[rva2off(struct.unpack_from("<I", x, 12)[0]):].split(b"\0")[0] for x in descs]
     if dll.lower() in (n.lower() for n in names):
-        sys.exit("%s is already imported" % dll.decode())
+        raise ValueError("%s is already imported" % dll.decode())
 
     # New section layout (offsets relative to section start).
     sec_rva = align(size_of_image, sect_align)
@@ -94,9 +100,21 @@ def main():
     struct.pack_into("<II", d, dirs + 8 * 11, 0, 0)                # no stale bound imports
     struct.pack_into("<I", d, opt + 64, 0)                         # checksum unused for exes
 
-    open(dst, "wb").write(d)
-    print("wrote %s: +%s at RVA %#x, imports now %s + %s" % (
-        dst, SECTION_NAME.decode(), sec_rva, [n.decode() for n in names], dll.decode()))
+    return bytes(d)
+
+
+def main():
+    if len(sys.argv) < 3:
+        sys.exit(__doc__)
+    src, dst = sys.argv[1], sys.argv[2]
+    dll = sys.argv[3] if len(sys.argv) > 3 else "mml.dll"
+    sym = sys.argv[4] if len(sys.argv) > 4 else "mml_entry"
+    try:
+        out = add_import(open(src, "rb").read(), dll, sym)
+    except ValueError as e:
+        sys.exit(str(e))
+    open(dst, "wb").write(out)
+    print("wrote %s with an import of %s!%s" % (dst, dll, sym))
 
 
 if __name__ == "__main__":

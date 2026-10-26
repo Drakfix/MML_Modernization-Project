@@ -144,14 +144,16 @@ int display_native_width(void)
     return g_active ? g_width : 640;
 }
 
-int display_install(int screen_w, int screen_h, int hud_anchor)
+int display_install(int screen_w, int screen_h, int width, int hud_anchor)
 {
     static const uint8_t push_640[] = { 0x68, 0x80, 0x02, 0x00, 0x00 };
     static const uint8_t vp_640[] = { 0xC7, 0x84, 0x24, 0xD8, 0x00, 0x00, 0x00, 0x80, 0x02, 0x00, 0x00 };
     static const uint8_t mov_eax_640[] = { 0xB8, 0x80, 0x02, 0x00, 0x00 };
     uint32_t w;
 
-    g_width = ((int)floor(480.0 * screen_w / screen_h + 0.5) + 1) & ~1;
+    /* 480 lines tall, as wide as the monitor's aspect (even, so the 4:3 picture
+     * sits on whole pixels); an explicit width from mml.ini wins */
+    g_width = width > 0 ? width : (((int)floor(480.0 * screen_w / screen_h + 0.5) + 1) & ~1);
     if (g_width <= 640) {
         log_printf("display: screen isn't wider than 4:3, native mode off");
         return 0;

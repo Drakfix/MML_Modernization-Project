@@ -2,10 +2,10 @@
 
 The mod is split in two parts, and that decides what you have to rebuild:
 
-- **The runtime script** (`src/launch_widescreen_freecam.py`) holds the widescreen,
-  camera, controls, HUD and audio logic. It's a plain file the launcher runs from disk,
-  so changing it does NOT need the launcher rebuilt. To test a change, just copy it into
-  your game folder's `Modernization` folder (or your working copy) and play.
+- **The runtime** (`native/`, builds `mml.dll`) holds the widescreen, HUD layout, camera,
+  controls and timing logic. Rebuild it with `native\build.bat` and copy `mml.dll` next to
+  a patched `MEGAMAN.EXE` to test; no launcher rebuild needed. `native/README.md` has the
+  details, and `tools\dev\drive.ps1` can play the game by script for screenshot tests.
 - **The launcher and installer** (`src/mml_gui.py`, `src/mml_installer.py`) are the
   programs. Changing those needs a rebuild.
 
@@ -21,7 +21,7 @@ set "MML_GAME_DIR=C:\path\to\your\game\folder"
 build\build_release.bat
 ```
 
-That rebuilds the launcher, re-packages, and rebuilds `dist\MML-Setup.exe`. `MML_GAME_DIR`
+That rebuilds `mml.dll` and the launcher, re-packages, and rebuilds `dist\MML-Setup.exe`. `MML_GAME_DIR`
 is only needed to pull the wrapper DLLs and the intro into the package; the copyrighted
 game files never go into the repo.
 
@@ -34,7 +34,10 @@ python tools\make_patcher.py
 ```
 
 This needs a vanilla `MEGAMAN.EXE.orig` and the patched `MEGAMAN.EXE` in `MML_GAME_DIR`, and
-it rewrites `src/patch_manifest.py` (which is what the installer patches with).
+it rewrites `src/patch_manifest.py` (which is what the installer patches with). The import
+that loads `mml.dll` gets added on top automatically. When a release changes the patch,
+add the previous release's patched hash to `PREVIOUS_PATCHED_SHA256` in `make_patcher.py`
+so existing installs can upgrade in place.
 
 ## Self-testing the installer
 
@@ -49,12 +52,11 @@ Exit code 0 means the install ran; then verify the result actually is the new bu
 
 - the patched `MEGAMAN.EXE` in the sandbox hashes to `PATCHED_SHA256` from
   `src/patch_manifest.py`, and
-- the installed `Modernization\launch_widescreen_freecam.py` has the `RUNNER_BUILD` line you
-  expect.
+- the installed `mml.dll` is the one you just built (same hash as `native\build\mml.dll`).
 
-That second check exists because shipping a stale runner has happened. Twice. Bump
-`RUNNER_BUILD` in the runner on every change; it prints at launch and lands in
-`Modernization\launcher.log`, so a log from any machine tells you exactly what ran.
+Also self-test an upgrade: a sandbox with the previous release's patched exe should land on
+the same `PATCHED_SHA256`. Bump `MML_NATIVE_BUILD` in `native/src/mml.c` on every runtime
+change; it's the first line of `mml.log`, so a log from any machine tells you what ran.
 
 ## Committing
 
@@ -67,7 +69,8 @@ git commit -m "Fix boss health bar drifting in widescreen"
 
 ## Publishing a release
 
-1. Bump `VERSION` in `src/mml_gui.py` and `src/mml_installer.py` (keep them in sync).
+1. Bump `VERSION` in `src/mml_gui.py` and `src/mml_installer.py` (keep them in sync) and
+   `MML_NATIVE_BUILD` in `native/src/mml.c`.
 2. Rebuild and self-test as above.
 3. Tag and push:
 

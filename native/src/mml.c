@@ -26,7 +26,7 @@
 #include "packets.h"
 #include "toast.h"
 
-#define MML_NATIVE_BUILD "native-m2 controls"
+#define MML_NATIVE_BUILD "0.2.0-dev (native widescreen)"
 
 static char g_game_dir[MAX_PATH];
 static char g_ini[MAX_PATH];
@@ -243,6 +243,7 @@ static void init(void)
     if (strcmp(aspect, "4:3") != 0) {
         if (_stricmp(mode, "native") == 0)
             g_native_wide = display_install(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+                                            GetPrivateProfileIntA("video", "native_width", 0, g_ini),
                                             GetPrivateProfileIntA("video", "hud_edges", 1, g_ini));
         install_widescreen();
     }

@@ -194,8 +194,9 @@ rewrite. Even interpolation wasn't feasible with its limitations.
 
 Open an [issue](../../issues) and include:
 
-- `Modernization\launcher.log` from the session where it happened (it includes a build
-  tag line that tells me exactly what you were running).
+- `mml.log` from the game folder (it's rewritten every time the game starts, so grab it
+  right after the problem; the first line tells me exactly which build you ran) and
+  `Modernization\launcher.log`.
 - What you were doing, and a screenshot if it's visual.
 - If the installer refused your game version: the hash it printed. There are other CD
   builds of this port out there (US/EU/JP variants) and I can only verify the ones I
@@ -206,25 +207,32 @@ Open an [issue](../../issues) and include:
 Short version, for the curious:
 
 - **One small static patch** to `MEGAMAN.EXE` relocates two renderer tables that overflow
-  when the draw distance is extended, and fixes the culling math around them. It's a few
-  dozen byte patches, hash-verified against the exact game build, with a backup kept.
-- **Everything else is runtime.** The launcher starts the game and injects the rest with
-  Frida: the widescreen projection, the HUD un-stretch, the camera, the movement and
-  input remapping, and the timing fix. Close the game and nothing persists; the mod
-  re-arms on every launch.
+  when the draw distance is extended, fixes the culling math around them, and adds one
+  entry to the exe's import list so Windows loads `mml.dll` together with the game. It's
+  hash-verified against the exact game build, with a backup kept.
+- **Everything else lives in `mml.dll`**, plain C that patches the game in memory when it
+  starts: the widescreen, the HUD layout, the camera, the movement and input remapping,
+  and the timing fix. No injector, no Python, nothing running next to the game. Settings
+  are in `mml.ini`; the launcher is just a nice way to edit them.
+- **Widescreen is real 16:9 now.** The game gets a wide display mode and every primitive
+  it draws gets placed on its way to the GPU: the 3D world just gets more width, the HUD
+  goes to the screen edges, backgrounds made for 4:3 get stretched to fill. Nothing gets
+  squeezed anymore.
 - **The compatibility layer** is standard, well-tested wrappers: DDrawCompat for
   DirectDraw and resolution handling, Xidi for controller input, DSOAL + OpenAL Soft for
   the game's DirectSound3D audio.
 
 The upside of this design is that your install stays essentially stock and every piece
-can be turned off. The downside is that it's Windows-only by nature.
+can be turned off. It should also run under Wine/Proton since there's no injector, but
+that's not tested yet.
 
 ## Building from source
 
-The launcher and installer are built with PyInstaller:
+`mml.dll` is built with the Visual Studio Build Tools (C++ workload, x86), and the
+launcher and installer with PyInstaller:
 
 ```
-pip install pyinstaller pillow frida
+pip install pyinstaller pillow
 set "MML_GAME_DIR=C:\path\to\your\game\folder"
 build\build_release.bat
 ```
