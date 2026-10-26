@@ -26,6 +26,7 @@
 #include "gfx.h"
 #include "hook.h"
 #include "log.h"
+#include "packets.h"
 
 #define G_IAT_DIRECTDRAWCREATE    0x5083BCu
 #define G_IAT_DIRECTDRAWENUMERATE 0x5083C0u
@@ -885,6 +886,150 @@ static void prepare_texture(device *d)
     gfx_set_texture(t ? t->tex : NULL);
 }
 
+/* [debug] fog_debug=1: log what fogged geometry looks like (fog distance source research) */
+int g_fog_debug;
+static unsigned g_dropped_tris, g_world_tris;   /* clamped-vertex filter stats, see filter_clamped */
+static struct { unsigned draws, sa_hist[5]; float z0, z1, w0, w1, start, end; DWORD color; unsigned sa0, sa1; } g_fd;
+
+static void fog_debug(const gfx_state *s, const gfx_vertex *v, DWORD n)
+{
+    static unsigned frames_seen;
+    DWORD k;
+    if (!s->fog)
+        return;
+    if (!g_fd.draws) {
+        g_fd.z0 = g_fd.w0 = FLT_MAX;
+        g_fd.z1 = g_fd.w1 = -FLT_MAX;
+        g_fd.sa0 = 255;
+        g_fd.sa1 = 0;
+    }
+    g_fd.draws++;
+    g_fd.start = s->fog_start;
+    g_fd.end = s->fog_end;
+    g_fd.color = s->fog_color;
+    for (k = 0; k < n; k++) {
+        float w = v[k].rhw > 0 ? 1.0f / v[k].rhw : 0;
+        if (v[k].z < g_fd.z0) g_fd.z0 = v[k].z;
+        if (v[k].z > g_fd.z1) g_fd.z1 = v[k].z;
+        if (w < g_fd.w0) g_fd.w0 = w;
+        if (w > g_fd.w1) g_fd.w1 = w;
+        {
+            unsigned sa = v[k].specular >> 24;
+            if (sa < g_fd.sa0) g_fd.sa0 = sa;
+            if (sa > g_fd.sa1) g_fd.sa1 = sa;
+            g_fd.sa_hist[sa == 255 ? 4 : sa / 64]++;
+        }
+    }
+    (void)frames_seen;
+}
+
+/* [debug] probe=x,y (game coordinates): once every 2 s, log the triangles of
+ * one frame that cover that point, with their vertices and state */
+int g_probe_x = -1, g_probe_y = -1;
+static int g_probe_armed, g_probe_logged;
+
+static float edge(const gfx_vertex *a, const gfx_vertex *b, float px, float py)
+{
+    return (b->x - a->x) * (py - a->y) - (b->y - a->y) * (px - a->x);
+}
+
+static int covers(const gfx_vertex *a, const gfx_vertex *b, const gfx_vertex *c, float px, float py)
+{
+    float e0 = edge(a, b, px, py), e1 = edge(b, c, px, py), e2 = edge(c, a, px, py);
+    return (e0 >= 0 && e1 >= 0 && e2 >= 0) || (e0 <= 0 && e1 <= 0 && e2 <= 0);
+}
+
+static void probe(const device *d, int pt, const gfx_vertex *v, DWORD n)
+{
+    DWORD k;
+    if (!g_probe_armed || g_probe_logged >= 12)
+        return;
+    for (k = 0; k + 2 < n; k += (pt == D3DPT_TRIANGLELIST ? 3 : 1)) {
+        const gfx_vertex *a = &v[k], *b = &v[k + 1], *c = &v[k + 2];
+        int j;
+        if (!covers(a, b, c, (float)g_probe_x, (float)g_probe_y))
+            continue;
+        g_probe_logged++;
+        log_printf("probe: tri in draw of %lu (type %d) tex %p z %lu/%lu/%lu blend %lu %lu/%lu fog %lu alphatest %lu",
+                   n, pt, (void *)d->tex, d->rs[D3DRENDERSTATE_ZENABLE], d->rs[D3DRENDERSTATE_ZWRITEENABLE],
+                   d->rs[D3DRENDERSTATE_ZFUNC], d->rs[D3DRENDERSTATE_ALPHABLENDENABLE], d->rs[D3DRENDERSTATE_SRCBLEND],
+                   d->rs[D3DRENDERSTATE_DESTBLEND], d->rs[D3DRENDERSTATE_FOGENABLE], d->rs[D3DRENDERSTATE_ALPHATESTENABLE]);
+        for (j = 0; j < 3; j++) {
+            const gfx_vertex *p = j == 0 ? a : j == 1 ? b : c;
+            log_printf("   v%d x %.1f y %.1f z %.5f rhw %.5f diffuse %08lX spec %08lX uv %.3f %.3f",
+                       j, p->x, p->y, p->z, p->rhw, (unsigned long)p->diffuse, (unsigned long)p->specular, p->u, p->v);
+        }
+        if (g_probe_logged >= 12)
+            return;
+    }
+}
+
+void ddshim_frame(void)
+{
+    static unsigned frames;
+    static unsigned clamp_frames;
+    if (g_fog_debug && ++clamp_frames % 60 == 0) {
+        log_printf("clamped-vertex triangles dropped: %u (of %u in draws that had one)", g_dropped_tris, g_world_tris);
+        g_dropped_tris = g_world_tris = 0;
+    }
+    if (g_probe_x >= 0) {
+        if (g_probe_armed)
+            g_probe_armed = 0;
+        else if (++frames % 60 == 0) {
+            g_probe_armed = 1;
+            g_probe_logged = 0;
+            log_printf("probe: frame at (%d,%d)", g_probe_x, g_probe_y);
+        }
+        return;
+    }
+    if (!g_fog_debug || ++frames % 60 != 0)
+        return;
+    if (g_fd.draws)
+        log_printf("fog: %u fogged draws, start %.3f end %.3f color %06lX, z %.4f..%.4f, 1/rhw %.3f..%.3f, specular alpha %u..%u [0-63:%u 64-127:%u 128-191:%u 192-254:%u 255:%u]",
+                   g_fd.draws, g_fd.start, g_fd.end, g_fd.color, g_fd.z0, g_fd.z1, g_fd.w0, g_fd.w1, g_fd.sa0, g_fd.sa1,
+                   g_fd.sa_hist[0], g_fd.sa_hist[1], g_fd.sa_hist[2], g_fd.sa_hist[3], g_fd.sa_hist[4]);
+    else
+        log_printf("fog: no fogged draws");
+    memset(&g_fd, 0, sizeof g_fd);
+}
+
+/* The game never clips terrain against the near plane: a vertex behind the
+ * camera gets its depth clamped (z = 1.0, rhw = 0.1) and lands thousands of
+ * pixels off-screen. The old pipeline's driver silently discarded such
+ * triangles (they exceed the rasterizer's coordinate range), which is where
+ * the "holes in the floor at low camera angles" come from. A modern GPU clips
+ * them properly instead, so they'd show up as huge wrong polygons. Drop any
+ * world triangle with a clamped vertex, matching the old look, until the
+ * terrain gets real near-plane clipping. */
+int g_drop_clamped = 1;
+
+static int clamped(const gfx_vertex *v)
+{
+    return v->z >= 0.99999f && v->rhw <= 0.10001f;
+}
+
+/* returns the number of vertices written to out (a triangle list) */
+static DWORD filter_clamped(int pt, const gfx_vertex *v, DWORD n, gfx_vertex *out, DWORD cap)
+{
+    DWORD k, m = 0;
+    for (k = 0; k + 2 < n; k += (pt == D3DPT_TRIANGLELIST ? 3 : 1)) {
+        const gfx_vertex *a = &v[k], *b = &v[k + 1], *c = &v[k + 2];
+        g_world_tris++;
+        if (clamped(a) || clamped(b) || clamped(c)) {
+            g_dropped_tris++;
+            continue;
+        }
+        if (m + 3 > cap)
+            break;
+        if (pt == D3DPT_TRIANGLESTRIP && (k & 1)) {   /* keep strip winding consistent (culling is off anyway) */
+            out[m++] = *b; out[m++] = *a; out[m++] = *c;
+        } else {
+            out[m++] = *a; out[m++] = *b; out[m++] = *c;
+        }
+    }
+    return m;
+}
+
 static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LPVOID verts, DWORD n, DWORD flags)
 {
     device *d = FROM(device, vt, i);
@@ -900,6 +1045,23 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
     device_state(d, &s);
     prepare_texture(d);
     gfx_set_state(&s);
+    if (g_fog_debug)
+        fog_debug(&s, (const gfx_vertex *)verts, n);
+    if (g_probe_armed)
+        probe(d, (int)pt, (const gfx_vertex *)verts, n);
+    if (g_drop_clamped && g_cur_bucket == 4 && (pt == D3DPT_TRIANGLESTRIP || pt == D3DPT_TRIANGLELIST)) {
+        static gfx_vertex tmp[3 * 2048];
+        DWORD k;
+        for (k = 0; k < n; k++)
+            if (clamped(&((const gfx_vertex *)verts)[k]))
+                break;
+        if (k < n) {   /* only rebuild draws that actually contain a clamped vertex */
+            DWORD m = filter_clamped((int)pt, (const gfx_vertex *)verts, n, tmp, 3 * 2048);
+            if (m)
+                gfx_draw(GFX_TRILIST, tmp, (int)m);
+            return D3D_OK;
+        }
+    }
     gfx_draw((int)pt, (const gfx_vertex *)verts, (int)n);
     return D3D_OK;
 }

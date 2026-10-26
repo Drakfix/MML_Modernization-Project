@@ -14,6 +14,7 @@
  */
 #include <windows.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -161,6 +162,7 @@ static void on_frame(regs_t *r)
     }
     limiter_frame();
     apicensus_frame();
+    ddshim_frame();
     display_frame();
     toast_frame();
 }
@@ -274,6 +276,14 @@ static void init(void)
             o.vsync = GetPrivateProfileIntA("video", "vsync", 0, g_ini);
             o.no_fog = GetPrivateProfileIntA("video", "no_fog", 0, g_ini);
             o.fog_from_w = GetPrivateProfileIntA("video", "fog_from_w", 0, g_ini);
+            g_fog_debug = GetPrivateProfileIntA("debug", "fog_debug", 0, g_ini);
+            g_drop_clamped = GetPrivateProfileIntA("video", "drop_clamped", 1, g_ini);
+            {
+                char pr[32];
+                ini_string("debug", "probe", "", pr, sizeof pr);
+                if (pr[0])
+                    sscanf_s(pr, "%d,%d", &g_probe_x, &g_probe_y);
+            }
             ddshim_install(&o);
         }
     }
