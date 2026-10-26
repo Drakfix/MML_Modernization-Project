@@ -47,7 +47,7 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
  * angle units (4096 = 360 deg) per 1/60 s at full deflection. */
 #define YAW_SPEED        28.0
 #define PITCH_SPEED      20.0
-#define PITCH_LIMIT_UP   57      /* looking up clips through the floor, keep it tight */
+#define PITCH_LIMIT_UP   448     /* camera collision keeps it above the floor */
 #define PITCH_LIMIT_DOWN (-900)
 #define FACE_OFFSET      2048    /* stick up = away from the camera */
 #define FACE_SIGN        1
@@ -59,6 +59,11 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define WALK_MIN_PCT     40      /* walk speed/animation at the lightest tilt */
 #define RUN_MIN_PCT      50      /* run speed/animation right past the walk range */
 #define ROLL_BUFFER      12      /* player updates a roll press waits for a chance to start */
+#define LOOK_ORBIT_MAX   100     /* the camera orbits up to this pitch; looking further up tilts in place */
+#define CAM_STEP         24      /* collision probe spacing along the camera line (world units) */
+#define CAM_MARGIN       48      /* keep the camera this far in front of a hit */
+#define CAM_MIN_DIST     80
+#define CAM_EASE_OUT     0.12    /* fraction of the gap regained per update after a hit clears */
 #define STALE_POLLS      30
 
 #define PI 3.14159265358979323846
@@ -66,6 +71,11 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define RD16(a) (*(volatile uint16_t *)(uintptr_t)(a))
 #define RD32(a) (*(volatile int32_t *)(uintptr_t)(a))
 #define WR32(a, v) (*(volatile int32_t *)(uintptr_t)(a) = (int32_t)(v))
+#define PL(o)   (G_PLAYER + (o))
+#define P8(o)   (*(volatile uint8_t *)PL(o))
+#define P16(o)  (*(volatile uint16_t *)PL(o))
+#define S16(o)  (*(volatile int16_t *)PL(o))
+#define RIG8(o) (*(volatile uint8_t *)(uintptr_t)(G_CAM_RIG + (o)))
 
 static int g_modern;
 
@@ -77,7 +87,7 @@ static volatile LONG frame_tick;
 static volatile LONG move_gate;
 
 /* frame-hook state */
-static int cam_yaw, cam_pitch_ecx;
+static int cam_yaw;
 static int move_face, roll_latch;
 static int move_start_grace, move_prev;
 static int32_t last_px, last_pz;
@@ -94,6 +104,9 @@ static int talk_hidden, walk_injected;
 
 /* input state (this was the Python thread) */
 static double st_yaw, st_pitch;
+static int st_allowed = 1;
+static double cam_dist_cur = -1;
+static int32_t g_view_target[4];
 static int st_active, prev_key, prev_click;
 static LARGE_INTEGER qpc_last, qpc_freq;
 
@@ -199,6 +212,66 @@ static double stick_norm(int v)
 
 static int signed12(int raw) { return raw > 2048 ? raw - 4096 : raw; }
 
+static int orbit_allowed(void)
+{
+    /* +4 rig active, +5 mode 0 (follow), +6 no script, +1 follow not suspended
+     * (talking sets it and blends the camera to frame both speakers) */
+    return RIG8(4) == 1 && RIG8(5) == 0 && RIG8(6) == 0 && RIG8(1) == 0 && !(P8(PL_INPUT_FLAGS) & 0x60);
+}
+
+/* world_line_collision 0x42CE61 (watcall EAX p1, EDX p2, EBX p3, ECX p4):
+ * despite the name, with p1 == p2 it tests one point (shorts x, y, z) against
+ * the level's collision cells, walls and floor heights; 0 = free. The follow
+ * camera calls it the same way (p3 0x5110B0, p4 0xFFFF). */
+typedef uint32_t(__cdecl *world_collision_fn)(void *p1, void *p2, uint32_t p3, uint32_t p4);
+static __declspec(naked) void world_collision_thunk(void)   /* called as world_collision_fn */
+{
+    __asm {
+        push ebx
+        push esi
+        push edi
+        push ebp
+        mov eax, [esp + 20]
+        mov edx, [esp + 24]
+        mov ebx, [esp + 28]
+        mov ecx, [esp + 32]
+        mov esi, G_FN_WORLD_COLLISION
+        call esi
+        pop ebp
+        pop edi
+        pop esi
+        pop ebx
+        ret
+    }
+}
+
+static uint32_t cam_probe(double x, double y, double z)
+{
+    int16_t pt[4];
+    pt[0] = (int16_t)iround(x);
+    pt[1] = (int16_t)iround(y);
+    pt[2] = (int16_t)iround(z);
+    pt[3] = 0;
+    return ((world_collision_fn)(void *)world_collision_thunk)(pt, pt, G_CAM_COLLISION_PARAMS, 0xFFFF);
+}
+
+/* Same placement as cam_apply_angles: camera = target - dist * dir(yaw, p4)
+ * with dir = (sin yaw cos p4, sin p4, cos yaw cos p4), 4096 units per turn.
+ * Walk out from the target and stop in front of the first blocked point. */
+static int cam_collide(const int32_t *t, int dist, int yaw, int p4)
+{
+    double a = (yaw & 0xfff) * (PI / 2048.0), b = signed12(p4 & 0xfff) * (PI / 2048.0);
+    double dx = sin(a) * cos(b), dy = sin(b), dz = cos(a) * cos(b);
+    int d;
+    for (d = CAM_STEP; d <= dist + CAM_MARGIN; d += CAM_STEP) {
+        if (cam_probe(t[0] - d * dx, t[1] - d * dy, t[2] - d * dz) != 0) {
+            d -= CAM_MARGIN;
+            return d < CAM_MIN_DIST ? CAM_MIN_DIST : d < dist ? d : dist;
+        }
+    }
+    return dist;
+}
+
 static void input_update(void)
 {
     pad_t p;
@@ -230,6 +303,22 @@ static void input_update(void)
     prev_key = f5;
     prev_click = click;
 
+    /* the orbit only drives the plain follow camera with the player in control;
+     * cutscenes, scripted cameras, talk/boss framing get the game camera back */
+    {
+        int allowed = orbit_allowed();
+        if (st_active && allowed && !st_allowed) {
+            st_yaw = RD16(G_CAM_YAW);
+            st_pitch = clampd(signed12(RD16(G_CAM_PITCH)), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+            cam_dist_cur = -1;
+            log_printf("orbit: back from the game camera (yaw %d pitch %d)", (int)st_yaw, (int)st_pitch);
+        } else if (st_active && !allowed && st_allowed) {
+            log_printf("orbit: handing over to the game camera (hold %d mode %d script %d input %02X)",
+                       RIG8(1), RIG8(5), RIG8(6), P8(PL_INPUT_FLAGS));
+        }
+        st_allowed = allowed;
+    }
+
     /* aiming hands the camera back to the game; keep tracking it so release doesn't snap */
     aiming = (p.wButtons & BTN_LB) || p.bLeftTrigger > TRIG_ON;
     if (st_active && aiming) {
@@ -248,7 +337,7 @@ static void input_update(void)
     }
 
     /* camera-relative movement on the left stick */
-    if (st_active && !aiming) {
+    if (st_active && st_allowed && !aiming) {
         double mag = sqrt((double)p.sThumbLX * p.sThumbLX + (double)p.sThumbLY * p.sThumbLY);
         if (mag > STICK_DZ) {
             double theta = atan2((double)p.sThumbLX, (double)p.sThumbLY);   /* 0 = up, + = right */
@@ -263,9 +352,8 @@ static void input_update(void)
     move_walk = moving && fwd < (int)(g_walk_frac * 32767);
     move_active = moving;
     cam_yaw = (int)st_yaw & 0xffff;
-    cam_pitch_ecx = (-(int)st_pitch) & 0xffff;   /* cam_apply_angles negates ECX */
-    cam_active = st_active;
-    cam_suppress = st_active && aiming;
+    cam_active = st_active && st_allowed;
+    cam_suppress = cam_active && aiming;
 }
 
 /* ---- per-frame hook: cam_apply_angles entry ---- */
@@ -328,9 +416,36 @@ static void on_cam_apply(regs_t *r)
 
 
     if (cam_active && !cam_suppress) {
+        const int32_t *t = (const int32_t *)(uintptr_t)r->eax;
+        int pitch = iround(st_pitch), orbit = pitch > LOOK_ORBIT_MAX ? LOOK_ORBIT_MAX : pitch;
+        int want, d;
         r->ebx = (uint32_t)cam_yaw;
-        r->ecx = (uint32_t)cam_pitch_ecx;
         true_orbit();
+        /* camera collision on the orbit position: pull in at once, ease back out */
+        want = cam_collide(t, (int)r->edx, cam_yaw, -orbit);
+        if (cam_dist_cur < 0 || want < cam_dist_cur)
+            cam_dist_cur = want;
+        else
+            cam_dist_cur += (want - cam_dist_cur) * CAM_EASE_OUT;
+        d = iround(cam_dist_cur);
+        r->edx = (uint32_t)d;
+        r->ecx = (uint32_t)(-pitch & 0xffff);   /* cam_apply_angles negates ECX */
+        if (pitch > orbit) {
+            /* looking up past the orbit range: the camera stays where the orbit
+             * put it (above the floor) and only the view tilts further up.
+             * cam_apply_angles places the camera at target - d * dir(pitch), so
+             * hand it a virtual target d along the steeper view from there. */
+            double a = (cam_yaw & 0xfff) * (PI / 2048.0);
+            double bo = -orbit * (PI / 2048.0), bv = -pitch * (PI / 2048.0);
+            double cx = t[0] - d * sin(a) * cos(bo), cy = t[1] - d * sin(bo), cz = t[2] - d * cos(a) * cos(bo);
+            g_view_target[0] = iround(cx + d * sin(a) * cos(bv));
+            g_view_target[1] = iround(cy + d * sin(bv));
+            g_view_target[2] = iround(cz + d * cos(a) * cos(bv));
+            g_view_target[3] = t[3];
+            r->eax = (uint32_t)(uintptr_t)g_view_target;
+        }
+    } else {
+        cam_dist_cur = -1;
     }
 }
 
@@ -344,10 +459,6 @@ static void on_cam_apply(regs_t *r)
  * the facing (+0x116 = +-0x400), so the facing is set to the wanted heading
  * +-0x400, whichever side is closer to where Mega Man faces now. */
 
-#define PL(o)   (G_PLAYER + (o))
-#define P8(o)   (*(volatile uint8_t *)PL(o))
-#define P16(o)  (*(volatile uint16_t *)PL(o))
-#define S16(o)  (*(volatile int16_t *)PL(o))
 
 static int ang_dist(int a, int b)
 {

@@ -45,6 +45,9 @@ included, without emulation.
     (done)
   - Analog movement: tilt the stick a little to walk, more to run, with the speed
     and animation following the tilt (done)
+  - Orbit camera hands control back to the game for conversations and cutscenes,
+    stops at walls instead of going through them, and can look up further
+    without sinking into the floor (done)
 - Mouse + keyboard with the orbit camera
 - Fix the known issues
 - Better presentation overall
