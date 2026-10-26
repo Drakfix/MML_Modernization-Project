@@ -17,7 +17,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "apicensus.h"
 #include "controls.h"
+#include "ddshim.h"
 #include "display.h"
 #include "game.h"
 #include "hook.h"
@@ -158,6 +160,7 @@ static void on_frame(regs_t *r)
                    *(float *)G_FRAME_LIMITER_TH, *(unsigned *)0x88787Cu, rc.right, rc.bottom);
     }
     limiter_frame();
+    apicensus_frame();
     display_frame();
     toast_frame();
 }
@@ -256,6 +259,24 @@ static void init(void)
         controls_debug_pad();
     if (GetPrivateProfileIntA("debug", "census", 0, g_ini))
         census_enable();
+    if (GetPrivateProfileIntA("debug", "api_census", 0, g_ini))
+        apicensus_install();
+    {
+        /* [video] renderer=mml: our own Direct3D 11 renderer instead of DDrawCompat (experimental) */
+        char r[16];
+        ini_string("video", "renderer", "ddrawcompat", r, sizeof r);
+        if (_stricmp(r, "mml") == 0) {
+            gfx_options o;
+            memset(&o, 0, sizeof o);
+            o.windowed = GetPrivateProfileIntA("video", "windowed", 0, g_ini);
+            o.msaa = GetPrivateProfileIntA("video", "msaa", 1, g_ini);
+            o.anisotropy = GetPrivateProfileIntA("video", "anisotropy", 16, g_ini);
+            o.vsync = GetPrivateProfileIntA("video", "vsync", 0, g_ini);
+            o.no_fog = GetPrivateProfileIntA("video", "no_fog", 0, g_ini);
+            o.fog_from_w = GetPrivateProfileIntA("video", "fog_from_w", 0, g_ini);
+            ddshim_install(&o);
+        }
+    }
     log_printf("init done");
 }
 

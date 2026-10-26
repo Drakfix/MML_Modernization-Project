@@ -53,6 +53,17 @@ intro=play           ; or skip
 
 What it did gets written to `mml.log`.
 
+### Our own renderer (experimental)
+
+`renderer=mml` replaces DirectDraw entirely: the game's DirectDraw/Direct3D calls
+land in `ddshim.c`, our implementation of exactly the parts it uses (worked out
+with an API census, `[debug] api_census=1`), which draws through `gfx_d3d11.c`.
+It picks the high-performance GPU on laptops, runs as a normal borderless window
+(alt-tab and screenshots behave), and renders at your window's resolution.
+Extra settings in `[video]`: `windowed=1`, `msaa=1/2/4/8`, `anisotropy=16`,
+`vsync=0/1`, `no_fog=1`. `gfx.h` is the backend interface, so another backend
+(GLES/Vulkan for Android) can sit behind the same code.
+
 Dev settings (`[debug]`): `remote_pad=1` lets tools press pad buttons through
 shared memory (`tools\dev\drive.ps1` uses it to play the game for screenshot
 tests), `census=1` logs what every frame draws, per ordering-table bucket.
@@ -61,6 +72,9 @@ tests), `census=1` logs what every frame draws, per ordering-table bucket.
 
 - `src/mml.c` entry point, config, anamorphic widescreen, timing, intro bypass
 - `src/display.c` native widescreen: wide mode/viewport/clear rect + per-primitive placement in DrawPrimitive
+- `src/ddshim.c` DirectDraw 4 / Direct3D 3 implementation (renderer=mml)
+- `src/gfx.h`, `src/gfx_d3d11.c`, `shaders/game.hlsl` rendering backend interface + Direct3D 11 backend
+- `src/apicensus.c` dev tool: counts every DirectDraw/Direct3D call the game makes
 - `src/packets.c` which display-list packet and bucket is being drawn (walker hooks, HUD sprite tags, deferred draws) + the census
 - `src/controls.c` orbit camera, camera-relative movement, aim, dodge, button remap
 - `src/toast.c` the ORBIT ON/OFF indicator, drawn into the game's own HUD list
