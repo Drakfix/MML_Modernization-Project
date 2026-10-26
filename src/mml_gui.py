@@ -94,7 +94,12 @@ LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
 DEFAULTS = {"renderer": "mml", "window": "fullscreen",
             "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
-            "lod": "full", "fps": "60"}
+            "lod": "full", "fps": "60", "reticle": "FFD840"}
+
+# lock-on reticle colours offered in the launcher (any RRGGBB works in mml.ini)
+RETICLE_PRESETS = [("Yellow", "FFD840"), ("Orange", "FF9A30"), ("Red", "FF4848"), ("Pink", "FF70C8"),
+                   ("Purple", "B47CFF"), ("Blue", "4FA2FF"), ("Cyan", "40E0E8"), ("Green", "5EE070"),
+                   ("White", "FFFFFF")]
 
 
 def load_settings():
@@ -148,7 +153,8 @@ def start_game(s):
     os.makedirs(os.path.dirname(log), exist_ok=True)
     with open(log, "a", encoding="utf-8") as f:
         f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} v{VERSION} width {width} {json.dumps(s)}\n")
-    return subprocess.Popen([os.path.join(GAME_DIR, "MEGAMAN.EXE")], cwd=GAME_DIR,
+    exe = os.environ.get("MML_EXE", "MEGAMAN.EXE")   # dev trees test other builds
+    return subprocess.Popen([os.path.join(GAME_DIR, exe)], cwd=GAME_DIR,
                             env=clean_child_env())
 
 
@@ -246,6 +252,11 @@ def merge_ini(path, values, header=""):
         f.write("\n".join(out).rstrip("\n") + "\n")
 
 
+def reticle_hex(s):
+    v = str(s.get("reticle", "")).lstrip("#").upper()
+    return v if len(v) == 6 and all(c in "0123456789ABCDEF" for c in v) else DEFAULTS["reticle"]
+
+
 def write_mml_ini(s, width):
     """Settings for mml.dll, merged into the existing file so hand-edited keys survive."""
     aa = {"off": 1, "msaa4x": 4, "msaa8x": 8}.get(s["aa"], 1)
@@ -267,7 +278,7 @@ def write_mml_ini(s, width):
             "lod": s["lod"],
             "interp": 1 if s["fps"] == "60" else 0,
         },
-        "controls": {"mode": s["controls"]},
+        "controls": {"mode": s["controls"], "reticle_color": reticle_hex(s)},
         "general": {"intro": s["intro"]},
     }, header="; Mega Man Legends Modernization - settings, read by mml.dll when the game starts.\n"
               "; The launcher updates the keys it manages and leaves everything else alone.\n")
@@ -377,6 +388,7 @@ class App:
             Segmented(card, self.settings, key, choices,
                       on_change=lambda: save_settings(self.settings)).pack(
                 anchor="w", padx=10, pady=(1, 6))
+            return card
 
         option("Renderer", "renderer",
                [("Modern (Direct3D 11)", "mml"), ("Compatibility", "ddrawcompat")],
@@ -389,9 +401,10 @@ class App:
         pair3.pack(fill="x", pady=2)
         option("Aspect ratio", "aspect", [("16:9 Wide", "16:9"), ("4:3 Classic", "4:3")], row=pair3, side="left")
         option("Frame rate", "fps", [("60 fps", "60"), ("30 fps", "30")], row=pair3, side="right")
-        option("Controls", "controls",
-               [("Modern twin-stick", "modern"), ("Vanilla (1997)", "vanilla")],
-               "LT aim · RT shoot · X dodge · F5 orbit")
+        ctl = option("Controls", "controls",
+                     [("Modern twin-stick", "modern"), ("Vanilla (1997)", "vanilla")],
+                     "LT aim · RT shoot · X dodge · F5 orbit")
+        self.reticle_swatch(ctl)
         option("Intro video", "intro",
                [("Play (any button skips)", "play"), ("Skip entirely", "skip")])
         option("Texture filter", "texfilter",
@@ -432,6 +445,63 @@ class App:
                                        font=("Segoe UI", 9), fill=DIM, text="")
 
         self.refresh_status()
+
+    def reticle_swatch(self, card):
+        """Lock-on reticle colour: a swatch at the right of the Controls card that
+        opens a small picker (presets + the Windows colour dialog)."""
+        box = tk.Frame(card, bg=CARD, cursor="hand2")
+        box.place(relx=1.0, rely=1.0, x=-10, y=-7, anchor="se")
+        lbl = tk.Label(box, text="Lock-on", bg=CARD, fg=DIM, font=("Segoe UI", 9), cursor="hand2")
+        lbl.pack(side="left", padx=(0, 6))
+        self.ret_sw = tk.Label(box, width=3, bg="#" + reticle_hex(self.settings), cursor="hand2",
+                               highlightthickness=1, highlightbackground=DIM, bd=0)
+        self.ret_sw.pack(side="left", ipady=1)
+        for w in (box, lbl, self.ret_sw):
+            w.bind("<Button-1>", lambda e: self.pick_reticle())
+
+    def set_reticle(self, hexcol, win=None):
+        self.settings["reticle"] = hexcol.lstrip("#").upper()
+        save_settings(self.settings)
+        self.ret_sw.configure(bg="#" + reticle_hex(self.settings))
+        if win:
+            win.destroy()
+
+    def pick_reticle(self):
+        win = tk.Toplevel(self.root, bg=CARD)
+        win.title("Lock-on reticle")
+        win.resizable(False, False)
+        win.transient(self.root)
+        try:
+            win.iconbitmap(self.res_path("mml.ico"))
+        except Exception:
+            pass
+        x = self.ret_sw.winfo_rootx() - 300
+        y = self.ret_sw.winfo_rooty() + 24
+        win.geometry(f"+{max(x, 0)}+{y}")
+        tk.Label(win, text="Lock-on reticle colour", bg=CARD, fg=TEXT,
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=12, pady=(10, 6))
+        row = tk.Frame(win, bg=CARD)
+        row.pack(padx=12)
+        cur = reticle_hex(self.settings)
+        for name, hexcol in RETICLE_PRESETS:
+            sw = tk.Label(row, width=3, height=1, bg="#" + hexcol, cursor="hand2", bd=0,
+                          highlightthickness=2, highlightbackground=ACCENT if hexcol == cur else CARD)
+            sw.pack(side="left", padx=3, ipady=4)
+            sw.bind("<Button-1>", lambda e, h=hexcol: self.set_reticle(h, win))
+
+        def custom():
+            from tkinter import colorchooser
+            rgb, hexcol = colorchooser.askcolor(color="#" + reticle_hex(self.settings), parent=win,
+                                                title="Lock-on reticle colour")
+            if hexcol:
+                self.set_reticle(hexcol, win)
+        b = tk.Label(win, text="Custom colour…", bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9),
+                     padx=10, pady=4, cursor="hand2")
+        b.pack(anchor="w", padx=12, pady=(8, 12))
+        b.bind("<Button-1>", lambda e: custom())
+        b.bind("<Enter>", lambda e: b.configure(bg=SEG_HOVER))
+        b.bind("<Leave>", lambda e: b.configure(bg=SEG_OFF))
+        win.grab_set()
 
     @staticmethod
     def centered_pos():

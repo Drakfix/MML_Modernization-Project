@@ -56,6 +56,9 @@
 #define G_FN_PLAYER_MOVE        0x4B53D3u   /* runs each frame while the player has control */
 #define G_FN_PLAYER_UPDATE      0x4A9A31u   /* player_update(EAX = object): pre + state handlers */
 #define G_FN_PLAYER_APPLY_VEL   0x4B527Bu   /* player_apply_velocity(EAX p, DX fwd, BX vert, CX side) along facing - +0x116 */
+#define G_SUPPORT_OBJ           0x5F8A58u   /* second player-like object (input from 0x572D32) */
+#define G_TARGET                0x5505E8u   /* object*: nearest enemy, picked every frame (target_and_hits_update 0x4E0405) */
+#define G_TARGET_FLAGS          0x559A40u   /* bit 1: targeting allowed (state 14 checks it) */
 #define G_FN_PAD_POLL           0x4F8E15u   /* pad_poll: joystick half, then keyboard half */
 #define G_SITE_JOY_GATE         0x4F8E26u   /* pad_poll: cmp dword [G_JOY_DEVICE],0 */
 #define G_SITE_PAD_POLL_KB      0x4F8F22u   /* pad_poll: start of the keyboard half */

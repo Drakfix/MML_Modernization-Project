@@ -32,6 +32,7 @@
 #include "mml.h"
 #include "gfx.h"
 #include "hook.h"
+#include "lockon.h"
 #include "log.h"
 #include "packets.h"
 
@@ -1250,6 +1251,20 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
     }
     ensure_gfx(d->dd);
     device_state(d, &s);
+    if (g_cur_pkt && lockon_owns((const void *)g_cur_pkt) && n <= 8) {
+        /* lock-on reticle: drawn as opaque flat shapes so the game's blend mode
+         * can't touch it, made see-through here */
+        static gfx_vertex rv[8];
+        DWORD k;
+        for (k = 0; k < n; k++) {
+            rv[k] = ((const gfx_vertex *)verts)[k];
+            rv[k].diffuse = (rv[k].diffuse & 0x00FFFFFF) | (lockon_alpha() << 24);
+        }
+        verts = rv;
+        s.blend = 1;
+        s.src_blend = D3DBLEND_SRCALPHA;
+        s.dst_blend = D3DBLEND_INVSRCALPHA;
+    }
     prepare_texture(d);
     rec_state(&s);
     if (g_fog_debug)

@@ -10,6 +10,9 @@ void controls_install(int modern, int intro_pad_skip);
 /* Dev aid: accept injected pad input from Local\MML_DEBUG_PAD ([debug] remote_pad=1). */
 void controls_debug_pad(void);
 
+/* Dev aid: lock-on always targets the support object ([debug] lock_test=1). */
+void controls_debug_lock_test(void);
+
 /* The modern-controls rewrite of what the game sees from the pad (D-pad ->
  * left stick, RT shoot, LT aim, dodge injection, aim stick swap, forward
  * injection). Runs once per pad poll, whichever backend read the pad. */

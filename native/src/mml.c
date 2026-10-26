@@ -22,6 +22,7 @@
 #include "apicensus.h"
 #include "controls.h"
 #include "input.h"
+#include "lockon.h"
 #include "ddshim.h"
 #include "display.h"
 #include "game.h"
@@ -253,6 +254,7 @@ static void on_frame(regs_t *r)
     ddshim_frame();
     display_frame();
     toast_frame();
+    lockon_frame();
     terrain_frame();
     fog_frame();
 }
@@ -349,6 +351,13 @@ static void init(void)
     intro_plays = install_intro();
     ini_string("controls", "mode", "modern", controls, sizeof controls);
     controls_install(_stricmp(controls, "vanilla") != 0, intro_plays);
+    lockon_install();
+    {
+        char c[16];
+        ini_string("controls", "reticle_color", "", c, sizeof c);
+        if (strlen(c) == 6 && strspn(c, "0123456789abcdefABCDEF") == 6)
+            lockon_set_color((unsigned)strtoul(c, NULL, 16));
+    }
     controls_tune(GetPrivateProfileIntA("controls", "roll_speed", 0, g_ini),
                   GetPrivateProfileIntA("controls", "roll_anim", -1, g_ini),
                   GetPrivateProfileIntA("controls", "walk_tilt", -1, g_ini),
@@ -356,6 +365,8 @@ static void init(void)
                   GetPrivateProfileIntA("controls", "run_min", -1, g_ini));
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, g_ini))
         controls_debug_pad();
+    if (GetPrivateProfileIntA("debug", "lock_test", 0, g_ini))
+        controls_debug_lock_test();
     {
         char in[16];
         ini_string("controls", "input", "sdl", in, sizeof in);

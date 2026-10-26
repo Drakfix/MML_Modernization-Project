@@ -31,6 +31,7 @@
 #include "hook.h"
 #include "iat.h"
 #include "input.h"
+#include "lockon.h"
 #include "log.h"
 #include "toast.h"
 
@@ -60,6 +61,10 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define RUN_MIN_PCT      50      /* run speed/animation right past the walk range */
 #define ROLL_BUFFER      12      /* player updates a roll press waits for a chance to start */
 #define LOOK_ORBIT_MAX   100     /* the camera orbits up to this pitch; looking further up tilts in place */
+#define LOCK_CAM_EASE    0.12    /* per 1/60 s: how fast the camera swings behind Mega Man on lock-on */
+#define LOCK_STEP_PCT    200     /* walk / backstep speed while locked on, % of stock */
+#define LOCK_SIDESTEP_PCT 500    /* sidestep while locked on (stock 0x20 is 1/16 of a run) */
+#define LOCK_TURN_STEP   0x100   /* max facing turn per update toward the target */
 #define CAM_STEP         24      /* collision probe spacing along the camera line (world units) */
 #define CAM_MARGIN       48      /* keep the camera this far in front of a hit */
 #define CAM_MIN_DIST     80
@@ -83,6 +88,8 @@ static int g_modern;
 static volatile LONG cam_active, cam_suppress;
 static volatile LONG move_active, move_fwd, move_walk, inject_fwd;
 static volatile LONG dodge_req;
+static volatile LONG lock_active, lock_free, lock_face;   /* lock_free: aim still held after the lock was lost */
+static int g_lock_test;   /* Z-targeting: locked on, facing toward the target */
 static volatile LONG frame_tick;
 static volatile LONG move_gate;
 
@@ -104,7 +111,7 @@ static int talk_hidden, walk_injected;
 
 /* input state (this was the Python thread) */
 static double st_yaw, st_pitch;
-static int st_allowed = 1;
+static int st_allowed = 1, flick_armed = 1;
 static double cam_dist_cur = -1;
 static int32_t g_view_target[4];
 static int st_active, prev_key, prev_click;
@@ -149,6 +156,13 @@ static DWORD debug_pad_apply(DWORD idx, xstate_t *s, DWORD r)
     if (r != 0)
         memset(s, 0, sizeof *s);
     return controls_debug_overlay(&s->pad, r == 0) ? 0 : r;
+}
+
+void controls_debug_lock_test(void)
+{
+    g_lock_test = 1;
+    lockon_test_reticle(1);
+    log_printf("debug: lock-on test target = support object %08X", G_SUPPORT_OBJ);
 }
 
 void controls_debug_pad(void)
@@ -217,6 +231,13 @@ static int orbit_allowed(void)
     /* +4 rig active, +5 mode 0 (follow), +6 no script, +1 follow not suspended
      * (talking sets it and blends the camera to frame both speakers) */
     return RIG8(4) == 1 && RIG8(5) == 0 && RIG8(6) == 0 && RIG8(1) == 0 && !(P8(PL_INPUT_FLAGS) & 0x60);
+}
+
+/* facing that looks from Mega Man at a world point (same as FUN_004DDE21) */
+static int face_toward(int x, int z)
+{
+    double dx = (double)x - S16(0x14), dz = (double)z - S16(0x18);
+    return (iround(atan2(dx, dz) * 2048.0 / PI) + 0x800) & 0xfff;
 }
 
 /* world_line_collision 0x42CE61 (watcall EAX p1, EDX p2, EBX p3, ECX p4):
@@ -319,9 +340,49 @@ static void input_update(void)
         st_allowed = allowed;
     }
 
-    /* aiming hands the camera back to the game; keep tracking it so release doesn't snap */
+    /* aiming with a target = lock-on (Z-targeting): Mega Man faces the target
+     * and moves freely, the camera swings behind him; without a target, aiming
+     * hands the camera back to the game (stock aim, rooted) and we keep
+     * tracking it so release doesn't snap */
     aiming = (p.wButtons & BTN_LB) || p.bLeftTrigger > TRIG_ON;
-    if (st_active && aiming) {
+    {
+        int hold = st_active && st_allowed && aiming, was = lock_active;
+        /* a lock starts only where the game allows targeting (combat HUD up);
+         * once it happened, the hold stays a lock-on hold until aim is released */
+        lockon_want(hold && (lockon_had() || g_lock_test ||
+                             (*(volatile uint8_t *)(uintptr_t)G_TARGET_FLAGS & 2)));
+        lock_active = hold && (lockon_locked() || g_lock_test);
+        lock_free = hold && !lock_active && lockon_had();
+        if (lock_active) {
+            int tx, ty, tz;
+            double want, d;
+            if (g_lock_test) {
+                tx = *(volatile int16_t *)(uintptr_t)(G_SUPPORT_OBJ + 0x14);
+                tz = *(volatile int16_t *)(uintptr_t)(G_SUPPORT_OBJ + 0x18);
+            } else {
+                lockon_pos(&tx, &ty, &tz);
+            }
+            lock_face = face_toward(tx, tz);
+            want = (double)((lock_face - FACE_OFFSET) & 0xfff);
+            d = fmod(want - fmod(st_yaw, 4096.0) + 6144.0, 4096.0) - 2048.0;
+            st_yaw = fmod(st_yaw + d * (1.0 - pow(1.0 - LOCK_CAM_EASE, ticks)) + 65536.0, 65536.0);
+            /* right stick flick: next enemy to that side (re-arms near centre) */
+            n = stick_norm(p.sThumbRX);
+            if (flick_armed && (n > 0.7 || n < -0.7)) {
+                lockon_switch(n > 0 ? 1 : -1);
+                flick_armed = 0;
+            } else if (n > -0.3 && n < 0.3) {
+                flick_armed = 1;
+            }
+        }
+        if (lock_active && !was)
+            log_printf("lock-on: on");
+    }
+    if (lock_active) {
+        n = stick_norm(p.sThumbRY);
+        if (n != 0)
+            st_pitch = clampd(st_pitch + PITCH_SPEED * n * ticks, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+    } else if (st_active && aiming && !lock_free) {
         st_yaw = RD16(G_CAM_YAW);
         st_pitch = clampd(signed12(RD16(G_CAM_PITCH)), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
     } else {
@@ -337,7 +398,7 @@ static void input_update(void)
     }
 
     /* camera-relative movement on the left stick */
-    if (st_active && st_allowed && !aiming) {
+    if (st_active && st_allowed && (!aiming || lock_active || lock_free)) {
         double mag = sqrt((double)p.sThumbLX * p.sThumbLX + (double)p.sThumbLY * p.sThumbLY);
         if (mag > STICK_DZ) {
             double theta = atan2((double)p.sThumbLX, (double)p.sThumbLY);   /* 0 = up, + = right */
@@ -353,7 +414,7 @@ static void input_update(void)
     move_active = moving;
     cam_yaw = (int)st_yaw & 0xffff;
     cam_active = st_active && st_allowed;
-    cam_suppress = cam_active && aiming;
+    cam_suppress = cam_active && aiming && !lock_active && !lock_free;
 }
 
 /* ---- per-frame hook: cam_apply_angles entry ---- */
@@ -400,7 +461,14 @@ static void on_cam_apply(regs_t *r)
     last_pz = pz;
 
     gate = move_gate;
-    if (move_active && !roll_latch && (gate > 0 || pos_move_credit > 0))
+    if (lock_active && !roll_latch && !(P8(PL_INPUT_FLAGS) & 0x60)) {
+        int cur = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
+        int d = ((lock_face - cur + 2048) & 0xfff) - 2048;
+        if (d > LOCK_TURN_STEP) d = LOCK_TURN_STEP;
+        if (d < -LOCK_TURN_STEP) d = -LOCK_TURN_STEP;
+        if (d)
+            write_facing(cur + d);
+    } else if (move_active && !roll_latch && (gate > 0 || pos_move_credit > 0))
         write_facing(move_face);
     if (gate > 0)
         move_gate = gate - 1;
@@ -568,18 +636,23 @@ static void roll_tune(void)
  * (an extra hold tick now and then, the game's own per-tick blend does the rest). */
 static void locomotion_tune(void)
 {
-    loco_pct = 100;
     int st = P8(PL_STATE), id = P8(PL_ANIM_ID), pct;
-    double n = move_fwd / 32767.0, w = g_walk_frac;
-    if (st == 1 && P8(PL_SUBSTATE) >= 1 && P8(PL_VARIANT) == 0) {
-        double t = w > 0 ? n / w : 1;
+    double n = move_fwd / 32767.0, w = g_walk_frac, t;
+    loco_pct = 100;
+    if ((st == 1 && P8(PL_SUBSTATE) >= 1 && (P8(PL_VARIANT) == 0 || lock_active)) ||
+        (st == 6 && lock_active)) {
+        t = w > 0 ? n / w : 1;
         if (t > 1) t = 1;
         pct = g_walk_min + (int)((100 - g_walk_min) * t);
+        /* locked on, the walk-mode steps are how Mega Man moves while facing
+         * the target; stock they crawl (the sidestep at 1/16 of a run) */
+        if (lock_active)
+            pct = pct * (st == 6 ? LOCK_SIDESTEP_PCT : LOCK_STEP_PCT) / 100;
         loco_pct = pct;
-        if (id != 0x0C)
+        if (id < 0x0C || id > 0x0F)
             return;
-    } else if (st == 2 && P8(PL_SUBSTATE) >= 2 && P8(PL_RUN_DIR) == 0) {
-        double t = w < 1 ? (n - w) / (1 - w) : 1;
+    } else if (st == 2 && P8(PL_SUBSTATE) >= 2 && (P8(PL_RUN_DIR) == 0 || lock_active)) {
+        t = w < 1 ? (n - w) / (1 - w) : 1;
         if (t < 0) t = 0;
         if (t > 1) t = 1;
         pct = g_run_min + (int)((100 - g_run_min) * t);
@@ -590,11 +663,18 @@ static void locomotion_tune(void)
         loco_anim_acc = 0;
         return;
     }
+    /* animation rate follows the speed: slower = extra hold ticks, faster =
+     * shaved ones (never to 0, anim_tick steps on its own) */
     loco_anim_acc += 100 - pct;
     while (loco_anim_acc >= 100) {
         loco_anim_acc -= 100;
         if (P8(PL_ANIM_HOLD) < 0x7F)
             P8(PL_ANIM_HOLD)++;
+    }
+    while (loco_anim_acc <= -100) {
+        loco_anim_acc += 100;
+        if (P8(PL_ANIM_HOLD) > 1)
+            P8(PL_ANIM_HOLD)--;
     }
 }
 
@@ -636,7 +716,10 @@ static void on_player_update(regs_t *r)
     if (walk_injected && !(*(volatile uint16_t *)G_PAD_HELD & P16(PL_MASK_WALK)))
         P16(PL_HELD) &= (uint16_t)~P16(PL_MASK_WALK);   /* in case held wasn't refreshed yet */
     walk_injected = 0;
-    if (move_walk && move_active && inject_fwd && !roll_ours && !(P8(PL_INPUT_FLAGS) & 0x60)) {
+    /* locked on, a light tilt walks too (sidestep / backstep facing the target),
+     * but only from standing or walking: walk + strafe while running turns in place */
+    if (move_walk && move_active && inject_fwd && !roll_ours && !(P8(PL_INPUT_FLAGS) & 0x60) &&
+        (!lock_active || P8(PL_STATE) == 0 || P8(PL_STATE) == 1 || P8(PL_STATE) == 6)) {
         uint16_t walk = P16(PL_MASK_WALK);
         walk_injected = 1;
         P16(PL_HELD) |= walk;
@@ -656,11 +739,21 @@ static void on_player_update(regs_t *r)
 static void on_apply_velocity(regs_t *r)
 {
     int st;
-    if (r->eax != G_PLAYER || loco_pct == 100)
+    if (r->eax != G_PLAYER)
         return;
     st = P8(PL_STATE);
+    /* locked on: the run state only knows 4 directions; steer the travel to
+     * the exact stick heading (travel = facing - +0x116) */
+    if (lock_active && move_active && st == 2) {
+        int f = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
+        S16(PL_MOVE_ANGLE) = (int16_t)(((f - move_face + 2048) & 0xfff) - 2048);
+    }
+    if (loco_pct == 100)
+        return;
     if (st == 1 || st == 2)
         r->edx = (uint32_t)(int32_t)((int16_t)r->edx * loco_pct / 100);
+    else if (st == 6)   /* sidestep moves on the side axis */
+        r->ecx = (uint32_t)(int32_t)((int16_t)r->ecx * loco_pct / 100);
 }
 
 static void on_cam_set_b(regs_t *r)
@@ -678,6 +771,8 @@ static void on_player_move(regs_t *r)
 static void on_player_turn_ret(regs_t *r)
 {
     (void)r;
+    if (lock_active)
+        return;
     if (move_active && !roll_latch && (move_gate > 0 || pos_move_credit > 0))
         write_facing(move_face);
 }
@@ -721,10 +816,10 @@ void controls_filter(pad_t *p)
     if (phys_rt)
         out |= BTN_X;
     aiming = phys_lt || (p->wButtons & BTN_LB);
-    if (aiming)
+    if (aiming && !lock_active && !lock_free)   /* locked on: no stock aim state, it roots Mega Man */
         out |= BTN_LB;
 
-    if (phys_x && !prev_x && !aiming) {
+    if (phys_x && !prev_x && (!aiming || lock_active || lock_free)) {
         dodge_req = 1;
         req_age = 0;
     }
@@ -737,7 +832,22 @@ void controls_filter(pad_t *p)
     }
     p->wButtons = out;
 
-    if (aiming) {
+    if (lock_active) {
+        /* the stick picks the game's run direction relative to the facing
+         * (forward / strafe / back); the exact heading is set at apply time */
+        p->sThumbLX = p->sThumbLY = 0;
+        if (fresh && move_active && inject_fwd) {
+            int rel = ((move_face - lock_face + 2048) & 0xfff) - 2048;
+            if (rel >= -512 && rel <= 512)
+                p->sThumbLY = 32767;
+            else if (rel > 512 && rel <= 1536)
+                p->sThumbLX = 32767;
+            else if (rel < -512 && rel >= -1536)
+                p->sThumbLX = -32767;
+            else
+                p->sThumbLY = -32767;
+        }
+    } else if (aiming && !lock_free) {
         SHORT lx = p->sThumbLX, ly = p->sThumbLY;
         p->sThumbLX = p->sThumbRX;
         p->sThumbLY = p->sThumbRY;

@@ -48,6 +48,9 @@ included, without emulation.
   - Orbit camera hands control back to the game for conversations and cutscenes,
     stops at walls instead of going through them, and can look up further
     without sinking into the floor (done)
+  - Z-targeting: hold aim with an enemy around to lock on and move freely while
+    facing it, flick the right stick to switch targets, with a reticle whose
+    colour you can pick in the launcher (done)
 - Mouse + keyboard with the orbit camera
 - Fix the known issues
 - Better presentation overall
