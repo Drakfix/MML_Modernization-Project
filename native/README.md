@@ -5,10 +5,20 @@ import (`mml.dll`), so Windows loads the DLL before the game starts and it
 patches the game in place. No Python, no Frida, no launcher process, and it
 should run under Wine/Proton too.
 
-Ported so far: widescreen projection, the GetTickCount/frame-limiter timing fix,
-intro skip (keyboard, gamepad or bypass) and all the modern controls with the
-orbit indicator. Not ported yet: the HUD un-stretch. That one is getting
-replaced by a proper renderer backend instead of being copied over.
+Ported so far: widescreen, the GetTickCount/frame-limiter timing fix, intro
+skip (keyboard, gamepad or bypass) and all the modern controls with the orbit
+indicator.
+
+Widescreen has two modes:
+
+- `native` renders on a real wide surface (854x480 on 16:9). Every draw goes
+  through one Direct3D call, so each primitive gets placed on its way to the
+  GPU: the 3D world just gets more width, the HUD gauges go to the screen edges,
+  backgrounds made for 4:3 get stretched, menus and dialogue stay centered at
+  their real proportions. Nothing gets squeezed. Needs DDrawCompat to allow the
+  mode (`SupportedResolutions` has to list it).
+- `anamorphic` is the old way: render 4:3 with a narrower projection and let
+  DDrawCompat stretch it. The HUD stays stretched in this mode.
 
 ## Build
 
@@ -30,6 +40,8 @@ Output is `native\build\mml.dll` (32-bit, static runtime, no redistributables).
 ```
 [video]
 aspect=16:9          ; or 4:3
+mode=native          ; or anamorphic
+hud_edges=1          ; native: push the life/weapon gauges to the screen edges
 closer_factor=0.859375
 
 [controls]
@@ -41,9 +53,15 @@ intro=play           ; or skip
 
 What it did gets written to `mml.log`.
 
+Dev settings (`[debug]`): `remote_pad=1` lets tools press pad buttons through
+shared memory (`tools\dev\drive.ps1` uses it to play the game for screenshot
+tests), `census=1` logs what every frame draws, per ordering-table bucket.
+
 ## Layout
 
-- `src/mml.c` entry point, config, widescreen, timing, intro bypass
+- `src/mml.c` entry point, config, anamorphic widescreen, timing, intro bypass
+- `src/display.c` native widescreen: wide mode/viewport/clear rect + per-primitive placement in DrawPrimitive
+- `src/packets.c` which display-list packet and bucket is being drawn (walker hooks, HUD sprite tags, deferred draws) + the census
 - `src/controls.c` orbit camera, camera-relative movement, aim, dodge, button remap
 - `src/toast.c` the ORBIT ON/OFF indicator, drawn into the game's own HUD list
 - `src/hook.c` mid-function hooks (jump to a stub that saves registers, calls C, replays the stolen bytes)

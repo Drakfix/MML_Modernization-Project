@@ -18,10 +18,12 @@
 #include <string.h>
 
 #include "controls.h"
+#include "display.h"
 #include "game.h"
 #include "hook.h"
 #include "log.h"
 #include "mml.h"
+#include "packets.h"
 #include "toast.h"
 
 #define MML_NATIVE_BUILD "native-m2 controls"
@@ -53,10 +55,11 @@ static void ini_string(const char *sec, const char *key, const char *def, char *
 static float g_closer = 0.859375f;
 static float g_ratio = 1.0f;
 static int g_widescreen_on;
+static int g_native_wide;   /* true 16:9 surface instead of the anamorphic squeeze */
 
 float mml_hud_ratio(void)
 {
-    return g_widescreen_on ? g_ratio : 1.0f;
+    return (g_widescreen_on && !g_native_wide) ? g_ratio : 1.0f;
 }
 static volatile float g_shadow_h_x;
 static int g_h_set_logs;
@@ -92,7 +95,8 @@ static void install_widescreen(void)
         log_printf("widescreen: no screen size, skipped");
         return;
     }
-    g_ratio = (640.0f / 480.0f) / ((float)sw / (float)sh);
+    /* native mode draws onto a real wide surface, so X isn't squeezed */
+    g_ratio = g_native_wide ? 1.0f : (640.0f / 480.0f) / ((float)sw / (float)sh);
 
     /* All five sites must look right before we touch any of them. */
     for (i = 0; i < sizeof x_sites / sizeof x_sites[0]; i++) {
@@ -114,7 +118,8 @@ static void install_widescreen(void)
     for (i = 0; i < sizeof x_sites / sizeof x_sites[0]; i++)
         mem_write(x_sites[i] + 2, &shadow, 4);
     g_widescreen_on = 1;
-    log_printf("widescreen: ON (screen %dx%d, ratio %.4f, closer %.6f)", sw, sh, g_ratio, g_closer);
+    log_printf("widescreen: ON, %s (screen %dx%d, ratio %.4f, closer %.6f)",
+               g_native_wide ? "native surface" : "anamorphic", sw, sh, g_ratio, g_closer);
 }
 
 /* ---- timing ----
@@ -144,9 +149,16 @@ static void limiter_frame(void);
 static void on_frame(regs_t *r)
 {
     (void)r;
-    if (++g_frames == 300)
-        log_printf("frame hook alive: 300 frames, limiter threshold %.1f ms", *(float *)G_FRAME_LIMITER_TH);
+    if (++g_frames == 300) {
+        RECT rc = { 0 };
+        HWND w = GetForegroundWindow();
+        if (w)
+            GetClientRect(w, &rc);
+        log_printf("frame hook alive: 300 frames, limiter threshold %.1f ms, gfx path flags %08X, fg client %ldx%ld",
+                   *(float *)G_FRAME_LIMITER_TH, *(unsigned *)0x88787Cu, rc.right, rc.bottom);
+    }
     limiter_frame();
+    display_frame();
     toast_frame();
 }
 
@@ -210,7 +222,7 @@ static int install_intro(void)
 
 static void init(void)
 {
-    char aspect[16], controls[16];
+    char aspect[16], controls[16], mode[16];
     char *slash;
     int intro_plays;
 
@@ -227,13 +239,22 @@ static void init(void)
     g_closer = ini_float("video", "closer_factor", g_closer);
 
     install_timing();
-    if (strcmp(aspect, "4:3") != 0)
+    ini_string("video", "mode", "anamorphic", mode, sizeof mode);
+    if (strcmp(aspect, "4:3") != 0) {
+        if (_stricmp(mode, "native") == 0)
+            g_native_wide = display_install(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+                                            GetPrivateProfileIntA("video", "hud_edges", 1, g_ini));
         install_widescreen();
+    }
     else
         log_printf("widescreen: 4:3 selected, vanilla projection");
     intro_plays = install_intro();
     ini_string("controls", "mode", "modern", controls, sizeof controls);
     controls_install(_stricmp(controls, "vanilla") != 0, intro_plays);
+    if (GetPrivateProfileIntA("debug", "remote_pad", 0, g_ini))
+        controls_debug_pad();
+    if (GetPrivateProfileIntA("debug", "census", 0, g_ini))
+        census_enable();
     log_printf("init done");
 }
 

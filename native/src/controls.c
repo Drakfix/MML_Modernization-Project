@@ -101,6 +101,46 @@ static LARGE_INTEGER qpc_last, qpc_freq;
 
 /* XInput */
 static xgs_t g_xgs_real, g_xgs_ex_real, g_xgs_own;
+
+/* Debug remote pad: a named shared-memory block other tools can write to
+ * (Local\MML_DEBUG_PAD). While `active`, its buttons are OR'd into pad 0
+ * and any non-zero stick value replaces the physical one. Only created when
+ * mml.ini has [debug] remote_pad=1. */
+typedef struct {
+    volatile LONG active;
+    volatile WORD buttons;
+    volatile BYTE lt, rt;
+    volatile SHORT lx, ly, rx, ry;
+} debug_pad_t;
+static debug_pad_t *g_dbg;
+
+/* returns the (possibly faked) XInput result */
+static DWORD debug_pad_apply(DWORD idx, xstate_t *s, DWORD r)
+{
+    if (!g_dbg || !g_dbg->active || idx != 0 || !s)
+        return r;
+    if (r != 0) {   /* no physical pad (or it went to sleep): present a neutral one */
+        memset(s, 0, sizeof *s);
+        r = 0;
+    }
+    s->pad.wButtons |= g_dbg->buttons;
+    if (g_dbg->lt) s->pad.bLeftTrigger = g_dbg->lt;
+    if (g_dbg->rt) s->pad.bRightTrigger = g_dbg->rt;
+    if (g_dbg->lx) s->pad.sThumbLX = g_dbg->lx;
+    if (g_dbg->ly) s->pad.sThumbLY = g_dbg->ly;
+    if (g_dbg->rx) s->pad.sThumbRX = g_dbg->rx;
+    if (g_dbg->ry) s->pad.sThumbRY = g_dbg->ry;
+    return r;
+}
+
+void controls_debug_pad(void)
+{
+    HANDLE m = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(debug_pad_t),
+                                  "Local\\MML_DEBUG_PAD");
+    if (m)
+        g_dbg = (debug_pad_t *)MapViewOfFile(m, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(debug_pad_t));
+    log_printf("debug: remote pad %s", g_dbg ? "listening (Local\\MML_DEBUG_PAD)" : "failed");
+}
 static FARPROC(WINAPI *g_real_gpa)(HMODULE, LPCSTR);
 
 static int iround(double v) { return (int)floor(v + 0.5); }
@@ -132,7 +172,7 @@ static int pad_read(pad_t *out)
     xstate_t s;
     xgs_t f = g_xgs_real ? g_xgs_real : own_xinput();
     memset(out, 0, sizeof *out);
-    if (!f || f(0, &s) != 0)
+    if (!f || debug_pad_apply(0, &s, f(0, &s)) != 0)
         return 0;
     *out = s.pad;
     return 1;
@@ -439,7 +479,7 @@ static void remap(xstate_t *s)
 
 static DWORD WINAPI hooked_xgs(DWORD idx, xstate_t *s)
 {
-    DWORD r = g_xgs_real(idx, s);
+    DWORD r = debug_pad_apply(idx, s, g_xgs_real(idx, s));
     if (r == 0 && s)
         remap(s);
     return r;
@@ -447,7 +487,7 @@ static DWORD WINAPI hooked_xgs(DWORD idx, xstate_t *s)
 
 static DWORD WINAPI hooked_xgs_ex(DWORD idx, xstate_t *s)
 {
-    DWORD r = g_xgs_ex_real(idx, s);
+    DWORD r = debug_pad_apply(idx, s, g_xgs_ex_real(idx, s));
     if (r == 0 && s)
         remap(s);
     return r;

@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "display.h"
 #include "game.h"
 #include "mml.h"
 #include "toast.h"
@@ -22,7 +23,8 @@
 #define TOAST_DUR 80          /* frames visible (~2.7 s at 30 fps) */
 #define TOAST_FADE 12         /* frames of slide in / slide out */
 #define TOAST_SLIDE 34        /* px travelled off the top */
-#define TOAST_X (-2)
+#define TOAST_X (-2)          /* anamorphic: tuned against the squeezed HUD */
+#define TOAST_X_NATIVE 6      /* native widescreen: anchored to the real screen edge */
 #define TOAST_Y 16
 #define DOT_W 9
 #define DOT_H 9
@@ -61,6 +63,12 @@ static int tile_of(char c)
     return 0x0a;
 }
 
+int toast_owns(const void *pkt)
+{
+    const uint8_t *p = (const uint8_t *)pkt;
+    return p == g_dot || (p >= g_glyph[0] && p < g_glyph[0] + sizeof g_glyph);
+}
+
 void toast_show(int on)
 {
     g_on = on ? 1 : 0;
@@ -70,6 +78,7 @@ void toast_show(int on)
 void toast_frame(void)
 {
     int left = g_frames_left, i, y, ty, cx, xl, xr;
+    int x = display_native_width() > 640 ? TOAST_X_NATIVE : TOAST_X;
     double slide = 0;
     const char *s;
     static const uint8_t w01[4] = { 0xCD, 0xCC, 0xCC, 0x3D };   /* 0.1f */
@@ -86,8 +95,8 @@ void toast_frame(void)
     g_dot[5] = g_on ? 224 : 0;
     g_dot[6] = 0;
     g_dot[7] = 0x2a;
-    xl = sqx(TOAST_X);
-    xr = sqx(TOAST_X + DOT_W);
+    xl = sqx(x);
+    xr = sqx(x + DOT_W);
     put16(g_dot, 0x08, xl); put16(g_dot, 0x0a, y);
     put16(g_dot, 0x0c, xr); put16(g_dot, 0x0e, y);
     put16(g_dot, 0x10, xl); put16(g_dot, 0x12, y + DOT_H);
@@ -98,7 +107,7 @@ void toast_frame(void)
 
     s = g_on ? "ORBIT ON" : "ORBIT OFF";
     ty = y + TXT_DY;
-    cx = TOAST_X + DOT_W + TXT_GAP;
+    cx = x + DOT_W + TXT_GAP;
     for (i = 0; s[i] && i < MAX_GLYPHS; i++) {
         uint8_t *g = g_glyph[i];
         int tc = tile_of(s[i]);
