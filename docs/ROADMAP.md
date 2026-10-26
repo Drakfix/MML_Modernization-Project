@@ -38,7 +38,9 @@ included, without emulation.
 - Distance fog options: original, light or off (done)
 - No more low-detail model swaps (LOD) popping in, without characters losing parts far
   away (done)
-- Better modern controls (next)
+- Better modern controls (in progress)
+  - Native controller support through SDL3: Xbox, PlayStation, Switch and most other
+    gamepads, no Xidi needed (done)
 - Mouse + keyboard with the orbit camera
 - Fix the known issues
 - Better presentation overall

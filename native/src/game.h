@@ -34,4 +34,12 @@
 #define G_FN_CAM_APPLY          0x42961Bu   /* cam_apply_angles: EAX pos*, EDX dist, EBX yaw, ECX -pitch */
 #define G_FN_CAM_SET_B          0x4298F6u   /* cam_set_angles_b: yaw in EDX */
 #define G_FN_PLAYER_MOVE        0x4B53D3u   /* runs each frame while the player has control */
+#define G_FN_PAD_POLL           0x4F8E15u   /* pad_poll: joystick half, then keyboard half */
+#define G_SITE_JOY_GATE         0x4F8E26u   /* pad_poll: cmp dword [G_JOY_DEVICE],0 */
+#define G_SITE_PAD_POLL_KB      0x4F8F22u   /* pad_poll: start of the keyboard half */
+#define G_JOY_DEVICE            0x551F40u   /* IDirectInputDevice* joystick (Xidi) or NULL */
+#define G_PAD_BUF_PTR           0x887A48u   /* -> pad state 0x5708B4: status, type, u16 buttons (active low) */
+#define G_PAD_MASKS             0x551F84u   /* u16[14]: game button index -> PS1 bit (Up Down Left Right Tri X Sq O L1 L2 R1 R2 Start Select) */
+#define G_JOY_BINDINGS          0x887A34u   /* {dinput button, game button}[9] */
+#define G_JOY_BINDING_COUNT     9
 #define G_SITE_PLAYER_TURN_RET  0x4B55B6u   /* player_turn epilogue: mov eax,ecx; pop edi; pop esi; ret */

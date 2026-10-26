@@ -26,29 +26,16 @@
 #include "game.h"
 #include "hook.h"
 #include "iat.h"
+#include "input.h"
 #include "log.h"
 #include "toast.h"
 
-typedef struct {
-    WORD wButtons;
-    BYTE bLeftTrigger, bRightTrigger;
-    SHORT sThumbLX, sThumbLY, sThumbRX, sThumbRY;
-} pad_t;
 typedef struct {
     DWORD dwPacketNumber;
     pad_t pad;
 } xstate_t;
 typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 
-#define BTN_DPAD_UP    0x0001
-#define BTN_DPAD_DOWN  0x0002
-#define BTN_DPAD_LEFT  0x0004
-#define BTN_DPAD_RIGHT 0x0008
-#define BTN_L3         0x0040
-#define BTN_R3         0x0080
-#define BTN_LB         0x0100
-#define BTN_A          0x1000
-#define BTN_X          0x4000
 #define TRIG_ON        40
 #define STICK_DZ       7849
 
@@ -114,23 +101,30 @@ typedef struct {
 } debug_pad_t;
 static debug_pad_t *g_dbg;
 
+int controls_debug_overlay(pad_t *p, int connected)
+{
+    if (!g_dbg || !g_dbg->active)
+        return connected;
+    if (!connected)   /* no physical pad (or it went to sleep): present a neutral one */
+        memset(p, 0, sizeof *p);
+    p->wButtons |= g_dbg->buttons;
+    if (g_dbg->lt) p->bLeftTrigger = g_dbg->lt;
+    if (g_dbg->rt) p->bRightTrigger = g_dbg->rt;
+    if (g_dbg->lx) p->sThumbLX = g_dbg->lx;
+    if (g_dbg->ly) p->sThumbLY = g_dbg->ly;
+    if (g_dbg->rx) p->sThumbRX = g_dbg->rx;
+    if (g_dbg->ry) p->sThumbRY = g_dbg->ry;
+    return 1;
+}
+
 /* returns the (possibly faked) XInput result */
 static DWORD debug_pad_apply(DWORD idx, xstate_t *s, DWORD r)
 {
-    if (!g_dbg || !g_dbg->active || idx != 0 || !s)
+    if (idx != 0 || !s)
         return r;
-    if (r != 0) {   /* no physical pad (or it went to sleep): present a neutral one */
+    if (r != 0)
         memset(s, 0, sizeof *s);
-        r = 0;
-    }
-    s->pad.wButtons |= g_dbg->buttons;
-    if (g_dbg->lt) s->pad.bLeftTrigger = g_dbg->lt;
-    if (g_dbg->rt) s->pad.bRightTrigger = g_dbg->rt;
-    if (g_dbg->lx) s->pad.sThumbLX = g_dbg->lx;
-    if (g_dbg->ly) s->pad.sThumbLY = g_dbg->ly;
-    if (g_dbg->rx) s->pad.sThumbRX = g_dbg->rx;
-    if (g_dbg->ry) s->pad.sThumbRY = g_dbg->ry;
-    return r;
+    return controls_debug_overlay(&s->pad, r == 0) ? 0 : r;
 }
 
 void controls_debug_pad(void)
@@ -170,7 +164,10 @@ static xgs_t own_xinput(void)
 static int pad_read(pad_t *out)
 {
     xstate_t s;
-    xgs_t f = g_xgs_real ? g_xgs_real : own_xinput();
+    xgs_t f;
+    if (input_sdl_active())
+        return controls_debug_overlay(out, input_sdl_pad(out));
+    f = g_xgs_real ? g_xgs_real : own_xinput();
     memset(out, 0, sizeof *out);
     if (!f || debug_pad_apply(0, &s, f(0, &s)) != 0)
         return 0;
@@ -405,10 +402,9 @@ static void on_player_turn_ret(regs_t *r)
 
 /* ---- what the game sees from the pad ---- */
 
-static void remap(xstate_t *s)
+void controls_filter(pad_t *p)
 {
     static int prev_x, last_ft = -1, ft_stale, req_age;
-    pad_t *p = &s->pad;
     int ddx, ddy, fresh, phys_x, phys_lt, phys_rt, aiming;
     WORD out;
 
@@ -481,7 +477,7 @@ static DWORD WINAPI hooked_xgs(DWORD idx, xstate_t *s)
 {
     DWORD r = debug_pad_apply(idx, s, g_xgs_real(idx, s));
     if (r == 0 && s)
-        remap(s);
+        controls_filter(&s->pad);
     return r;
 }
 
@@ -489,7 +485,7 @@ static DWORD WINAPI hooked_xgs_ex(DWORD idx, xstate_t *s)
 {
     DWORD r = debug_pad_apply(idx, s, g_xgs_ex_real(idx, s));
     if (r == 0 && s)
-        remap(s);
+        controls_filter(&s->pad);
     return r;
 }
 
@@ -541,16 +537,17 @@ static DWORD WINAPI intro_skip_thread(LPVOID unused)
             continue;
         seen = 1;
         {
-            pad_t p;
-            xstate_t s;
-            xgs_t f = own_xinput();
-            if (f && f(0, &s) == 0) {
-                p = s.pad;
-                if (p.wButtons || p.bLeftTrigger > TRIG_ON || p.bRightTrigger > TRIG_ON) {
-                    *(volatile uint8_t *)G_INTRO_PLAYING = 0;
-                    log_printf("intro: skipped by gamepad");
-                    return 0;
-                }
+            int down = input_sdl_any_button();
+            if (down < 0) {
+                xstate_t s;
+                xgs_t f = own_xinput();
+                down = f && f(0, &s) == 0 &&
+                       (s.pad.wButtons || s.pad.bLeftTrigger > TRIG_ON || s.pad.bRightTrigger > TRIG_ON);
+            }
+            if (down) {
+                *(volatile uint8_t *)G_INTRO_PLAYING = 0;
+                log_printf("intro: skipped by gamepad");
+                return 0;
             }
         }
     }

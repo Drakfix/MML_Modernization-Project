@@ -32,7 +32,7 @@ VANILLA = os.path.join(GAME, "MEGAMAN.EXE.orig")
 PATCHED = os.path.join(GAME, "MEGAMAN.EXE")
 CUSTOM_AVI = os.path.join(GAME, "CAPCOM.AVI")
 
-DLL_FILES = ["ddraw.dll", "dinput.dll", "dsound.dll", "dsoal-aldrv.dll"]        # from GAME
+DLL_FILES = ["ddraw.dll", "dinput.dll", "dsound.dll", "dsoal-aldrv.dll", "SDL3.dll"]   # from GAME
 CONFIG_FILES = ["DDrawCompat.ini.16to9", "DDrawCompat.ini.4to3", "mml.ini"]     # from CONFIG
 NATIVE_DLL = os.path.join(REPO, "native", "build", "mml.dll")
 if not os.path.isfile(NATIVE_DLL):
@@ -355,7 +355,7 @@ What the installer does:
      auto-restores the backup on any mismatch.
   2. Installs the Modernization intro video (original kept as CAPCOM.AVI.original).
   3. Installs the runtime stack: DDrawCompat (ddraw.dll), Xidi (dinput.dll),
-     DSOAL (dsound.dll + dsoal-aldrv.dll), mml.dll (the Modernization runtime,
+     DSOAL (dsound.dll + dsoal-aldrv.dll), SDL3 (SDL3.dll, controllers), mml.dll (the Modernization runtime,
      loaded by the patched exe itself), config templates and the launcher. Foreign wrapper DLLs from
      repacks (dxwrapper, dgVoodoo2, ReShade, ENB...) are auto-detected and
      quarantined to Modernization/quarantined-wrappers (moved, never deleted -

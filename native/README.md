@@ -46,6 +46,7 @@ closer_factor=0.859375
 
 [controls]
 mode=modern          ; or vanilla
+input=sdl            ; controller through SDL3.dll, or legacy (Xidi)
 
 [general]
 intro=play           ; or skip
@@ -173,6 +174,7 @@ for comparisons.
 - `src/terrain.c` near-plane clipping for terrain (the floor holes)
 - `src/apicensus.c` dev tool: counts every DirectDraw/Direct3D call the game makes
 - `src/packets.c` which display-list packet and bucket is being drawn (walker hooks, HUD sprite tags, deferred draws) + the census
+- `src/input.c` controller input through SDL3 (any gamepad SDL knows), fed into the game's own pad poll
 - `src/controls.c` orbit camera, camera-relative movement, aim, dodge, button remap
 - `src/toast.c` the ORBIT ON/OFF indicator, drawn into the game's own HUD list
 - `src/hook.c` mid-function hooks (jump to a stub that saves registers, calls C, replays the stolen bytes)

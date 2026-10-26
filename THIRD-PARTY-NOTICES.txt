@@ -13,6 +13,11 @@ is used under its own license (full texts in this "licenses" folder). You may
 replace any of these DLLs with your own build from the linked source.
 
 --------------------------------------------------------------------------------
+SDL3                     file: SDL3.dll
+  Controller input (Xbox, PlayStation, Switch and other gamepads).
+  (c) 1997-2026 Sam Lantinga.  License: zlib  ->  licenses/SDL3-LICENSE.txt
+  Source: https://github.com/libsdl-org/SDL
+
 Xidi                     file: dinput.dll
   XInput-to-DirectInput translation (controller support).
   (c) 2016-2026 Samuel Grossman.  License: BSD-3-Clause  ->  licenses/Xidi-LICENSE.txt

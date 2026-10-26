@@ -6,6 +6,7 @@ We ship these binaries UNMODIFIED:
   ddraw.dll         = DDrawCompat    (0BSD)           github.com/narzoul/DDrawCompat
   dsound.dll        = DSOAL          (LGPL-2.1)       github.com/kcat/dsoal
   dsoal-aldrv.dll   = OpenAL Soft    (LGPL-2.1)       github.com/kcat/openal-soft
+  SDL3.dll          = SDL3           (zlib)           github.com/libsdl-org/SDL
 
 Run once (or when a component is updated): python fetch_licenses.py
 """
@@ -21,6 +22,7 @@ SOURCES = {
     "DDrawCompat-LICENSE.txt": "https://raw.githubusercontent.com/narzoul/DDrawCompat/master/LICENSE.txt",
     "DSOAL-LICENSE.txt": "https://raw.githubusercontent.com/kcat/dsoal/master/LICENSE",
     "OpenAL-Soft-COPYING.txt": "https://raw.githubusercontent.com/kcat/openal-soft/master/COPYING",
+    "SDL3-LICENSE.txt": "https://raw.githubusercontent.com/libsdl-org/SDL/main/LICENSE.txt",
 }
 
 for fn, url in SOURCES.items():
@@ -45,6 +47,11 @@ is used under its own license (full texts in this "licenses" folder). You may
 replace any of these DLLs with your own build from the linked source.
 
 --------------------------------------------------------------------------------
+SDL3                     file: SDL3.dll
+  Controller input (Xbox, PlayStation, Switch and other gamepads).
+  (c) 1997-2026 Sam Lantinga.  License: zlib  ->  licenses/SDL3-LICENSE.txt
+  Source: https://github.com/libsdl-org/SDL
+
 Xidi                     file: dinput.dll
   XInput-to-DirectInput translation (controller support).
   (c) 2016-2026 Samuel Grossman.  License: BSD-3-Clause  ->  licenses/Xidi-LICENSE.txt

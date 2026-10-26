@@ -21,6 +21,7 @@
 
 #include "apicensus.h"
 #include "controls.h"
+#include "input.h"
 #include "ddshim.h"
 #include "display.h"
 #include "game.h"
@@ -349,6 +350,14 @@ static void init(void)
     controls_install(_stricmp(controls, "vanilla") != 0, intro_plays);
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, g_ini))
         controls_debug_pad();
+    {
+        char in[16];
+        ini_string("controls", "input", "sdl", in, sizeof in);
+        if (_stricmp(in, "legacy") != 0)
+            input_install();
+        else
+            log_printf("input: legacy controller path selected (DirectInput joystick via Xidi)");
+    }
     {
         char w[128];
         ini_string("debug", "watch", "", w, sizeof w);
