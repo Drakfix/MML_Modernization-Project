@@ -24,6 +24,12 @@ included, without emulation.
   the launcher has Renderer and Display (fullscreen/windowed) options.
 - The floor holes are fixed for real: terrain polygons that reach past the camera now get
   clipped at the near plane like the game already does for objects, instead of thrown away.
+- 60 fps: the game still runs at 30, and every frame gets an in-between frame with
+  everything halfway (characters, animation, camera, grass, the sky). Launcher: Frame rate.
+- The sky scrolls smoothly: the game kept its position with sub-pixel precision but drew it
+  in whole pixels, and its walking parallax stalled every few ticks. Both fixed.
+- The game no longer spins a CPU core waiting for the next frame.
+- Exclusive fullscreen as an option for weaker hardware (Display: Exclusive).
 
 **Next up:** the 2.0 wishlist.
 
@@ -32,7 +38,7 @@ included, without emulation.
 - Distance fog options: original, light or off (done)
 - No more low-detail model swaps (LOD) popping in, without characters losing parts far
   away (done)
-- Better modern controls
+- Better modern controls (next)
 - Mouse + keyboard with the orbit camera
 - Fix the known issues
 - Better presentation overall
