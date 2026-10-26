@@ -3,7 +3,7 @@ param([string]$Action, [string]$Arg = "", [int]$Wait = 0)
 #   start                      launch $env:MML_EXE (default MEGAMAN_NATIVE.EXE) in $env:MML_GAME_DIR
 #   pad start,a,down*2         press pad buttons (needs mml.ini [debug] remote_pad=1)
 #   stick "rx=32767" -Wait 2   hold stick values (lx/ly/rx/ry) for N seconds
-#   shot NAME                  DPI-aware screenshot (960x540) into $env:MML_SHOTS (default %TEMP%\mml-shots)
+#   shot NAME                  DPI-aware screenshot (960x540, full size with MML_SHOT_FULL=1) into $env:MML_SHOTS
 #   stop                       kill the game
 # -Wait N sleeps N seconds after the action.
 # The game only reads the pad while its window is in the foreground, and it
@@ -51,7 +51,8 @@ switch ($Action) {
     $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
     $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
     [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-    $sm = New-Object System.Drawing.Bitmap $bmp, 960, 540
+    # MML_SHOT_FULL=1 keeps the full screen resolution (for small details)
+    $sm = if ($env:MML_SHOT_FULL -eq "1") { $bmp } else { New-Object System.Drawing.Bitmap $bmp, 960, 540 }
     $path = Join-Path $out "$Arg.png"; $sm.Save($path); $path
   }
   "stop" { Get-Process $proc -ErrorAction SilentlyContinue | Stop-Process -Force; "stopped" }

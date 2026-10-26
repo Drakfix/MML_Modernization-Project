@@ -92,7 +92,8 @@ LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
               "2560x1920": "app(4)", "3200x2400": "app(5)"}   # 0.1.x settings.json values
 DEFAULTS = {"renderer": "mml", "window": "fullscreen",
             "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
-            "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original"}
+            "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
+            "lod": "full"}
 
 
 def load_settings():
@@ -261,6 +262,7 @@ def write_mml_ini(s, width):
             "msaa": aa,
             "anisotropy": aniso,
             "fog": s["fog"],
+            "lod": s["lod"],
         },
         "controls": {"mode": s["controls"]},
         "general": {"intro": s["intro"]},
@@ -393,8 +395,12 @@ class App:
                [("Game default", "app"), ("Trilinear", "trilinear"), ("Anisotropic 16x", "af16x")])
         option("Antialiasing", "aa",
                [("Off", "off"), ("MSAA 4x", "msaa4x"), ("MSAA 8x", "msaa8x")])
+        pair2 = tk.Frame(col, bg=BG)
+        pair2.pack(fill="x", pady=2)
         option("Distance fog", "fog",
-               [("Original", "original"), ("Light", "light"), ("Off", "off")], "Light = twice as far away")
+               [("Original", "original"), ("Light", "light"), ("Off", "off")], row=pair2, side="left")
+        option("Model detail", "lod",
+               [("Full detail", "full"), ("Original", "original")], row=pair2, side="right")
 
         # PLAY pill (canvas image + text, hover swap)
         self.play_img = c.create_image(PLAY_X, PLAY_Y, image=self.img_play, anchor="nw")

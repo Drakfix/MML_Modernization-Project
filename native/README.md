@@ -77,6 +77,21 @@ out, so there's real scenery behind it. `light` multiplies start and end by
 game's SetRenderState calls, so it works with either renderer. The old
 `no_fog=1` still means off.
 
+### Model detail (LOD)
+
+Characters and props carry three versions of their model (full, medium, low)
+and six draw paths pick one by screen depth, with the same two thresholds
+(700 and 1800). `lod.c` raises both out of reach, so everything always uses the
+full model and nothing swaps as it moves away. `[video] lod=original` brings the
+swaps back.
+
+Full models far away hit a second limit: their small triangles (heads, hands)
+cover less than one PS1 pixel, and the GTE's facing test (NCLIP) works in
+320x240 space and truncates to an integer, so those come out as 0, count as
+back-facing and get dropped. Characters lost limbs at a distance. With
+`lod=full` the truncation keeps the sign (+-1) for any nonzero result, so
+tiny front-facing triangles survive; exactly degenerate ones are still culled.
+
 ### Terrain near clipping
 
 The game never clips terrain against the camera. Its software GTE flattens any
@@ -98,7 +113,8 @@ tests), `census=1` logs what every frame draws, per ordering-table bucket,
 `clip_census=1` logs the terrain clipper's numbers (including how far its
 rebuilt vertices land from the game's own, which should be 0), and
 `clip_near_scale=N` pushes the terrain clip plane N times further out so you can
-see the clipping work.
+see the clipping work, and `keep_small_tris=0` turns off the small-triangle fix
+for comparisons.
 
 ## Layout
 
@@ -107,6 +123,7 @@ see the clipping work.
 - `src/ddshim.c` DirectDraw 4 / Direct3D 3 implementation (renderer=mml)
 - `src/gfx.h`, `src/gfx_d3d11.c`, `shaders/game.hlsl` rendering backend interface + Direct3D 11 backend
 - `src/fog.c` distance fog options
+- `src/lod.c` always full-detail models
 - `src/terrain.c` near-plane clipping for terrain (the floor holes)
 - `src/apicensus.c` dev tool: counts every DirectDraw/Direct3D call the game makes
 - `src/packets.c` which display-list packet and bucket is being drawn (walker hooks, HUD sprite tags, deferred draws) + the census

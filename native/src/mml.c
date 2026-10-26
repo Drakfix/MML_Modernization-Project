@@ -30,6 +30,7 @@
 #include "toast.h"
 #include "terrain.h"
 #include "fog.h"
+#include "lod.h"
 
 #define MML_NATIVE_BUILD "0.2.0-dev (native widescreen)"
 
@@ -277,6 +278,12 @@ static void init(void)
             fog_install(FOG_OFF, 0.0f);
         else if (_stricmp(f, "light") == 0)
             fog_install(FOG_LIGHT, ini_float("video", "fog_distance", 2.0f));
+    }
+    {
+        char l[16];
+        ini_string("video", "lod", "full", l, sizeof l);
+        if (_stricmp(l, "original") != 0)
+            lod_install(GetPrivateProfileIntA("debug", "keep_small_tris", 1, g_ini));
     }
     if (GetPrivateProfileIntA("video", "terrain_clip", 1, g_ini))
         terrain_clip_install(ini_float("debug", "clip_near_scale", 1.0f));
