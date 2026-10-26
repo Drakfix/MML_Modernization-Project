@@ -16,9 +16,10 @@ unmodified exe.
 2. `python create_project.py` imports `MEGAMAN.EXE.orig` (vanilla) with that
    spec and runs auto-analysis (~4 min).
 3. Start the server (`python -u ghidra_server.py`) and leave it running.
-4. `python gq.py run fixups.py` (memory map + function discovery, see below).
-5. `python gq.py run recover_watcom_params.py` (signatures, see below).
-6. `python gq.py symbols symbols.csv` (our names).
+4. `python gq.py run fixups.py` (memory map, function discovery, Win32 signatures; see below).
+5. `python gq.py run dx_signatures.py` (DirectX entry points, not in Ghidra's library).
+6. `python gq.py run recover_watcom_params.py` (game function signatures, see below).
+7. `python gq.py symbols symbols.csv` (our names).
 
 ### Fix-ups the stock loader/analyzer gets wrong
 

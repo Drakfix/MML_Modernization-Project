@@ -8,8 +8,20 @@
    function entry. About a quarter of the code is only reachable through
    pointer tables (state machines, task handlers), which the analyzer can't
    follow on its own.
-3. Re-run auto-analysis over the result.
+3. Apply Windows API signatures from Ghidra's bundled type library. The
+   analyzer only does this for the Visual Studio compiler profile, so with
+   the Watcom spec every Win32 call decompiled without arguments.
+4. Re-run auto-analysis over the result.
+
+DirectX entry points aren't in that library; run dx_signatures.py after.
 """
+import os
+
+from java.io import File
+from java.util import ArrayList
+from ghidra.app.cmd.function import ApplyFunctionDataTypesCmd
+from ghidra.program.model.data import FileDataTypeManager
+from ghidra.program.model.symbol import SourceType
 from ghidra.app.cmd.disassemble import DisassembleCommand
 from ghidra.app.cmd.function import CreateFunctionCmd
 from ghidra.app.plugin.core.analysis import AutoAnalysisManager
@@ -42,6 +54,15 @@ for t in sorted(targets):
     if fm.getFunctionAt(t) is None and CreateFunctionCmd(t).applyTo(program, monitor):
         made += 1
 print("relocation targets in undisassembled code: %d, functions created: %d" % (len(targets), made))
+
+gdt_path = os.path.join(os.environ.get("GHIDRA_INSTALL_DIR", r"C:\tools\ghidra_12.1.2_PUBLIC"),
+                        "Ghidra", "Features", "Base", "data", "typeinfo", "win32", "windows_vs12_32.gdt")
+gdt = FileDataTypeManager.openFileArchive(File(gdt_path), False)
+archives = ArrayList()
+archives.add(gdt)
+ApplyFunctionDataTypesCmd(archives, None, SourceType.ANALYSIS, True, False).applyTo(program, monitor)
+gdt.close()
+print("Windows API signatures applied")
 
 mgr = AutoAnalysisManager.getAnalysisManager(program)
 mgr.reAnalyzeAll(None)
