@@ -107,9 +107,10 @@ static IDXGIAdapter1 *pick_adapter(IDXGIFactory1 *f1)
 {
     IDXGIFactory6 *f6 = NULL;
     IDXGIAdapter1 *a = NULL;
-    /* gpu=display: render where the picture is shown, so nothing gets copied
+    /* gpu=display (and exclusive fullscreen): render where the picture is shown, so nothing gets copied
      * between GPUs (laptops with two); else prefer the high-performance GPU */
-    if (g.opt.gpu_display)
+    /* exclusive fullscreen only works on the GPU that owns the monitor */
+    if (g.opt.gpu_display || (g.opt.exclusive && !g.opt.windowed))
         a = display_adapter(f1);
     if (!a && SUCCEEDED(IDXGIFactory1_QueryInterface(f1, &IID_IDXGIFactory6, (void **)&f6))) {
         IDXGIFactory6_EnumAdapterByGpuPreference(f6, 0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
@@ -400,7 +401,8 @@ int gfx_init(HWND hwnd, int app_w, int app_h, const gfx_options *opt)
     }
     g.cb_dirty = g.state_dirty = 1;
     g.ready = 1;
-    log_printf("gfx: Direct3D 11 ready (%s)", g.opt.windowed ? "windowed" : "borderless fullscreen");
+    log_printf("gfx: Direct3D 11 ready (%s)", g.opt.windowed ? "windowed" :
+               g.opt.exclusive ? "exclusive fullscreen" : "borderless fullscreen");
     return 1;
 }
 
@@ -703,6 +705,35 @@ void gfx_use_target(int t)
     bind_scene();
 }
 
+/* Exclusive fullscreen ([video] exclusive=1): the picture goes straight to the
+ * screen without the desktop compositor, which costs less GPU on some machines.
+ * Taken while the game window is in front and given back when it isn't, so
+ * alt-tab still works (the game keeps running in its borderless window). */
+static void exclusive_follow_focus(void)
+{
+    BOOL fs = FALSE;
+    int want;
+    if (!g.opt.exclusive || g.opt.windowed)
+        return;
+    want = GetForegroundWindow() == g.hwnd && !IsIconic(g.hwnd);
+    IDXGISwapChain1_GetFullscreenState(g.swap, &fs, NULL);
+    if (!!fs == want)
+        return;
+    if (FAILED(IDXGISwapChain1_SetFullscreenState(g.swap, want, NULL))) {
+        static int warned;
+        if (!warned++)
+            log_printf("gfx: exclusive fullscreen not available here, staying borderless");
+        g.opt.exclusive = 0;
+        return;
+    }
+    log_printf("gfx: exclusive fullscreen %s", want ? "on" : "off (game not in front)");
+    ID3D11DeviceContext_OMSetRenderTargets(g.ctx, 0, NULL, NULL);
+    release_back();
+    make_back();
+    if (!want)
+        place_window();
+}
+
 void gfx_present_target(int t)
 {
     static const float black[4] = { 0, 0, 0, 1 };
@@ -714,6 +745,7 @@ void gfx_present_target(int t)
         return;
     if (t < 0 || t > 1 || !g.tg_used[t])
         t = 0;
+    exclusive_follow_focus();
     if (g.tg[t].scene_resolved)
         ID3D11DeviceContext_ResolveSubresource(g.ctx, (ID3D11Resource *)g.tg[t].scene_resolved, 0,
                                                (ID3D11Resource *)g.tg[t].scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);

@@ -36,6 +36,7 @@ typedef struct {
 
 typedef struct {
     int windowed;                 /* 0 = borderless window covering the monitor */
+    int exclusive;                /* exclusive fullscreen while the game is in front (not windowed) */
     int window_w, window_h;       /* client size when windowed (0 = 75% of the monitor) */
     int render_scale;             /* 0 = match the window height, N = N x the game's mode */
     int msaa;                     /* 1, 2, 4 or 8 samples */

@@ -258,6 +258,7 @@ def write_mml_ini(s, width):
             "native_width": width,
             "renderer": s["renderer"],
             "windowed": 1 if s["window"] == "windowed" else 0,
+            "exclusive": 1 if s["window"] == "exclusive" else 0,
             "render_scale": scale,
             "nearest_upscale": 1 if s["scalefilter"] == "nearest" else 0,
             "msaa": aa,
@@ -380,12 +381,9 @@ class App:
         option("Renderer", "renderer",
                [("Modern (Direct3D 11)", "mml"), ("Compatibility", "ddrawcompat")],
                "Modern = 60 fps, alt-tab, screenshots, windowed")
-        pair = tk.Frame(col, bg=BG)
-        pair.pack(fill="x", pady=2)
         option("Display", "window",
-               [("Fullscreen", "fullscreen"), ("Windowed", "windowed")], row=pair, side="left")
-        option("Upscaling", "scalefilter",
-               [("Bilinear", "bilinear"), ("Nearest", "nearest")], row=pair, side="right")
+               [("Borderless", "fullscreen"), ("Exclusive", "exclusive"), ("Windowed", "windowed")],
+               "Exclusive = lowest GPU use, limited Alt+Tab and capture")
         option("Resolution", "res", RES_CHOICES, "Display = your monitor (recommended)")
         pair3 = tk.Frame(col, bg=BG)
         pair3.pack(fill="x", pady=2)
@@ -398,8 +396,12 @@ class App:
                [("Play (any button skips)", "play"), ("Skip entirely", "skip")])
         option("Texture filter", "texfilter",
                [("Game default", "app"), ("Trilinear", "trilinear"), ("Anisotropic 16x", "af16x")])
+        pair = tk.Frame(col, bg=BG)
+        pair.pack(fill="x", pady=2)
+        option("Upscaling", "scalefilter",
+               [("Bilinear", "bilinear"), ("Nearest", "nearest")], row=pair, side="left")
         option("Antialiasing", "aa",
-               [("Off", "off"), ("MSAA 4x", "msaa4x"), ("MSAA 8x", "msaa8x")])
+               [("Off", "off"), ("4x", "msaa4x"), ("8x", "msaa8x")], row=pair, side="right")
         pair2 = tk.Frame(col, bg=BG)
         pair2.pack(fill="x", pady=2)
         option("Distance fog", "fog",

@@ -97,10 +97,16 @@ The game's frame limiter used to spin a CPU core waiting for the next frame on a
 timer that only ticks every 15.6 ms; it now gets a 1 ms clock and sleeps.
 
 `[video] gpu=display` renders on the GPU the monitor is connected to instead of
-the fastest one (laptops with two GPUs). Note that on some laptops Windows
-composites every frame of any borderless fullscreen window, which shows up as
-"Desktop Window Manager" GPU use; that's the price of alt-tab and screenshots
-working.
+the fastest one (laptops with two GPUs). On some machines (the test laptop: an
+Intel GPU drives the panel, an NVIDIA renders) Windows composites every frame of
+any borderless fullscreen window, which shows up as "Desktop Window Manager" GPU
+use. `[video] exclusive=1` (the launcher's Display: Exclusive) skips that: the
+game takes the screen exclusively while it's in front and goes back to its
+borderless window when you alt-tab away. It renders on the monitor's GPU, since
+exclusive mode only works there. On the test laptop the desktop compositor went
+from 22-38% of the Intel GPU to 0%. The trade-offs are the usual ones for
+exclusive fullscreen: switching away (Alt+Tab, the Start menu) makes the game
+give the display back, and screen capture and overlay tools can't see it.
 
 Debug: `[debug] interp_census=1`, `interp_mid_only=1` (show only the in-between
 frames), `interp_timing=1` (log frame pacing).

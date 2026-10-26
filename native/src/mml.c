@@ -365,6 +365,7 @@ static void init(void)
             gfx_options o;
             memset(&o, 0, sizeof o);
             o.windowed = GetPrivateProfileIntA("video", "windowed", 0, g_ini);
+            o.exclusive = GetPrivateProfileIntA("video", "exclusive", 0, g_ini);
             o.render_scale = GetPrivateProfileIntA("video", "render_scale", 0, g_ini);
             o.nearest_upscale = GetPrivateProfileIntA("video", "nearest_upscale", 0, g_ini);
             o.msaa = GetPrivateProfileIntA("video", "msaa", 1, g_ini);
