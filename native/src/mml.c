@@ -264,13 +264,15 @@ static void init(void)
     if (GetPrivateProfileIntA("debug", "api_census", 0, g_ini))
         apicensus_install();
     {
-        /* [video] renderer=mml: our own Direct3D 11 renderer instead of DDrawCompat (experimental) */
+        /* [video] renderer=mml (default): our own Direct3D 11 renderer; ddrawcompat = leave DirectDraw to the wrapper */
         char r[16];
-        ini_string("video", "renderer", "ddrawcompat", r, sizeof r);
+        ini_string("video", "renderer", "mml", r, sizeof r);
         if (_stricmp(r, "mml") == 0) {
             gfx_options o;
             memset(&o, 0, sizeof o);
             o.windowed = GetPrivateProfileIntA("video", "windowed", 0, g_ini);
+            o.render_scale = GetPrivateProfileIntA("video", "render_scale", 0, g_ini);
+            o.nearest_upscale = GetPrivateProfileIntA("video", "nearest_upscale", 0, g_ini);
             o.msaa = GetPrivateProfileIntA("video", "msaa", 1, g_ini);
             o.anisotropy = GetPrivateProfileIntA("video", "anisotropy", 16, g_ini);
             o.vsync = GetPrivateProfileIntA("video", "vsync", 0, g_ini);

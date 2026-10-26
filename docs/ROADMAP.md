@@ -18,14 +18,13 @@ included, without emulation.
   the GPU: more world on the sides, HUD at the screen edges, backgrounds stretched to fill,
   menus and text at their real proportions. Nothing squeezed.
 - An installer and launcher without Frida, half the size, that upgrade 0.1 installs in place.
-- Our own renderer (opt-in, `renderer=mml`): the game's DirectDraw/Direct3D calls go to our
+- Our own renderer (now the default, `renderer=mml`): the game's DirectDraw/Direct3D calls go to our
   own small implementation on top of Direct3D 11. Proper borderless window, screenshots and
-  alt-tab work, it picks the fast GPU on laptops.
+  alt-tab work, it picks the fast GPU on laptops. The intro video plays centred on it, and
+  the launcher has Renderer and Display (fullscreen/windowed) options.
 
 **Next up:**
 
-- Check the intro video with our renderer, teach the launcher about it, then make it the
-  default.
 - Fix the floor holes for real. We finally know what they are: the terrain is never clipped
   against the camera, so polygons with a corner behind the camera get thrown away. Clipping
   them like the game already does for objects should close the holes.

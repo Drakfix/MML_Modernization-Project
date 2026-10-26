@@ -17,12 +17,15 @@
 #include <initguid.h>
 #include <ddraw.h>
 #include <d3d.h>
+#include <mmsystem.h>
+#include <stdio.h>
 #include <float.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "ddshim.h"
+#include "display.h"
 #include "gfx.h"
 #include "hook.h"
 #include "log.h"
@@ -30,6 +33,7 @@
 
 #define G_IAT_DIRECTDRAWCREATE    0x5083BCu
 #define G_IAT_DIRECTDRAWENUMERATE 0x5083C0u
+#define G_IAT_MCISENDSTRINGA      0x5083A4u
 
 /* ------------------------------------------------------------------ stubs */
 
@@ -1271,12 +1275,25 @@ static HRESULT WINAPI d_get_caps(void **i, LPDDCAPS drv, LPDDCAPS hel)
     return DD_OK;
 }
 
+static HWND g_game_hwnd;
+
+/* Size and blank the window before the game has a device (the intro plays first).
+ * Placed for the mode the game is about to set, so a windowed window keeps one
+ * size from the intro on. */
+static void prepare_window(HWND w)
+{
+    gfx_prepare_window(w, display_native_width(), 480, &g_opt);
+}
+
 static HRESULT WINAPI d_set_coop(void **i, HWND w, DWORD flags)
 {
     ddraw *dd = FROM(ddraw, vt4, i);
     (void)flags;
-    if (w)
+    if (w) {
         dd->hwnd = w;
+        g_game_hwnd = w;
+        prepare_window(w);
+    }
     return DD_OK;
 }
 
@@ -1457,6 +1474,36 @@ static void build_vtables(void)
     SET(vt_clip, 8, clip_set_hwnd);
 }
 
+/* The intro video (CAPCOM.AVI) plays through MCI into the game window at a
+ * fixed "put vfw destination at 0 0 640 480". Under DDrawCompat that 640x480
+ * mode got stretched to the screen; with our renderer the window is already
+ * monitor-sized, so fit the video to it instead (4:3, centred). */
+static MCIERROR(WINAPI *g_real_mci)(LPCSTR, LPSTR, UINT, HWND);
+
+static MCIERROR WINAPI shim_mci_send_string(LPCSTR cmd, LPSTR ret, UINT retlen, HWND cb)
+{
+    static const char prefix[] = "put vfw destination at";
+    RECT rc;
+    /* the intro setup resizes the window to 640x480 after SetCooperativeLevel,
+     * so place it again right before the video gets its rectangle */
+    if (cmd && _strnicmp(cmd, prefix, sizeof prefix - 1) == 0 && g_game_hwnd)
+        prepare_window(g_game_hwnd);
+    if (cmd && _strnicmp(cmd, prefix, sizeof prefix - 1) == 0 && g_game_hwnd && GetClientRect(g_game_hwnd, &rc) &&
+        rc.right > 0 && rc.bottom > 0) {
+        char fitted[96];
+        int w = rc.right, h = rc.bottom, vw = w, vh = h;
+        if (w * 3 > h * 4)
+            vw = h * 4 / 3;
+        else
+            vh = w * 3 / 4;
+        _snprintf_s(fitted, sizeof fitted, _TRUNCATE, "put vfw destination at %d %d %d %d",
+                    (w - vw) / 2, (h - vh) / 2, vw, vh);
+        log_printf("ddshim: intro video %dx%d at %d,%d (window %dx%d)", vw, vh, (w - vw) / 2, (h - vh) / 2, w, h);
+        return g_real_mci(fitted, ret, retlen, cb);
+    }
+    return g_real_mci(cmd, ret, retlen, cb);
+}
+
 static HRESULT WINAPI shim_direct_draw_create(GUID *guid, void **out, IUnknown *u)
 {
     ddraw *dd;
@@ -1484,7 +1531,10 @@ static HRESULT WINAPI shim_direct_draw_enumerate(LPDDENUMCALLBACKA cb, LPVOID ct
 int ddshim_install(const gfx_options *opt)
 {
     void *create = (void *)shim_direct_draw_create, *enumerate = (void *)shim_direct_draw_enumerate;
+    void *mci = (void *)shim_mci_send_string;
     g_opt = *opt;
+    g_real_mci = *(MCIERROR(WINAPI **)(LPCSTR, LPSTR, UINT, HWND))G_IAT_MCISENDSTRINGA;
+    mem_write(G_IAT_MCISENDSTRINGA, &mci, sizeof mci);
     build_vtables();
     if (!mem_write(G_IAT_DIRECTDRAWCREATE, &create, sizeof create) ||
         !mem_write(G_IAT_DIRECTDRAWENUMERATE, &enumerate, sizeof enumerate))

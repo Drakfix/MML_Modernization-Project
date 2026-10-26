@@ -79,10 +79,10 @@ GREEN = "#4ad073"
 AMBER = "#e0af45"
 RED = "#e06555"
 
-W, H = 1010, 878
+W, H = 1010, 930
 ART_X, ART_Y = 28, 86
 COL_X, COL_W = 512, 468
-PLAY_X, PLAY_Y = 512, 784
+PLAY_X, PLAY_Y = 512, 830
 
 # DDrawCompat ResolutionScale: "display" = your monitor's resolution, app(N) = N times
 # the game's own mode (640x480 in 4:3, e.g. 854x480 in widescreen).
@@ -90,7 +90,8 @@ RES_CHOICES = [("Display", "display"), ("1x", "app(1)"), ("2x", "app(2)"),
                ("3x", "app(3)"), ("4x", "app(4)"), ("5x", "app(5)")]
 LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
               "2560x1920": "app(4)", "3200x2400": "app(5)"}   # 0.1.x settings.json values
-DEFAULTS = {"res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
+DEFAULTS = {"renderer": "mml", "window": "fullscreen",
+            "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off"}
 
 
@@ -200,38 +201,70 @@ def write_ini(s, width):
         f.writelines(lines)
 
 
-def write_mml_ini(s, width):
-    """Settings for mml.dll. Any [debug] section already in the file is kept."""
-    path = os.path.join(GAME_DIR, "mml.ini")
-    debug = []
+def merge_ini(path, values, header=""):
+    """Set [section] key=value pairs in an ini file, keeping everything else in it
+    (comments, keys we don't manage, [debug] and so on) exactly as it was."""
     try:
-        section = None
-        for line in open(path, encoding="utf-8", errors="replace"):
-            st = line.strip()
-            if st.startswith("[") and st.endswith("]"):
-                section = st[1:-1].strip().lower()
-            if section == "debug":
-                debug.append(line if line.endswith("\n") else line + "\n")
+        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
     except OSError:
-        pass
-    text = (
-        "; Mega Man Legends Modernization - settings, read by mml.dll when the game starts.\n"
-        "; Written by the launcher every time you press Play; edit by hand if you like.\n\n"
-        "[video]\n"
-        f"aspect={'16:9' if s['aspect'] == '16:9' else '4:3'}\n"
-        "mode=native\n"
-        f"native_width={width}\n"
-        "hud_edges=1\n"
-        "closer_factor=0.859375\n\n"
-        "[controls]\n"
-        f"mode={s['controls']}\n\n"
-        "[general]\n"
-        f"intro={s['intro']}\n"
-    )
-    if debug:
-        text += "\n" + "".join(debug)
+        lines = header.splitlines() if header else []
+    pending = {sec.lower(): dict(kv) for sec, kv in values.items()}
+    out, section = [], None
+
+    def flush(sec):
+        # keys of this section we haven't seen yet go at its end
+        for k, v in pending.get(sec, {}).items():
+            out.append(f"{k}={v}")
+        pending.pop(sec, None)
+
+    for line in lines:
+        st = line.strip()
+        if st.startswith("[") and st.endswith("]"):
+            if section is not None:
+                while out and not out[-1].strip():
+                    out.pop()
+                flush(section)
+                out.append("")
+            section = st[1:-1].strip().lower()
+            out.append(line)
+            continue
+        if section in pending and "=" in st and not st.startswith(";"):
+            key = st.split("=", 1)[0].strip()
+            match = next((k for k in pending[section] if k.lower() == key.lower()), None)
+            if match is not None:
+                out.append(f"{key}={pending[section].pop(match)}")
+                continue
+        out.append(line)
+    if section is not None:
+        flush(section)
+    for sec in list(pending):
+        out.extend(["", f"[{sec}]"])
+        flush(sec)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
+        f.write("\n".join(out).rstrip("\n") + "\n")
+
+
+def write_mml_ini(s, width):
+    """Settings for mml.dll, merged into the existing file so hand-edited keys survive."""
+    aa = {"off": 1, "msaa4x": 4, "msaa8x": 8}.get(s["aa"], 1)
+    aniso = 16 if s["texfilter"] == "af16x" else 0
+    scale = 0 if s["res"] == "display" else int("".join(c for c in s["res"] if c.isdigit()) or 0)
+    merge_ini(os.path.join(GAME_DIR, "mml.ini"), {
+        "video": {
+            "aspect": "16:9" if s["aspect"] == "16:9" else "4:3",
+            "mode": "native",
+            "native_width": width,
+            "renderer": s["renderer"],
+            "windowed": 1 if s["window"] == "windowed" else 0,
+            "render_scale": scale,
+            "nearest_upscale": 1 if s["scalefilter"] == "nearest" else 0,
+            "msaa": aa,
+            "anisotropy": aniso,
+        },
+        "controls": {"mode": s["controls"]},
+        "general": {"intro": s["intro"]},
+    }, header="; Mega Man Legends Modernization - settings, read by mml.dll when the game starts.\n"
+              "; The launcher updates the keys it manages and leaves everything else alone.\n")
 
 
 def pad_connected():
@@ -323,9 +356,9 @@ class App:
 
         def option(label, key, choices, hint=None):
             card = tk.Frame(col, bg=CARD)
-            card.pack(fill="x", pady=3)
+            card.pack(fill="x", pady=2)
             top = tk.Frame(card, bg=CARD)
-            top.pack(fill="x", padx=10, pady=(6, 1))
+            top.pack(fill="x", padx=10, pady=(5, 0))
             tk.Label(top, text=label, bg=CARD, fg=TEXT,
                      font=("Segoe UI", 10, "bold")).pack(side="left")
             if hint:
@@ -333,8 +366,13 @@ class App:
                          font=("Segoe UI", 9)).pack(side="left")
             Segmented(card, self.settings, key, choices,
                       on_change=lambda: save_settings(self.settings)).pack(
-                anchor="w", padx=10, pady=(0, 7))
+                anchor="w", padx=10, pady=(1, 6))
 
+        option("Renderer", "renderer",
+               [("Modern (Direct3D 11)", "mml"), ("Compatibility", "ddrawcompat")],
+               "Modern = new, alt-tab + screenshots work")
+        option("Display", "window",
+               [("Fullscreen", "fullscreen"), ("Windowed", "windowed")], "windowed needs Modern")
         option("Resolution", "res", RES_CHOICES, "Display = your monitor (recommended)")
         option("Aspect ratio", "aspect", [("16:9 Widescreen", "16:9"), ("4:3 Classic", "4:3")])
         option("Controls", "controls",

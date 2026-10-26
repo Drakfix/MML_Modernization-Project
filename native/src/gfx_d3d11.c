@@ -100,6 +100,30 @@ static IDXGIAdapter1 *pick_adapter(IDXGIFactory1 *f1)
     return a;
 }
 
+static void place_window(void);
+
+/* Before the game has a Direct3D device (e.g. while the intro video plays on
+ * its own temporary DirectDraw object): put the window where the renderer will
+ * want it and paint it black, so nothing of the desktop shows around the video. */
+void gfx_prepare_window(HWND hwnd, int app_w, int app_h, const gfx_options *opt)
+{
+    RECT rc;
+    HDC dc;
+    if (g.ready || !hwnd)
+        return;
+    g.hwnd = hwnd;
+    g.opt = *opt;
+    g.app_w = app_w > 0 ? app_w : 640;
+    g.app_h = app_h > 0 ? app_h : 480;
+    place_window();
+    GetClientRect(hwnd, &rc);
+    dc = GetDC(hwnd);
+    if (dc) {
+        FillRect(dc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        ReleaseDC(hwnd, dc);
+    }
+}
+
 static void place_window(void)
 {
     HMONITOR mon = MonitorFromWindow(g.hwnd, MONITOR_DEFAULTTOPRIMARY);

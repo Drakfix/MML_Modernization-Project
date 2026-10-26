@@ -48,6 +48,8 @@ typedef struct {
 } gfx_options;
 
 int gfx_init(HWND game_window, int app_w, int app_h, const gfx_options *opt);
+/* place + black-fill the window before there is a device (intro video) */
+void gfx_prepare_window(HWND game_window, int app_w, int app_h, const gfx_options *opt);
 int gfx_ready(void);
 void gfx_set_mode(int app_w, int app_h);   /* the game's display mode (coordinate space) */
 

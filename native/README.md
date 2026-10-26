@@ -53,15 +53,18 @@ intro=play           ; or skip
 
 What it did gets written to `mml.log`.
 
-### Our own renderer (experimental)
+### Our own renderer
 
-`renderer=mml` replaces DirectDraw entirely: the game's DirectDraw/Direct3D calls
+`renderer=mml` (the default) replaces DirectDraw entirely: the game's DirectDraw/Direct3D calls
 land in `ddshim.c`, our implementation of exactly the parts it uses (worked out
 with an API census, `[debug] api_census=1`), which draws through `gfx_d3d11.c`.
 It picks the high-performance GPU on laptops, runs as a normal borderless window
 (alt-tab and screenshots behave), and renders at your window's resolution.
-Extra settings in `[video]`: `windowed=1`, `msaa=1/2/4/8`, `anisotropy=16`,
-`vsync=0/1`, `no_fog=1`. `gfx.h` is the backend interface, so another backend
+Extra settings in `[video]`: `windowed=1`, `render_scale=N` (N times 480 lines,
+0 = window resolution), `nearest_upscale=1`, `msaa=1/2/4/8`, `anisotropy=16`,
+`vsync=0/1`, `no_fog=1`. The intro video is played by Windows (MCI) straight into
+the game window, so the shim centres it at 4:3 on the black window.
+`renderer=ddrawcompat` hands DirectDraw back to the DDrawCompat wrapper like 0.1 did. `gfx.h` is the backend interface, so another backend
 (GLES/Vulkan for Android) can sit behind the same code.
 
 Dev settings (`[debug]`): `remote_pad=1` lets tools press pad buttons through
