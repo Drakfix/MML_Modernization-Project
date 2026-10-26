@@ -29,8 +29,9 @@ included, without emulation.
 
 **The 2.0 wishlist:**
 
-- Option to remove the distance fog (it's a render setting now, so this one's easy)
-- No more low-detail model swaps (LOD) popping in
+- Distance fog options: original, light or off (done)
+- No more low-detail model swaps (LOD) popping in, without characters losing parts far
+  away (done)
 - Better modern controls
 - Mouse + keyboard with the orbit camera
 - Fix the known issues
