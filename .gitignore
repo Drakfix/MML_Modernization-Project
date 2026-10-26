@@ -6,6 +6,9 @@ __pycache__/
 *.pyc
 *.egg-info/
 
+# Native runtime build output
+/native/build/
+
 # PyInstaller work dirs
 build/*/
 !build/*.bat
@@ -23,6 +26,12 @@ MEGAMAN.EXE
 /SPH/
 # Local live config written from the templates in config/
 /DDrawCompat.ini
+mml.log
+
+# Ghidra projects hold Capcom's code: never commit them
+ghidra_decomp/
+*.gpr
+*.rep/
 
 # Third-party wrapper binaries (obtained separately, see THIRD-PARTY-NOTICES.txt)
 ddraw.dll

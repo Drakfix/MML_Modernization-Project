@@ -1,0 +1,119 @@
+address,kind,type,name,comment
+# ---- renderer: display list / ordering tables ----
+0x4F7680,func,,gfx_walk_display_list,"PS1-GPU-style packet interpreter; one call site 0x4A70E5 (eax=[gfx_cur_ctx]+0x8c); iteration at 0x4F78EE; BeginScene at 0x4F78EB"
+0x4F87A6,func,,gfx_add_prim,"AddPrim: pkt->next=*bucket; *bucket=pkt; no validation; 114 callers"
+0x4F87AF,func,,gfx_add_prim_alt,"AddPrim variant, 19 callers (big-OT merges + terrain chunk link)"
+0x4F87C0,func,,gfx_set_op_64,"stamps [pkt+7]=0x64"
+0x4F87C5,func,,gfx_set_op_60,"stamps [pkt+7]=0x60"
+0x4F87CA,func,,gfx_set_op_6c,"stamps [pkt+7]=0x6c (glyph)"
+0x4F87CF,func,,gfx_set_op_28,"stamps [pkt+7]=0x28 + default W 0.01"
+0x4F8904,func,,gfx_clear_root_ot,"descending chain entry=prev|1, terminator gfx_ot_terminator|1"
+0x4F3E53,func,,gfx_draw_flat_quad,"opcodes 0x28-0x2b; TRIANGLESTRIP of 4 XYZRHW verts; SetTexture(0,NULL)"
+0x4F608A,func,,gfx_draw_sprite_rect,"opcode 0x64 (via stub 0x4F7A1B): textured screen rect, 1:1 texel blit (U span = width)"
+0x4F3BDD,func,,gfx_draw_tex_tri_a4,"opcode 0xa4 (via stub 0x4F793C): textured float triangle, X floats +0x20/+0x28/+0x30"
+0x4F62DF,func,,gfx_draw_glyph,"opcode 0x6c (via stub 0x4F7A29): font glyph quad, tail jumps into 0x4F62DA"
+0x4F2A03,func,,gfx_glyph_cache_find,"0x40-entry cache at gfx_glyph_cache, key=char+metric"
+0x4F25C2,func,,gfx_glyph_rasterize,"char in EAX, metric in EDX"
+0x4F04FB,func,,gfx_near_clip_poly,"real near-plane clipper; 6 callers, all object draw (terrain is never clipped)"
+0x4FBF87,func,,gfx_soft_convert_flat,"software staging path; never fires in practice"
+0x4F33FE,func,,gfx_soft_convert_textured,"software staging path; never fires in practice"
+0x4F760E,data,,gfx_opcode_values,"0x17 opcode bytes scanned with repne scasb"
+0x4F7624,data,,gfx_opcode_handlers,"jmp [ecx*4 + this], ecx = 22-pos"
+0x4F75B0,data,,gfx_opcode_handlers_2d,"second dispatch table"
+0x77E4C4,data,gfx_ctx,gfx_ctx_a,"double-buffered draw context A (0x90 bytes)"
+0x77E554,data,gfx_ctx,gfx_ctx_b,"double-buffered draw context B"
+0x77EA74,data,pointer,gfx_cur_ctx,"current gfx_ctx"
+0x77E6DC,data,pointer,gfx_arena_cursor,"bump allocator cursor for packets, reset per frame at 0x4A7257"
+0x5303E0,data,,gfx_arena_starts,"6-dword table of per-mode/per-buffer arena start addresses"
+0x77E720,data,dword,gfx_buf_index,
+0x77EAC6,data,byte,gfx_frame_parity,"selects big OT / arena half"
+0x7764A4,data,,gfx_big_ot_0,"4096-entry depth OT (relocated to .mmlo 8192 entries by our patch)"
+0x77A4A4,data,,gfx_big_ot_1,
+0x77E6FC,data,pointer,gfx_big_ot_cur,"single writer at 0x4A71FA"
+0x551D4C,data,,gfx_ot_terminator,
+0x551D10,data,pointer,d3d_device,"IDirect3DDevice3*"
+0x8876C4,data,,gfx_staged_verts,"4 XYZRHW verts (stride 0x20) staged before DrawPrimitive"
+0x887770,data,word,gfx_color_word,"bits 5-6 pick the fixed alpha level 0xff/0x80/0x40"
+0x887754,data,word,gfx_stage_x0,"software staging X0 (dead path)"
+0x50A8BC,data,float,gfx_coord_scale,"2.0: 320-space -> 640 device"
+0x50A8C0,data,float,gfx_w_const,"0.1, RHW = 0.1/W"
+# ---- GTE emulation / projection ----
+0x77EB00,data,,gte_regs,"software GTE register file 0x77EB00-0x77EC00"
+0x77EBB8,data,word,gte_otz,
+0x77EBBC,data,dword,gte_nclip_mac0,"cross product written by gte_nclip"
+0x77EBC0,data,dword,gte_h,"projection plane distance (int)"
+0x77EBDC,data,float,gte_h_float,"330.0; our anamorphic patch redirects 5 X readers to a shadow copy"
+0x4EFD2E,func,,gte_nclip,"NCLIP: winding cross product -> gte_nclip_mac0; 11 callers (8 object, 3 terrain)"
+0x4EFFE2,func,,gte_get_nclip,
+0x50A518,data,float,near_plane_factor,"0.03125 after our patch (vanilla 0.5)"
+0x50A598,data,double,near_plane_divisor,"32.0 after our patch"
+# ---- math ----
+0x4EF638,func,,math_build_rot_matrix,"from 3 euler words -> 3x3 matrix"
+0x4EF57E,func,,math_rot_axis_57e,"per-axis rotation helper (axis TBD)"
+0x4EF486,func,,math_rot_axis_486,"per-axis rotation helper (axis TBD)"
+0x4EF50D,func,,math_rot_axis_50d,"per-axis rotation helper (axis TBD)"
+0x4EF075,func,,math_sqrt,
+0x4EF04B,func,,math_atan2,"4096 = 360 deg"
+0x42ABB4,func,,math_ease_angle,"rate-limited angle approach"
+0x42DFC4,func,,math_rotate_vec_by_orientation,
+# ---- camera ----
+0x42961B,func,,cam_apply_angles,"funcA: eax=pos ptr, pitch/yaw/roll args; writes cam angles then builds matrix; 7 callers, called every frame"
+0x4298F6,func,,cam_set_angles_b,"funcB, indirect-called, never seen live"
+0x42984E,func,,cam_follow_walk,"copies [eax] pos to cam_target then cam_apply_angles"
+0x429863,func,,cam_follow_lookat,"atan2 pitch/yaw look-at, then cam_apply_angles"
+0x77EA08,data,word,cam_pitch,"12-bit angle"
+0x77EA0A,data,word,cam_yaw,
+0x77EA0C,data,word,cam_roll,"unused (always 0)"
+0x564A6C,data,,cam_rot_matrix,"3x3 dwords"
+0x77E950,data,,cam_rig,"camera rig struct (entity-like)"
+0x77E960,data,word,cam_rig_yaw,"= eased(player facing + 0x800); written at 0x429FA3 and 0x42A6FA"
+0x77E998,data,,cam_target_pos,"camera's copy of target position (x@0 y@4 z@8)"
+0x56F182,data,dword,cam_pos_x,"16.16"
+0x56F186,data,dword,cam_pos_z,"16.16"
+# ---- player ----
+0x5F8364,data,player_t,player,"player struct"
+0x4B53D3,func,,player_move_helper,"called each frame while the player has control (8 call sites in state handlers)"
+0x4B5502,func,,player_turn,"tank-turn integrator: facing += clamped turn speed"
+0x42DE56,func,,player_apply_local_velocity,"rotates local velocity by orientation and applies"
+0x47AD80,label,,player_reset_facing_site,"only static writer of player facing (init)"
+# ---- HUD ----
+0x4364F0,func,,hud_emit_sprite,"shared 2D HUD sprite emitter: 0x38 packet, X at +8/+0x10/+0x18/+0x20, bucket ctx+0x78; 20 callers"
+0x435F90,func,,hud_draw_player_status,"HP bar segments = hp>>4"
+0x436081,func,,hud_draw_special_gauge,
+0x436210,func,,hud_draw_boss_bar,"Y=16 top row"
+0x4363B5,func,,hud_draw_gauge_4363b5,"looked like a boss gauge statically but never fires"
+0x77E7DE,data,dword,boss_hp,"16.16 (int word at 0x77E7E0)"
+0x77E7E2,data,word,boss_hp_max,
+# ---- text / font ----
+0x52DFA0,data,,font_width_table,"indexed by tile code"
+0x52E3C4,data,,font_metric_table,"default metric 0x7f3c"
+0x7873C4,data,,gfx_glyph_cache,
+0x887880,data,dword,font_index,
+0x50A97C,data,float,font_coord_scale,"2.0"
+# ---- terrain ----
+0x4344F0,func,,terrain_emit_chunks,"chunk emitter with backface/margin/depth gates"
+0x434D25,func,,terrain_emit_sub_434d25,"undocumented"
+0x559918,data,pointer,terrain_ot_bucket,"internally clamped"
+0x5598AC,data,,terrain_cell_sxy,"3x3 projected vertex grid"
+0x559920,data,,terrain_cell_w,
+0x511744,data,,terrain_cell_topology,"4 quads + 4 corner triangles"
+# ---- tasks ----
+0x4A9178,func,,task_iterate_pool,
+0x4DC4A7,func,,task_pools_init,"8 packed fixed-size pools"
+0x56FA74,data,,task_pool_16x36,
+0x77E6F4,data,pointer,task_handler_table,
+0x77E728,data,dword,task_pool_mask_a,
+0x77E730,data,dword,task_pool_mask_b,
+# ---- main loop / timing ----
+0x4FFB80,func,,game_frame_wrapper,"alloca + call game_frame"
+0x4A6D66,func,,game_frame,"whole frame: logic, scene build, walker at 0x4A70E5, frame wait"
+0x55BDB4,data,float,frame_limiter_threshold,"advanced by frame_step * 16.667ms (float32 precision bug at high uptime)"
+0x50A398,data,double,frame_ms,"16.667"
+0x77EAC1,data,byte,frame_step,"2 = 30fps; most logic ignores it (fixed timestep)"
+0x508328,data,pointer,iat_GetTickCount,
+# ---- platform ----
+0x4F9933,func,,intro_play_avi,"MCI avivideo playback of CAPCOM.AVI"
+0x4F985F,func,,wndproc_main,"clears intro flag on key/mouse"
+0x551FA8,data,byte,intro_playing,
+0x4F0927,func,,cd_check_file,"local fopen then CD drive scan"
+0x4FA8DE,func,,dbg_printf,
