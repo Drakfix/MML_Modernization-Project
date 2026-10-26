@@ -18,3 +18,9 @@ void controls_filter(pad_t *p);
 /* Apply the debug remote pad (if active) over a physical read. Returns 1 if
  * the result counts as a connected pad. */
 int controls_debug_overlay(pad_t *p, int connected);
+
+/* Roll speed (stock cartwheel 0x200), extra roll animation speed in %, the
+ * stick tilt (in %) below which Mega Man walks instead of running, and the
+ * walk/run speed (in % of stock) at the low end of their tilt ranges.
+ * Negative or zero = keep the default. */
+void controls_tune(int roll_speed, int roll_anim_pct, int walk_pct, int walk_min_pct, int run_min_pct);

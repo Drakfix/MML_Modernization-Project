@@ -47,6 +47,11 @@ closer_factor=0.859375
 [controls]
 mode=modern          ; or vanilla
 input=sdl            ; controller through SDL3.dll, or legacy (Xidi)
+roll_speed=768       ; roll (X) speed, stock is 512
+roll_anim=50         ; roll animation plays this % faster
+walk_tilt=55         ; tilt the stick less than this % to walk
+walk_min=40          ; slowest walk, % of normal (lightest tilt)
+run_min=50           ; slowest run, % of normal (just past the walk range)
 
 [general]
 intro=play           ; or skip

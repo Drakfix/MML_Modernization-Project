@@ -1,14 +1,18 @@
-/* Modern controls, ported from the Frida runtime.
+/* Modern controls.
  *
  * Where things run:
  *   cam_apply_angles hook (once per game frame, game thread)
  *       reads the pad, integrates the orbit camera, computes the movement
- *       facing, writes the player facing, steers dodge rolls, runs the dodge
- *       trigger state machine and overrides the camera yaw/pitch arguments.
- *   XInputGetState wrapper (whenever Xidi polls the pad)
+ *       facing, writes the player facing and overrides the camera yaw/pitch
+ *       arguments.
+ *   controls_filter (once per pad poll: SDL path in input.c, or the
+ *   XInputGetState wrapper on the Xidi path)
  *       rewrites what the game sees: D-pad -> left stick, button remap,
- *       stick swap while aiming, forward injection while moving, and the
- *       synthesized LT+A that triggers a roll.
+ *       stick swap while aiming, forward injection while moving; X asks for
+ *       a roll.
+ *   player_update hook: starts the roll (the game's cartwheel, entered
+ *       directly), tunes its speed, lets the stick cancel its landing, and
+ *       adds the walk modifier on a light tilt (analog walk).
  *   player_move_helper hook: heartbeat proving the player has control.
  *   player_turn epilogue hook: re-applies our facing after the game's
  *       rate-limited turn so reversals don't coast.
@@ -48,12 +52,13 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define FACE_OFFSET      2048    /* stick up = away from the camera */
 #define FACE_SIGN        1
 #define MOVE_START_GRACE 4
-#define ROLL_MOVE_MIN    200000.0    /* 16.16 world delta (~3 units) */
-#define DODGE_LEAD       3       /* frames of LT held before the A tap */
-#define DODGE_A_FRAMES   2
-#define DODGE_ZERO_LEAD  2       /* zero the stick only this close to the A tap */
-#define DODGE_TOTAL      (DODGE_LEAD + DODGE_A_FRAMES + 1)
-#define DODGE_STEER_WIN  35      /* frames a dodge may steer the roll */
+#define WALK_FRAC        0.55    /* stick tilt below this walks, above runs */
+#define ROLL_SPEED_DEF   0x300   /* stock cartwheel speed is 0x200 (= running) */
+#define ROLL_ANIM_DEF    50      /* % extra animation speed during the roll */
+#define ROLL_TURN_STEP   0xA0    /* facing turn per update while the cartwheel lands (0x400 = 90 deg) */
+#define WALK_MIN_PCT     40      /* walk speed/animation at the lightest tilt */
+#define RUN_MIN_PCT      50      /* run speed/animation right past the walk range */
+#define ROLL_BUFFER      12      /* player updates a roll press waits for a chance to start */
 #define STALE_POLLS      30
 
 #define PI 3.14159265358979323846
@@ -66,8 +71,8 @@ static int g_modern;
 
 /* shared between the frame hook and the pad wrapper */
 static volatile LONG cam_active, cam_suppress;
-static volatile LONG move_active, move_fwd, inject_fwd;
-static volatile LONG dodge_req, dodge_inj_lt, dodge_inj_a, dodge_zero;
+static volatile LONG move_active, move_fwd, move_walk, inject_fwd;
+static volatile LONG dodge_req;
 static volatile LONG frame_tick;
 static volatile LONG move_gate;
 
@@ -77,9 +82,15 @@ static int move_face, roll_latch;
 static int move_start_grace, move_prev;
 static int32_t last_px, last_pz;
 static int pos_move_credit;
-static int32_t roll_last_x, roll_last_z;
-static int roll_walk_ang, roll_was_rolling, roll_has_moved;
-static int dodge_phase, roll_steer_win;
+
+/* roll (player_update hook) */
+static int roll_ours, roll_dir, roll_anim_acc, roll_buffer;
+static int g_roll_speed = ROLL_SPEED_DEF, g_roll_anim = ROLL_ANIM_DEF;
+static double g_walk_frac = WALK_FRAC;
+static int g_walk_min = WALK_MIN_PCT, g_run_min = RUN_MIN_PCT;
+static int loco_anim_acc, loco_pct = 100;
+static uint16_t talk_saved;
+static int talk_hidden, walk_injected;
 
 /* input state (this was the Python thread) */
 static double st_yaw, st_pitch;
@@ -249,6 +260,7 @@ static void input_update(void)
     }
     move_face = facing;
     move_fwd = fwd;
+    move_walk = moving && fwd < (int)(g_walk_frac * 32767);
     move_active = moving;
     cam_yaw = (int)st_yaw & 0xffff;
     cam_pitch_ecx = (-(int)st_pitch) & 0xffff;   /* cam_apply_angles negates ECX */
@@ -261,63 +273,6 @@ static void input_update(void)
 static void write_facing(int angle)
 {
     WR32(G_PLAYER_FACING, (uint32_t)(angle & 0xfff) << 16);
-}
-
-static void roll_steer(void)
-{
-    int32_t px = RD32(G_PLAYER_X), pz = RD32(G_PLAYER_Z);
-    uint32_t st = (uint32_t)RD32(G_PLAYER_STATE);
-    /* bit 0x800 is also set while aiming and on jump landings, hence the extra gates */
-    int rolling = (st & 0x800) && !cam_suppress && roll_steer_win > 0;
-    double dx = (double)px - roll_last_x, dz = (double)pz - roll_last_z;
-    double moved2 = dx * dx + dz * dz;
-    double min2 = ROLL_MOVE_MIN * ROLL_MOVE_MIN;
-
-    roll_latch = rolling;
-    if (rolling) {
-        int stopped;
-        if (!roll_was_rolling)
-            roll_has_moved = 0;
-        if (moved2 > min2)
-            roll_has_moved = 1;
-        stopped = roll_has_moved && moved2 <= min2;
-        if (stopped)
-            write_facing(roll_walk_ang + 2048);   /* recovery: face the travel direction */
-        else   /* the engine rolls along facing -/+ 90; pre-rotate so it lands on the walk heading */
-            write_facing(roll_walk_ang + (((st >> 24) & 1) ? 1024 : -1024));
-    } else {
-        if (roll_was_rolling)
-            write_facing(roll_walk_ang + 2048);
-        /* keep learning the walk heading so it's fresh when a roll starts */
-        if (moved2 > min2)
-            roll_walk_ang = iround(atan2(dx, dz) * 2048.0 / PI) & 0xfff;
-    }
-    roll_last_x = px;
-    roll_last_z = pz;
-    roll_was_rolling = rolling;
-}
-
-static void dodge_machine(void)
-{
-    /* only start from a neutral, grounded state */
-    if (dodge_req && dodge_phase == 0) {
-        if (!(RD32(G_PLAYER_STATE) & 0x800)) {
-            dodge_phase = DODGE_TOTAL;
-            roll_steer_win = DODGE_STEER_WIN;
-        }
-        dodge_req = 0;
-    }
-    if (roll_steer_win > 0)
-        roll_steer_win--;
-    if (dodge_phase > 0) {
-        int df = DODGE_TOTAL - dodge_phase;
-        dodge_inj_lt = 1;
-        dodge_inj_a = df >= DODGE_LEAD && df < DODGE_LEAD + DODGE_A_FRAMES;
-        dodge_zero = df >= DODGE_LEAD - DODGE_ZERO_LEAD;
-        dodge_phase--;
-    } else {
-        dodge_inj_lt = dodge_inj_a = dodge_zero = 0;
-    }
 }
 
 static void true_orbit(void)
@@ -371,14 +326,230 @@ static void on_cam_apply(regs_t *r)
     if (move_start_grace > 0)
         move_start_grace--;
 
-    roll_steer();
-    dodge_machine();
 
     if (cam_active && !cam_suppress) {
         r->ebx = (uint32_t)cam_yaw;
         r->ecx = (uint32_t)cam_pitch_ecx;
         true_orbit();
     }
+}
+
+/* ---- player_update hook: roll + analog walk ----
+ *
+ * The roll is the game's own side cartwheel (state 9), entered directly
+ * instead of through the jump crouch it normally comes from: state 9 sub 0
+ * only waits for the current animation to end, so marking it ended
+ * (+0xA7 = 0xFF) makes the game start the cartwheel this same update, with
+ * its i-frames, sound and landing. The cartwheel travels at 90 degrees to
+ * the facing (+0x116 = +-0x400), so the facing is set to the wanted heading
+ * +-0x400, whichever side is closer to where Mega Man faces now. */
+
+#define PL(o)   (G_PLAYER + (o))
+#define P8(o)   (*(volatile uint8_t *)PL(o))
+#define P16(o)  (*(volatile uint16_t *)PL(o))
+#define S16(o)  (*(volatile int16_t *)PL(o))
+
+static int ang_dist(int a, int b)
+{
+    int d = (a - b) & 0xfff;
+    return d > 2048 ? 4096 - d : d;
+}
+
+static int roll_try_start(void)
+{
+    int st = P8(PL_STATE), cur = (RD32(G_PLAYER_FACING) >> 16) & 0xfff, f, var;
+    /* grounded movement states, or the landing pose of a previous roll (chaining) */
+    if (st != 0 && st != 1 && st != 2 && st != 4 && st != 5 && st != 6 && !(st == 8 && P8(PL_SUBSTATE) >= 6))
+        return 0;
+    if (P8(PL_AIRBORNE) || (P8(PL_INPUT_FLAGS) & 0x60))
+        return 0;
+    if (move_active)
+        f = move_face & 0xfff;
+    else if (roll_ours)
+        f = roll_dir;   /* chained, no stick: keep going the same way */
+    else
+        f = cur;        /* no stick: along the facing */
+    var = ang_dist(f + 0x400, cur) <= ang_dist(f - 0x400, cur) ? 0 : 1;
+    write_facing(var == 0 ? f + 0x400 : f - 0x400);
+    P8(PL_RUN_DIR) = 0;
+    P16(PL_MOVE_ANGLE) = 0;
+    P16(0xB4) = 0;
+    P16(PL_VEL_FWD) = 0;
+    P16(PL_VEL_SIDE) = 0;
+    P8(PL_STATE) = 9;
+    P8(PL_SUBSTATE) = 0;
+    P8(PL_VARIANT) = (uint8_t)var;
+    P8(PL_ANIM_FLAGS) = 0xFF;   /* "current animation finished" */
+    roll_ours = 1;
+    roll_dir = f;
+    roll_anim_acc = 0;
+    return 1;
+}
+
+static void roll_tune(void)
+{
+    int st = P8(PL_STATE);
+    if (st == 9) {
+        int id = P8(PL_ANIM_ID);
+        if (S16(PL_VEL_SIDE) == 0x200)
+            S16(PL_VEL_SIDE) = (int16_t)g_roll_speed;
+        else if (S16(PL_VEL_SIDE) == -0x200)
+            S16(PL_VEL_SIDE) = (int16_t)-g_roll_speed;
+        if (S16(PL_VEL_FWD) == 0x200)
+            S16(PL_VEL_FWD) = (int16_t)g_roll_speed;
+        /* play the cartwheel animations faster: shave hold ticks (never to 0,
+         * anim_tick does the step) */
+        if (id >= 0x18 && id <= 0x1C) {
+            roll_anim_acc += g_roll_anim;
+            while (roll_anim_acc >= 100) {
+                roll_anim_acc -= 100;
+                if (P8(PL_ANIM_HOLD) > 1)
+                    P8(PL_ANIM_HOLD)--;
+            }
+        }
+        /* landing: turn from side-on to the roll heading over a few updates,
+         * keeping the travel line (travel = facing - +0x116) */
+        if (P8(PL_SUBSTATE) >= 4) {
+            int cur = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
+            int d = ((roll_dir - cur + 2048) & 0xfff) - 2048;
+            if (d > ROLL_TURN_STEP) d = ROLL_TURN_STEP;
+            if (d < -ROLL_TURN_STEP) d = -ROLL_TURN_STEP;
+            cur = (cur + d) & 0xfff;
+            write_facing(cur);
+            S16(PL_MOVE_ANGLE) = (int16_t)(((cur - roll_dir + 2048) & 0xfff) - 2048);
+            /* the landing that follows (state 8 sub 6) picks its recovery
+             * animation by run direction; the cartwheel left it at "sideways"
+             * (0x2B/0x2C, a side-on body), we now face forward: 0x2A */
+            P8(PL_RUN_DIR) = 0;
+        }
+    } else if (st == 8 && P8(PL_SUBSTATE) >= 6) {
+        /* landing pose: the cartwheel left Mega Man side-on, face where he rolled */
+        write_facing(roll_dir);
+        /* moving the stick cancels it into a run */
+        if (move_active) {
+            P8(PL_STATE) = 0;
+            P8(PL_SUBSTATE) = 0;
+            P8(PL_VARIANT) = 0;
+            P16(PL_VEL_FWD) = 0;
+            P16(PL_VEL_SIDE) = 0;
+            P16(PL_MOVE_ANGLE) = 0;
+            P8(PL_RUN_DIR) = 0;
+            P16(0xB4) = 0;
+            P8(0x54A) = 0;
+            P8(0x175) |= 1;
+            P8(PL_ANIM_ID) = 0;
+            P8(PL_ANIM_ENTRY) = 0;
+            write_facing(move_face);
+            roll_ours = 0;
+        }
+    } else {
+        if (st == 7) {   /* rolled off a ledge: falling, face the roll heading */
+            write_facing(roll_dir);
+            S16(PL_MOVE_ANGLE) = 0;
+        }
+        roll_ours = 0;
+    }
+}
+
+/* Analog speed: within the walk range the walk goes from WALK_MIN_PCT to its
+ * full speed, past it the run goes from RUN_MIN_PCT to full speed. The
+ * animation is slowed by the same factor so the feet keep up with the ground
+ * (an extra hold tick now and then, the game's own per-tick blend does the rest). */
+static void locomotion_tune(void)
+{
+    loco_pct = 100;
+    int st = P8(PL_STATE), id = P8(PL_ANIM_ID), pct;
+    double n = move_fwd / 32767.0, w = g_walk_frac;
+    if (st == 1 && P8(PL_SUBSTATE) >= 1 && P8(PL_VARIANT) == 0) {
+        double t = w > 0 ? n / w : 1;
+        if (t > 1) t = 1;
+        pct = g_walk_min + (int)((100 - g_walk_min) * t);
+        loco_pct = pct;
+        if (id != 0x0C)
+            return;
+    } else if (st == 2 && P8(PL_SUBSTATE) >= 2 && P8(PL_RUN_DIR) == 0) {
+        double t = w < 1 ? (n - w) / (1 - w) : 1;
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        pct = g_run_min + (int)((100 - g_run_min) * t);
+        loco_pct = pct;
+        if (id != 0x01 && id != 0x04)
+            return;
+    } else {
+        loco_anim_acc = 0;
+        return;
+    }
+    loco_anim_acc += 100 - pct;
+    while (loco_anim_acc >= 100) {
+        loco_anim_acc -= 100;
+        if (P8(PL_ANIM_HOLD) < 0x7F)
+            P8(PL_ANIM_HOLD)++;
+    }
+}
+
+static void on_player_update(regs_t *r)
+{
+    if (r->eax != G_PLAYER)
+        return;
+    if (talk_hidden) {
+        P16(PL_MASK_TALK) = talk_saved;
+        talk_hidden = 0;
+    }
+    if (!cam_active) {   /* orbit off: stock controls, but let a roll in flight finish tuned */
+        if (roll_ours)
+            roll_tune();
+        roll_latch = roll_ours;
+        return;
+    }
+    /* a press that can't start yet (mid-roll, mid-air) stays buffered for a few updates */
+    if (dodge_req && !cam_suppress) {
+        if (!roll_buffer)
+            roll_buffer = ROLL_BUFFER;
+        if (roll_try_start()) {
+            dodge_req = 0;
+            roll_buffer = 0;
+        } else if (--roll_buffer == 0) {
+            dodge_req = 0;
+        }
+    }
+    if (roll_ours)
+        roll_tune();
+    roll_latch = roll_ours;
+
+    loco_pct = 100;
+    if (move_active && inject_fwd && !roll_ours)
+        locomotion_tune();
+
+    /* analog walk: a light tilt adds the walk modifier (Triangle) to what the
+     * player holds, so the game picks its own walk state */
+    if (walk_injected && !(*(volatile uint16_t *)G_PAD_HELD & P16(PL_MASK_WALK)))
+        P16(PL_HELD) &= (uint16_t)~P16(PL_MASK_WALK);   /* in case held wasn't refreshed yet */
+    walk_injected = 0;
+    if (move_walk && move_active && inject_fwd && !roll_ours && !(P8(PL_INPUT_FLAGS) & 0x60)) {
+        uint16_t walk = P16(PL_MASK_WALK);
+        walk_injected = 1;
+        P16(PL_HELD) |= walk;
+        /* walk and talk share a button: an injected walk must not open a
+         * conversation with whoever stands in front (the real button still does) */
+        if (!(*(volatile uint16_t *)G_PAD_HELD & walk) && (P16(PL_MASK_TALK) & walk)) {
+            talk_saved = P16(PL_MASK_TALK);
+            P16(PL_MASK_TALK) = (uint16_t)(talk_saved & ~walk);
+            talk_hidden = 1;
+        }
+    }
+}
+
+/* player_apply_velocity(EAX p, EDX fwd, EBX vert, ECX side): the walk state
+ * re-enters itself every update (resetting its speed), so the analog speed
+ * is applied here, where walk and run hand their speed to the game. */
+static void on_apply_velocity(regs_t *r)
+{
+    int st;
+    if (r->eax != G_PLAYER || loco_pct == 100)
+        return;
+    st = P8(PL_STATE);
+    if (st == 1 || st == 2)
+        r->edx = (uint32_t)(int32_t)((int16_t)r->edx * loco_pct / 100);
 }
 
 static void on_cam_set_b(regs_t *r)
@@ -448,20 +619,14 @@ void controls_filter(pad_t *p)
     }
     prev_x = phys_x;
     if (dodge_req) {
-        if (++req_age > 20)   /* never consumed (menu): drop it, no phantom roll later */
+        if (++req_age > 60)   /* never consumed (menu): drop it, no phantom roll later */
             dodge_req = 0;
     } else {
         req_age = 0;
     }
-    if (fresh && dodge_inj_lt)
-        p->bLeftTrigger = 255;
-    if (fresh && dodge_inj_a)
-        out |= BTN_A;
     p->wButtons = out;
 
-    if (fresh && dodge_zero) {
-        p->sThumbLX = p->sThumbLY = 0;
-    } else if (aiming) {
+    if (aiming) {
         SHORT lx = p->sThumbLX, ly = p->sThumbLY;
         p->sThumbLX = p->sThumbRX;
         p->sThumbLY = p->sThumbRY;
@@ -469,7 +634,7 @@ void controls_filter(pad_t *p)
         p->sThumbRY = ly;
     } else if (fresh && move_active && inject_fwd) {
         p->sThumbLX = 0;
-        p->sThumbLY = (SHORT)move_fwd;
+        p->sThumbLY = 32767;   /* walk vs run is decided in the player hook */
     }
 }
 
@@ -554,6 +719,22 @@ static DWORD WINAPI intro_skip_thread(LPVOID unused)
     return 0;
 }
 
+void controls_tune(int roll_speed, int roll_anim_pct, int walk_pct, int walk_min_pct, int run_min_pct)
+{
+    if (walk_min_pct >= 0 && walk_min_pct <= 100)
+        g_walk_min = walk_min_pct;
+    if (run_min_pct >= 0 && run_min_pct <= 100)
+        g_run_min = run_min_pct;
+    if (roll_speed > 0)
+        g_roll_speed = roll_speed;
+    if (roll_anim_pct >= 0)
+        g_roll_anim = roll_anim_pct;
+    if (walk_pct >= 0)
+        g_walk_frac = walk_pct / 100.0;
+    log_printf("controls: roll speed 0x%X, roll animation +%d%%, walk below %d%% tilt, walk from %d%%, run from %d%%",
+               g_roll_speed, g_roll_anim, (int)(g_walk_frac * 100), g_walk_min, g_run_min);
+}
+
 /* ---- install ---- */
 
 void controls_install(int modern, int intro_pad_skip)
@@ -562,6 +743,8 @@ void controls_install(int modern, int intro_pad_skip)
     static const uint8_t cam_set_b_bytes[] = { 0x51, 0x56, 0x57, 0x83, 0xEC, 0x10 };
     static const uint8_t player_move_bytes[] = { 0x51, 0x56, 0x57, 0x55, 0x83, 0xEC, 0x04 };
     static const uint8_t player_turn_ret_bytes[] = { 0x89, 0xC8, 0x5F, 0x5E, 0xC3 };
+    static const uint8_t player_update_bytes[] = { 0x53, 0x51, 0x52, 0x56, 0x57, 0x55 };
+    static const uint8_t apply_velocity_bytes[] = { 0x56, 0x89, 0xC6, 0x66, 0x8B, 0x80, 0x16, 0x01, 0x00, 0x00 };
     HMODULE xidi = GetModuleHandleA("dinput.dll");
 
     g_modern = modern;
@@ -578,7 +761,9 @@ void controls_install(int modern, int intro_pad_skip)
     if (hook_mid(G_FN_CAM_APPLY, sizeof cam_apply_bytes, cam_apply_bytes, on_cam_apply) &&
         hook_mid(G_FN_CAM_SET_B, sizeof cam_set_b_bytes, cam_set_b_bytes, on_cam_set_b) &&
         hook_mid(G_FN_PLAYER_MOVE, sizeof player_move_bytes, player_move_bytes, on_player_move) &&
-        hook_mid(G_SITE_PLAYER_TURN_RET, sizeof player_turn_ret_bytes, player_turn_ret_bytes, on_player_turn_ret))
+        hook_mid(G_SITE_PLAYER_TURN_RET, sizeof player_turn_ret_bytes, player_turn_ret_bytes, on_player_turn_ret) &&
+        hook_mid(G_FN_PLAYER_UPDATE, sizeof player_update_bytes, player_update_bytes, on_player_update) &&
+        hook_mid(G_FN_PLAYER_APPLY_VEL, sizeof apply_velocity_bytes, apply_velocity_bytes, on_apply_velocity))
         log_printf("controls: %s (F5 / L3 / R3 toggles the orbit camera)", modern ? "modern" : "vanilla");
     else
         log_printf("controls: game hooks failed");

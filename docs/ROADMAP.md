@@ -41,6 +41,10 @@ included, without emulation.
 - Better modern controls (in progress)
   - Native controller support through SDL3: Xbox, PlayStation, Switch and most other
     gamepads, no Xidi needed (done)
+  - Faster, snappier roll that starts right away, chains, and cancels into a run
+    (done)
+  - Analog movement: tilt the stick a little to walk, more to run, with the speed
+    and animation following the tilt (done)
 - Mouse + keyboard with the orbit camera
 - Fix the known issues
 - Better presentation overall

@@ -21,6 +21,23 @@
 #define G_CAM_POS_Z             0x56F186u
 
 /* player (struct at 0x5F8364) */
+#define G_PLAYER                0x5F8364u   /* player object; offsets below (RE-notes 7.11.1) */
+#define PL_STATE                0x09        /* u8: 0 idle, 1 walk, 2 run, ..., 9 cartwheel */
+#define PL_SUBSTATE             0x0A
+#define PL_VARIANT              0x0B
+#define PL_VEL_FWD              0x44        /* s16 */
+#define PL_VEL_SIDE             0x48        /* s16 */
+#define PL_AIRBORNE             0x74
+#define PL_ANIM_ENTRY           0xA4        /* u8 entry index; +0xA5 hold ticks, +0xA6 event, +0xA7 flags (0xFF = ended) */
+#define PL_ANIM_HOLD            0xA5
+#define PL_ANIM_FLAGS           0xA7
+#define PL_ANIM_ID              0xAC
+#define PL_INPUT_FLAGS          0xBD        /* 0x40 input locked, 0x20 scripted input */
+#define PL_RUN_DIR              0x112
+#define PL_MOVE_ANGLE           0x116       /* s16 travel offset from facing */
+#define PL_HELD                 0x11C       /* u16 held buttons (PS1 bits) */
+#define PL_MASK_WALK            0x134       /* u16 walk-modifier button mask (0x2000) */
+#define PL_MASK_TALK            0x136       /* u16 talk/check mask: the same button as walk */
 #define G_PLAYER_STATE          0x5F836Cu   /* +0x08: bit 0x800 busy/roll, bit 0x01000000 roll side (1 = left) */
 #define G_PLAYER_X              0x5F8380u   /* s32 16.16 */
 #define G_PLAYER_Z              0x5F8388u
@@ -34,10 +51,13 @@
 #define G_FN_CAM_APPLY          0x42961Bu   /* cam_apply_angles: EAX pos*, EDX dist, EBX yaw, ECX -pitch */
 #define G_FN_CAM_SET_B          0x4298F6u   /* cam_set_angles_b: yaw in EDX */
 #define G_FN_PLAYER_MOVE        0x4B53D3u   /* runs each frame while the player has control */
+#define G_FN_PLAYER_UPDATE      0x4A9A31u   /* player_update(EAX = object): pre + state handlers */
+#define G_FN_PLAYER_APPLY_VEL   0x4B527Bu   /* player_apply_velocity(EAX p, DX fwd, BX vert, CX side) along facing - +0x116 */
 #define G_FN_PAD_POLL           0x4F8E15u   /* pad_poll: joystick half, then keyboard half */
 #define G_SITE_JOY_GATE         0x4F8E26u   /* pad_poll: cmp dword [G_JOY_DEVICE],0 */
 #define G_SITE_PAD_POLL_KB      0x4F8F22u   /* pad_poll: start of the keyboard half */
 #define G_JOY_DEVICE            0x551F40u   /* IDirectInputDevice* joystick (Xidi) or NULL */
+#define G_PAD_HELD              0x5708DAu   /* u16 pad held buttons (active high), copied to player +0x11C */
 #define G_PAD_BUF_PTR           0x887A48u   /* -> pad state 0x5708B4: status, type, u16 buttons (active low) */
 #define G_PAD_MASKS             0x551F84u   /* u16[14]: game button index -> PS1 bit (Up Down Left Right Tri X Sq O L1 L2 R1 R2 Start Select) */
 #define G_JOY_BINDINGS          0x887A34u   /* {dinput button, game button}[9] */

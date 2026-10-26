@@ -241,8 +241,9 @@ static void on_frame(regs_t *r)
         const uint8_t *pl = (const uint8_t *)0x5F8364u;
         uint32_t now = pl[9] | pl[10] << 8 | (uint32_t)pl[0xAC] << 16 | (uint32_t)pl[0x174] << 24;
         if (now != last) {
-            log_printf("player: state %d sub %d anim %02X flags174 %02X 16b %02X 177 %02X held %04X press %04X",
-                       pl[9], pl[10], pl[0xAC], pl[0x174], pl[0x16B], pl[0x177],
+            log_printf("player: f%u state %d sub %d var %d anim %02X facing %03X pos %d,%d held %04X press %04X",
+                       g_frames, pl[9], pl[10], pl[11], pl[0xAC], (*(const uint32_t *)(pl + 0x54) >> 16) & 0xfff,
+                       *(const int32_t *)(pl + 0x1C) >> 16, *(const int32_t *)(pl + 0x24) >> 16,
                        *(const uint16_t *)(pl + 0x11C), *(const uint16_t *)(pl + 0x11E));
             last = now;
         }
@@ -348,6 +349,11 @@ static void init(void)
     intro_plays = install_intro();
     ini_string("controls", "mode", "modern", controls, sizeof controls);
     controls_install(_stricmp(controls, "vanilla") != 0, intro_plays);
+    controls_tune(GetPrivateProfileIntA("controls", "roll_speed", 0, g_ini),
+                  GetPrivateProfileIntA("controls", "roll_anim", -1, g_ini),
+                  GetPrivateProfileIntA("controls", "walk_tilt", -1, g_ini),
+                  GetPrivateProfileIntA("controls", "walk_min", -1, g_ini),
+                  GetPrivateProfileIntA("controls", "run_min", -1, g_ini));
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, g_ini))
         controls_debug_pad();
     {
