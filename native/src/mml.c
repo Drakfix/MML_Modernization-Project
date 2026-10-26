@@ -29,6 +29,7 @@
 #include "packets.h"
 #include "toast.h"
 #include "terrain.h"
+#include "fog.h"
 
 #define MML_NATIVE_BUILD "0.2.0-dev (native widescreen)"
 
@@ -172,6 +173,7 @@ static void on_frame(regs_t *r)
     display_frame();
     toast_frame();
     terrain_frame();
+    fog_frame();
 }
 
 static void limiter_frame(void)
@@ -268,6 +270,14 @@ static void init(void)
         controls_debug_pad();
     if (GetPrivateProfileIntA("debug", "census", 0, g_ini))
         census_enable();
+    {
+        char f[16];
+        ini_string("video", "fog", "original", f, sizeof f);
+        if (_stricmp(f, "off") == 0 || GetPrivateProfileIntA("video", "no_fog", 0, g_ini))
+            fog_install(FOG_OFF, 0.0f);
+        else if (_stricmp(f, "light") == 0)
+            fog_install(FOG_LIGHT, ini_float("video", "fog_distance", 2.0f));
+    }
     if (GetPrivateProfileIntA("video", "terrain_clip", 1, g_ini))
         terrain_clip_install(ini_float("debug", "clip_near_scale", 1.0f));
     if (GetPrivateProfileIntA("debug", "clip_census", 0, g_ini))

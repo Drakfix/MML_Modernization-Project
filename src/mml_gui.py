@@ -92,7 +92,7 @@ LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
               "2560x1920": "app(4)", "3200x2400": "app(5)"}   # 0.1.x settings.json values
 DEFAULTS = {"renderer": "mml", "window": "fullscreen",
             "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
-            "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off"}
+            "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original"}
 
 
 def load_settings():
@@ -260,6 +260,7 @@ def write_mml_ini(s, width):
             "nearest_upscale": 1 if s["scalefilter"] == "nearest" else 0,
             "msaa": aa,
             "anisotropy": aniso,
+            "fog": s["fog"],
         },
         "controls": {"mode": s["controls"]},
         "general": {"intro": s["intro"]},
@@ -354,9 +355,13 @@ class App:
         col = tk.Frame(root, bg=BG)
         c.create_window(COL_X, 140, window=col, anchor="nw", width=COL_W)
 
-        def option(label, key, choices, hint=None):
-            card = tk.Frame(col, bg=CARD)
-            card.pack(fill="x", pady=2)
+        def option(label, key, choices, hint=None, row=None, side=None):
+            card = tk.Frame(row or col, bg=CARD)
+            if row:   # half-width card sharing a row with another
+                card.pack(side="left", fill="both", expand=True,
+                          padx=(0, 2) if side == "left" else (2, 0))
+            else:
+                card.pack(fill="x", pady=2)
             top = tk.Frame(card, bg=CARD)
             top.pack(fill="x", padx=10, pady=(5, 0))
             tk.Label(top, text=label, bg=CARD, fg=TEXT,
@@ -370,9 +375,13 @@ class App:
 
         option("Renderer", "renderer",
                [("Modern (Direct3D 11)", "mml"), ("Compatibility", "ddrawcompat")],
-               "Modern = new, alt-tab + screenshots work")
+               "Modern = alt-tab, screenshots + windowed work")
+        pair = tk.Frame(col, bg=BG)
+        pair.pack(fill="x", pady=2)
         option("Display", "window",
-               [("Fullscreen", "fullscreen"), ("Windowed", "windowed")], "windowed needs Modern")
+               [("Fullscreen", "fullscreen"), ("Windowed", "windowed")], row=pair, side="left")
+        option("Upscaling", "scalefilter",
+               [("Bilinear", "bilinear"), ("Nearest", "nearest")], row=pair, side="right")
         option("Resolution", "res", RES_CHOICES, "Display = your monitor (recommended)")
         option("Aspect ratio", "aspect", [("16:9 Widescreen", "16:9"), ("4:3 Classic", "4:3")])
         option("Controls", "controls",
@@ -380,12 +389,12 @@ class App:
                "LT aim · RT shoot · X dodge · F5 orbit")
         option("Intro video", "intro",
                [("Play (any button skips)", "play"), ("Skip entirely", "skip")])
-        option("Upscaling", "scalefilter",
-               [("Bilinear", "bilinear"), ("Nearest", "nearest")], "image scaling filter")
         option("Texture filter", "texfilter",
                [("Game default", "app"), ("Trilinear", "trilinear"), ("Anisotropic 16x", "af16x")])
         option("Antialiasing", "aa",
                [("Off", "off"), ("MSAA 4x", "msaa4x"), ("MSAA 8x", "msaa8x")])
+        option("Distance fog", "fog",
+               [("Original", "original"), ("Light", "light"), ("Off", "off")], "Light = twice as far away")
 
         # PLAY pill (canvas image + text, hover swap)
         self.play_img = c.create_image(PLAY_X, PLAY_Y, image=self.img_play, anchor="nw")

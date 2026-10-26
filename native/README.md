@@ -67,6 +67,16 @@ the game window, so the shim centres it at 4:3 on the black window.
 `renderer=ddrawcompat` hands DirectDraw back to the DDrawCompat wrapper like 0.1 did. `gfx.h` is the backend interface, so another backend
 (GLES/Vulkan for Android) can sit behind the same code.
 
+### Distance fog
+
+`[video] fog=original|light|off` (the launcher's Distance fog option). The game
+uses plain table fog: a colour plus a linear start/end in screen depth per
+scene, switched on per draw. The world is drawn well past where the fog maxes
+out, so there's real scenery behind it. `light` multiplies start and end by
+`fog_distance` (2 by default), `off` keeps fog disabled. `fog.c` does it on the
+game's SetRenderState calls, so it works with either renderer. The old
+`no_fog=1` still means off.
+
 ### Terrain near clipping
 
 The game never clips terrain against the camera. Its software GTE flattens any
@@ -96,6 +106,7 @@ see the clipping work.
 - `src/display.c` native widescreen: wide mode/viewport/clear rect + per-primitive placement in DrawPrimitive
 - `src/ddshim.c` DirectDraw 4 / Direct3D 3 implementation (renderer=mml)
 - `src/gfx.h`, `src/gfx_d3d11.c`, `shaders/game.hlsl` rendering backend interface + Direct3D 11 backend
+- `src/fog.c` distance fog options
 - `src/terrain.c` near-plane clipping for terrain (the floor holes)
 - `src/apicensus.c` dev tool: counts every DirectDraw/Direct3D call the game makes
 - `src/packets.c` which display-list packet and bucket is being drawn (walker hooks, HUD sprite tags, deferred draws) + the census
