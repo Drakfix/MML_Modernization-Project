@@ -1,0 +1,3 @@
+LIBRARY mml
+EXPORTS
+    mml_entry
