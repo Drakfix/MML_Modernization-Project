@@ -63,6 +63,16 @@ def detect_game_folder():
 
 HOOK_DLL_NAMES = [n.lower() for n in M.HOOK_DLL_NAMES]
 
+
+def is_reshade(path):
+    """ReShade installed for DirectX 10/11/12 hooks our own Direct3D 11 renderer and is
+    supported; set up for the old DirectDraw/Direct3D 9 chain it would still conflict."""
+    try:
+        with open(path, "rb") as f:
+            return b"ReShadeRegisterAddon" in f.read()
+    except OSError:
+        return False
+
 # Files from the 0.1.x (Frida) runtime. Left in place, an old "Play - MML.bat" or the
 # old launcher would attach Frida on top of mml.dll and both would patch the game, so
 # an upgrade moves them to Modernization/legacy-0.1 (moved, never deleted).
@@ -129,6 +139,9 @@ def do_install(game_dir, add_desktop_shortcut, log):
         if not os.path.isfile(p):
             continue
         if low in M.OUR_DLLS and sha256(p) == M.OUR_DLLS[low]:
+            continue
+        if low in ("dxgi.dll", "d3d11.dll") and is_reshade(p):
+            log(f"Kept ReShade ('{fn}'): it works with the Modern renderer.", 0.42)
             continue
         os.makedirs(qdir, exist_ok=True)
         dst = os.path.join(qdir, fn)

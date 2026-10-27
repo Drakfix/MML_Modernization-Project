@@ -49,6 +49,8 @@ typedef struct {
     int fog_from_w;               /* fog depth = 1/rhw instead of z */
     int gpu_display;              /* render on the GPU driving the monitor, not the fastest one */
     int show_depth;               /* debug: show the effects depth instead of the picture */
+    char shader[260];             /* RetroArch preset (.slangp, full path) for the final picture, "" = none */
+    char game_dir[260];           /* where librashader.dll lives */
 } gfx_options;
 
 int gfx_init(HWND game_window, int app_w, int app_h, const gfx_options *opt);

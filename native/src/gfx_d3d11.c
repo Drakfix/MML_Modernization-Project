@@ -18,6 +18,7 @@
 
 #include "gfx.h"
 #include "log.h"
+#include "rshader.h"
 
 #include "shaders/game_vs.h"
 #include "shaders/game_ps.h"
@@ -449,6 +450,8 @@ int gfx_init(HWND hwnd, int app_w, int app_h, const gfx_options *opt)
         return 0;
     }
     g.cb_dirty = g.state_dirty = 1;
+    if (g.opt.shader[0])
+        rshader_load(g.dev, g.opt.game_dir, g.opt.shader);
     g.ready = 1;
     log_printf("gfx: Direct3D 11 ready (%s)", g.opt.windowed ? "windowed" :
                g.opt.exclusive ? "exclusive fullscreen" : "borderless fullscreen");
@@ -1009,7 +1012,10 @@ void gfx_compose_target(int t)
         ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &g.tg[t].scene_srv);
     }
     ID3D11DeviceContext_PSSetSamplers(g.ctx, 0, 1, g.opt.nearest_upscale ? &g.smp_blit_point : &g.smp_blit_linear);
-    ID3D11DeviceContext_Draw(g.ctx, 3, 0);
+    if (g.opt.show_depth || !rshader_active() ||
+        !rshader_frame(g.ctx, g.tg[t].scene_srv, g.back_rtv, vp.TopLeftX, vp.TopLeftY, (unsigned)vp.Width,
+                       (unsigned)vp.Height))
+        ID3D11DeviceContext_Draw(g.ctx, 3, 0);   /* plain upscale (or the shader failed this frame) */
     ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &none);
     bind_scene();
 }

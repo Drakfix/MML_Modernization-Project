@@ -8,7 +8,7 @@ contains NO Capcom code or data. It requires your own copy of the Mega Man Legen
 PC game.
 
 To run the game on modern Windows it also installs the following THIRD-PARTY,
-OPEN-SOURCE components, redistributed UNMODIFIED from their upstream releases. Each
+OPEN-SOURCE components, redistributed UNMODIFIED from their upstream releases or sources. Each
 is used under its own license (full texts in this "licenses" folder). You may
 replace any of these DLLs with your own build from the linked source.
 
@@ -22,6 +22,13 @@ SDL3                     file: SDL3.dll
   Controller input (Xbox, PlayStation, Switch and other gamepads).
   (c) 1997-2026 Sam Lantinga.  License: zlib  ->  licenses/SDL3-LICENSE.txt
   Source: https://github.com/libsdl-org/SDL
+
+librashader              file: librashader.dll
+  Runs RetroArch shader presets (.slangp) for the optional Shader setting.
+  (c) 2022-2026 Ronny Chan (chyyran).  License: MPL-2.0  ->  licenses/librashader-LICENSE.txt
+  Source: https://github.com/SnowflakePowered/librashader (tag librashader-v0.12.1,
+  built unmodified for 32-bit Windows with only the Direct3D 11 runtime; see
+  docs/BUILDING-librashader.md). Shader presets themselves are NOT included.
 
 Xidi                     file: dinput.dll
   XInput-to-DirectInput translation (controller support).

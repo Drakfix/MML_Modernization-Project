@@ -495,6 +495,23 @@ static void init(void)
             o.windowed = GetPrivateProfileIntA("video", "windowed", 0, g_ini);
             o.exclusive = GetPrivateProfileIntA("video", "exclusive", 0, g_ini);
             o.render_scale = GetPrivateProfileIntA("video", "render_scale", 0, g_ini);
+            {
+                /* [video] shader=preset.slangp (relative to the game folder, or a full path):
+                 * RetroArch shaders on the final picture. They're made for the console's own
+                 * resolution, so the game renders at its own size unless render_scale says
+                 * otherwise ([video] shader_scale, default 1). */
+                char sh[MAX_PATH];
+                ini_string("video", "shader", "", sh, sizeof sh);
+                if (sh[0]) {
+                    if (sh[1] == ':' || (sh[0] == '\\' && sh[1] == '\\'))
+                        strcpy_s(o.shader, sizeof o.shader, sh);
+                    else
+                        _snprintf_s(o.shader, sizeof o.shader, _TRUNCATE, "%s\\%s", g_game_dir, sh);
+                    if (!o.render_scale)
+                        o.render_scale = GetPrivateProfileIntA("video", "shader_scale", 1, g_ini);
+                }
+                strcpy_s(o.game_dir, sizeof o.game_dir, g_game_dir);
+            }
             o.nearest_upscale = GetPrivateProfileIntA("video", "nearest_upscale", 0, g_ini);
             o.msaa = GetPrivateProfileIntA("video", "msaa", 1, g_ini);
             o.anisotropy = GetPrivateProfileIntA("video", "anisotropy", 16, g_ini);

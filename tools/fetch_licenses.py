@@ -7,6 +7,8 @@ We ship these binaries UNMODIFIED:
   dsound.dll        = DSOAL          (LGPL-2.1)       github.com/kcat/dsoal
   dsoal-aldrv.dll   = OpenAL Soft    (LGPL-2.1)       github.com/kcat/openal-soft
   SDL3.dll          = SDL3           (zlib)           github.com/libsdl-org/SDL
+  librashader.dll   = librashader    (MPL-2.0)        github.com/SnowflakePowered/librashader
+                      (built from the unmodified tagged source, see docs/BUILDING-librashader.md)
   (mml.dll embeds pl_mpeg, MIT, github.com/phoboslab/pl_mpeg; its license text is kept in
    native/vendor/pl_mpeg/LICENSE.txt and copied to licenses/ by hand)
 
@@ -25,6 +27,7 @@ SOURCES = {
     "DSOAL-LICENSE.txt": "https://raw.githubusercontent.com/kcat/dsoal/master/LICENSE",
     "OpenAL-Soft-COPYING.txt": "https://raw.githubusercontent.com/kcat/openal-soft/master/COPYING",
     "SDL3-LICENSE.txt": "https://raw.githubusercontent.com/libsdl-org/SDL/main/LICENSE.txt",
+    "librashader-LICENSE.txt": "https://raw.githubusercontent.com/SnowflakePowered/librashader/master/LICENSE.md",
 }
 
 for fn, url in SOURCES.items():
@@ -44,7 +47,7 @@ contains NO Capcom code or data. It requires your own copy of the Mega Man Legen
 PC game.
 
 To run the game on modern Windows it also installs the following THIRD-PARTY,
-OPEN-SOURCE components, redistributed UNMODIFIED from their upstream releases. Each
+OPEN-SOURCE components, redistributed UNMODIFIED from their upstream releases or sources. Each
 is used under its own license (full texts in this "licenses" folder). You may
 replace any of these DLLs with your own build from the linked source.
 
@@ -58,6 +61,13 @@ SDL3                     file: SDL3.dll
   Controller input (Xbox, PlayStation, Switch and other gamepads).
   (c) 1997-2026 Sam Lantinga.  License: zlib  ->  licenses/SDL3-LICENSE.txt
   Source: https://github.com/libsdl-org/SDL
+
+librashader              file: librashader.dll
+  Runs RetroArch shader presets (.slangp) for the optional Shader setting.
+  (c) 2022-2026 Ronny Chan (chyyran).  License: MPL-2.0  ->  licenses/librashader-LICENSE.txt
+  Source: https://github.com/SnowflakePowered/librashader (tag librashader-v0.12.1,
+  built unmodified for 32-bit Windows with only the Direct3D 11 runtime; see
+  docs/BUILDING-librashader.md). Shader presets themselves are NOT included.
 
 Xidi                     file: dinput.dll
   XInput-to-DirectInput translation (controller support).

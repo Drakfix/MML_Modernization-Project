@@ -115,7 +115,7 @@ DEFAULTS = {"renderer": "mml", "window": "fullscreen",
             "lod": "full", "fps": "60", "reticle": "FFD840",
             "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
             "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display",
-            "mouse": "100"}
+            "mouse": "100", "shader": "", "shader_res": "game"}
 
 # button remapping (orbit-camera layout): physical input -> action, mml.ini [controls] btn_*
 BUTTONS = [("btn_a", "A", "Cross"), ("btn_b", "B", "Circle"), ("btn_x", "X", "Square"),
@@ -381,6 +381,8 @@ def write_mml_ini(s, width):
             "fog": s["fog"],
             "lod": s["lod"],
             "interp": 1 if s["fps"] == "60" else 0,
+            "shader": s.get("shader", ""),
+            "shader_scale": 1 if s.get("shader_res", "game") == "game" else 0,
         },
         "controls": controls_ini(s),
         "general": {"intro": s["intro"]},
@@ -558,6 +560,7 @@ class App:
                [("Original", "original"), ("Light", "light"), ("Off", "off")], row=r, side="left")
         option("Model detail", "lod",
                [("Full detail", "full"), ("Original", "original")], row=r, side="right")
+        self.shader_card(self.pages["graphics"])
 
         # ---- Controls ----
         page[0] = self.pages["controls"]
@@ -846,6 +849,71 @@ class App:
         self.ret_custom.pack(side="left", padx=(4, 0))
         self.ret_custom.bind("<Button-1>", lambda e: self.custom_reticle())
         self.refresh_reticle()
+
+    def shader_card(self, parent):
+        """RetroArch shader preset (.slangp) for the final picture: CRT, scanlines, NTSC..."""
+        card = tk.Frame(parent, bg=CARD)
+        card.pack(fill="x", pady=2)
+        top = tk.Frame(card, bg=CARD)
+        top.pack(fill="x", padx=10, pady=(5, 0))
+        tk.Label(top, text="Shader", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(top, text="  RetroArch presets (.slangp): CRT, scanlines, NTSC...", bg=CARD, fg=DIM,
+                 font=("Segoe UI", 9)).pack(side="left")
+        row = tk.Frame(card, bg=CARD)
+        row.pack(fill="x", padx=10, pady=(3, 2))
+
+        def button(text, action):
+            b = tk.Label(row, text=text, bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9), padx=9, pady=3, cursor="hand2")
+            b.pack(side="left", padx=(0, 4))
+            b.bind("<Button-1>", lambda e: action())
+            return b
+        self.shader_off = button("Off", lambda: self.set_shader(""))
+        self.shader_pick = button("Choose preset…", self.choose_shader)
+        button("Open folder", self.open_shader_folder)
+        Segmented(card, self.settings, "shader_res", [("Game resolution", "game"), ("Display", "display")],
+                  on_change=lambda: save_settings(self.settings)).pack(anchor="w", padx=10, pady=(2, 2))
+        tk.Label(card, text="Game resolution suits CRT presets. Presets aren't included: get RetroArch's "
+                            "slang-shaders and put them in Modernization\\shaders.",
+                 bg=CARD, fg=DIM, font=("Segoe UI", 8), wraplength=440, justify="left").pack(
+            anchor="w", padx=10, pady=(0, 6))
+        self.refresh_shader()
+
+    def shader_dir(self):
+        d = os.path.join(GAME_DIR or BASE, "Modernization", "shaders")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def refresh_shader(self):
+        cur = self.settings.get("shader", "")
+        self.shader_off.configure(bg=ACCENT if not cur else SEG_OFF, fg="white" if not cur else TEXT)
+        name = os.path.splitext(os.path.basename(cur))[0] if cur else ""
+        if len(name) > 30:
+            name = name[:29] + "…"
+        self.shader_pick.configure(text=name or "Choose preset…", bg=ACCENT if cur else SEG_OFF,
+                                   fg="white" if cur else TEXT)
+
+    def set_shader(self, path):
+        if path and GAME_DIR:   # inside the game folder: keep it relative, so the folder can move
+            try:
+                rel = os.path.relpath(path, GAME_DIR)
+                if not rel.startswith(".."):
+                    path = rel
+            except ValueError:
+                pass
+        self.settings["shader"] = path
+        save_settings(self.settings)
+        self.refresh_shader()
+
+    def choose_shader(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(parent=self.root, title="RetroArch shader preset",
+                                          initialdir=self.shader_dir(),
+                                          filetypes=[("Shader presets", "*.slangp"), ("All files", "*.*")])
+        if path:
+            self.set_shader(os.path.normpath(path))
+
+    def open_shader_folder(self):
+        os.startfile(self.shader_dir())
 
     def refresh_reticle(self):
         cur = reticle_hex(self.settings)
