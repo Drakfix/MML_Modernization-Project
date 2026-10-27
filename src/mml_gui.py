@@ -66,6 +66,7 @@ def clean_child_env():
 
 
 import tkinter as tk  # noqa: E402
+import tkinter.font as tkfont  # noqa: E402
 
 # ---------- theme ----------
 BG = "#0c141d"
@@ -84,6 +85,23 @@ W, H = 1010, 930
 ART_X, ART_Y = 28, 86
 COL_X, COL_W = 512, 468
 PLAY_X, PLAY_Y = 512, 830
+TITLE_BAR = 40    # title bar + borders
+COMPACT_MIN_H = 600
+
+
+def work_area():
+    """(left, top, right, bottom) of the screen minus the taskbar, or None.
+    MML_GUI_WORKAREA_H pretends the screen is that tall (to preview the compact layout)."""
+    try:
+        r = ctypes.wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(r), 0)   # SPI_GETWORKAREA
+        area = [r.left, r.top, r.right, r.bottom]
+    except Exception:
+        return None
+    fake = os.environ.get("MML_GUI_WORKAREA_H")
+    if fake and fake.isdigit():
+        area[3] = area[1] + int(fake)
+    return area
 
 # DDrawCompat ResolutionScale: "display" = your monitor's resolution, app(N) = N times
 # the game's own mode (640x480 in 4:3, e.g. 854x480 in widescreen).
@@ -424,38 +442,62 @@ class App:
         root.title("Mega Man Legends - Modernization Project")
         root.configure(bg=BG)
         root.resizable(False, False)
-        root.geometry(f"{W}x{H}+{self.centered_pos()}")
+        # Short screens (the Steam Deck's 800 lines, small laptops): PLAY moves under a
+        # trimmed artwork in the left column so the whole window fits.
+        area = work_area()
+        self.h = H
+        if area and area[3] - area[1] - TITLE_BAR < H:
+            self.h = max(COMPACT_MIN_H, area[3] - area[1] - TITLE_BAR)
+        compact = self.h < H
+        if compact:
+            play_x, play_y = ART_X - 8, self.h - 62 - 40
+            foot_x = play_x + 8
+            art_bottom = play_y - (56 if FROZEN else 16)
+        else:
+            play_x, play_y, foot_x, art_bottom = PLAY_X, PLAY_Y, COL_X, ART_Y + 622
+        root.geometry(f"{W}x{self.h}+{self.centered_pos(self.h)}")
         try:
             root.iconbitmap(self.res_path("mml.ico"))
         except Exception:
             pass
 
-        c = self.canvas = tk.Canvas(root, width=W, height=H, highlightthickness=0, bd=0, bg=BG)
+        c = self.canvas = tk.Canvas(root, width=W, height=self.h, highlightthickness=0, bd=0, bg=BG)
         c.pack()
         self.img_bg = tk.PhotoImage(file=self.res_path("gui_bg.png"))
         self.img_art = tk.PhotoImage(file=self.res_path("gui_art_round.png"))
         self.img_play = tk.PhotoImage(file=self.res_path("gui_play.png"))
         self.img_play_hot = tk.PhotoImage(file=self.res_path("gui_play_hot.png"))
         c.create_image(0, 0, image=self.img_bg, anchor="nw")
+        if art_bottom - ART_Y < self.img_art.height():   # keep the top of the art (faces, the Flutter)
+            art = tk.PhotoImage(width=self.img_art.width(), height=art_bottom - ART_Y)
+            art.tk.call(art, "copy", self.img_art, "-from", 0, 0, self.img_art.width(), art_bottom - ART_Y)
+            self.img_art = art
         c.create_image(ART_X, ART_Y, image=self.img_art, anchor="nw")
 
-        # title block (drawn on the blur, with soft shadow)
+        # title block (drawn on the blur, with soft shadow), stacked by real line heights
+        # so it doesn't overlap at higher Windows scaling (at 100% it lands on 62/94/114/140)
+        ls_title = tkfont.Font(family="Segoe UI", size=23, weight="bold").metrics("linespace")
+        ls_small = tkfont.Font(family="Segoe UI", size=10, weight="bold").metrics("linespace")
+        sub_y = 24 + ls_title - 3
+        status_y = sub_y + ls_small + 14
+        col_y = status_y + 2 * ls_small + 10
         c.create_text(COL_X + 2, 24 + 2, text="MEGA MAN LEGENDS", anchor="nw",
                       font=("Segoe UI", 23, "bold"), fill="#04080d")
         c.create_text(COL_X, 24, text="MEGA MAN LEGENDS", anchor="nw",
                       font=("Segoe UI", 23, "bold"), fill=TEXT)
-        c.create_text(COL_X + 2, 62, text=f"M O D E R N I Z A T I O N   P R O J E C T    v{VERSION}",
+        c.create_text(COL_X + 2, sub_y, text=f"M O D E R N I Z A T I O N   P R O J E C T    v{VERSION}",
                       anchor="nw", font=("Segoe UI", 10, "bold"), fill=ACCENT)
         c.create_text(ART_X + 4, 30, anchor="nw", fill=DIM, font=("Segoe UI", 10),
                       text="1997 Capcom PC port · widescreen · twin-stick · fixed audio")
 
         # status lines (canvas texts, colored dynamically)
-        self.exe_item = c.create_text(COL_X, 94, anchor="nw", font=("Segoe UI", 10), fill=DIM, text="…")
-        self.pad_item = c.create_text(COL_X, 114, anchor="nw", font=("Segoe UI", 10), fill=DIM, text="…")
+        self.exe_item = c.create_text(COL_X, status_y, anchor="nw", font=("Segoe UI", 10), fill=DIM, text="…")
+        self.pad_item = c.create_text(COL_X, status_y + ls_small + 2, anchor="nw", font=("Segoe UI", 10),
+                                      fill=DIM, text="…")
 
         # options column (frame hosted on the canvas): a tab bar over three pages
         col = tk.Frame(root, bg=BG)
-        c.create_window(COL_X, 140, window=col, anchor="nw", width=COL_W)
+        c.create_window(COL_X, col_y, window=col, anchor="nw", width=COL_W)
         tabs = tk.Frame(col, bg=BG)
         tabs.pack(fill="x", pady=(0, 4))
         self.pages = {}
@@ -556,8 +598,8 @@ class App:
         self.show_tab(self.settings.get("tab", "display"))
 
         # PLAY pill (canvas image + text, hover swap)
-        self.play_img = c.create_image(PLAY_X, PLAY_Y, image=self.img_play, anchor="nw")
-        self.play_txt = c.create_text(PLAY_X + 234, PLAY_Y + 30, text="▶   P L A Y",
+        self.play_img = c.create_image(play_x, play_y, image=self.img_play, anchor="nw")
+        self.play_txt = c.create_text(play_x + 234, play_y + 30, text="▶   P L A Y",
                                       font=("Segoe UI", 15, "bold"), fill="white")
         for item in (self.play_img, self.play_txt):
             c.tag_bind(item, "<Button-1>", lambda e: self.launch())
@@ -569,13 +611,25 @@ class App:
             self.sc_btn = tk.Label(root, text="＋   Create Desktop Shortcut",
                                    bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 10, "bold"),
                                    padx=16, pady=8, cursor="hand2", bd=0)
-            c.create_window(COL_X, PLAY_Y - 16, window=self.sc_btn, anchor="sw")
+            c.create_window(foot_x if compact else COL_X, play_y - 16, window=self.sc_btn, anchor="sw")
             self.sc_btn.bind("<Button-1>", lambda e: self.make_shortcut())
             self.sc_btn.bind("<Enter>", lambda e: self.sc_btn.configure(bg=SEG_HOVER, fg="white"))
             self.sc_btn.bind("<Leave>", lambda e: self.sc_btn.configure(bg=SEG_OFF, fg=TEXT))
 
-        self.foot_item = c.create_text(COL_X, PLAY_Y + 70, anchor="nw",
+        self.foot_item = c.create_text(foot_x, play_y + 70, anchor="nw",
                                        font=("Segoe UI", 9), fill=DIM, text="")
+
+        # Does the tallest tab fit above PLAY (or the window's bottom in the compact
+        # layout)? If not, main() builds the window again with the text a bit smaller.
+        root.update_idletasks()
+        tallest = max(p.winfo_reqheight() for p in self.pages.values())
+        bottom = self.h - 8 if compact else play_y - 16 - (46 if FROZEN else 0) - 8
+        room = bottom - col_y - tabs.winfo_reqheight() - 4
+        self.fit_scaling = None
+        if tallest > room > 0:
+            # padding doesn't shrink with the text: aim a little lower so one rebuild does it
+            self.fit_scaling = float(root.tk.call("tk", "scaling")) * room / tallest * 0.98
+            return   # main() rebuilds; no status polling for this one
 
         self.refresh_status()
 
@@ -815,17 +869,15 @@ class App:
             self.set_reticle(hexcol)
 
     @staticmethod
-    def centered_pos():
+    def centered_pos(h):
         """Centre in the screen's work area (above the taskbar), never above its top."""
-        try:
-            r = ctypes.wintypes.RECT()
-            ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(r), 0)   # SPI_GETWORKAREA
-            title = 40   # title bar + borders
-            x = r.left + max(0, (r.right - r.left - W) // 2)
-            y = r.top + max(0, (r.bottom - r.top - H - title) // 2)
-            return f"{x}+{y}"
-        except Exception:
+        area = work_area()
+        if not area:
             return "100+40"
+        left, top, right, bottom = area
+        x = left + max(0, (right - left - W) // 2)
+        y = top + max(0, (bottom - top - h - TITLE_BAR) // 2)
+        return f"{x}+{y}"
 
     @staticmethod
     def res_path(name):
@@ -896,7 +948,17 @@ def main():
     except Exception:
         pass
     root = tk.Tk()
-    App(root)
+    app = App(root)
+    for _ in range(3):   # small screen at high Windows scaling: shrink the text until it fits
+        if not app.fit_scaling:
+            break
+        scaling = app.fit_scaling
+        root.destroy()
+        root = tk.Tk()
+        root.tk.call("tk", "scaling", scaling)
+        app = App(root)
+    if app.fit_scaling:   # still a hair too tall: keep this one anyway
+        app.refresh_status()
     shot = os.environ.get("MML_GUI_SHOT")
     if shot:
         def grab():

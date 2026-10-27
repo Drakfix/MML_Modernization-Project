@@ -6,7 +6,10 @@
  * game stores in 0x5505E8. We hook the store: while a lock is wanted we keep
  * our own choice instead (the locked enemy as long as it's in the table,
  * the nearest one when it's gone, the next one left/right on request) and
- * hand that to the game, so its own aiming agrees with ours.
+ * hand that to the game, so its own aiming agrees with ours. A first lock
+ * only considers enemies well inside the view (not behind Mega Man or at a
+ * corner of the screen), the nearest of those; switching cycles through the
+ * ones on screen.
  *
  * Table entry (from target_pick_nearest): s16 x, y, z; u16 flags (bits
  * 13-15 = side class, tested against the player's side mask 0x5505E2; byte
@@ -22,6 +25,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "display.h"
 #include "game.h"
 #include "hook.h"
 #include "lockon.h"
@@ -43,7 +47,7 @@
 #define MAX_CAND             64
 #define PI 3.14159265358979323846
 
-typedef struct { int id; int x, y, z; } cand_t;
+typedef struct { int id; int x, y, z; int seen, central; } cand_t;
 
 static cand_t g_cand[MAX_CAND];
 static int g_ncand;
@@ -121,12 +125,39 @@ static void collect(void)
     }
 }
 
+static int project(double wx, double wy, double wz, double *sx, double *sy);
+
+/* where each candidate is on screen: seen = anywhere in view, central = well
+ * inside it (not hugging an edge or a corner) */
+static void classify(void)
+{
+    /* the projector's space is 320 wide around OFX; native widescreen shows
+     * more of it on both sides (display.c shifts the picture into the wider
+     * surface) */
+    double cx = *(volatile int32_t *)(uintptr_t)G_GTE_OFX, h = 2.0 * *(volatile int32_t *)(uintptr_t)G_GTE_OFY;
+    double w = display_native_width() > 640 ? display_native_width() / 2.0 : 2.0 * cx, x0 = cx - w / 2;
+    int k;
+    for (k = 0; k < g_ncand; k++) {
+        double sx, sy;
+        g_cand[k].seen = g_cand[k].central = 0;
+        if (!project(g_cand[k].x, g_cand[k].y, g_cand[k].z, &sx, &sy))
+            continue;
+        sx -= x0;
+        g_cand[k].seen = sx >= 0 && sx <= w && sy >= 0 && sy <= h;
+        g_cand[k].central = sx >= w * 0.12 && sx <= w * 0.88 && sy >= h * 0.08 && sy <= h * 0.92;
+    }
+}
+
+/* the first lock: the nearest enemy that's well inside the view (one behind
+ * Mega Man or peeking in at a corner isn't what you meant); none = free aim */
 static int nearest(void)
 {
     int px = PS16(0x14), pz = PS16(0x18), k, best = -1;
     double bd = 1e30;
     for (k = 0; k < g_ncand; k++) {
         double dx = g_cand[k].x - px, dz = g_cand[k].z - pz, d = dx * dx + dz * dz;
+        if (!g_cand[k].central)
+            continue;
         if (d < bd) {
             bd = d;
             best = k;
@@ -136,14 +167,15 @@ static int nearest(void)
 }
 
 /* the next enemy clockwise (dir +1, to the right on screen) or counter-
- * clockwise from the current one, as seen from Mega Man; no wrap-around */
+ * clockwise from the current one, as seen from Mega Man, among those in
+ * view; no wrap-around */
 static int next_to(int cur, int dir)
 {
     int px = PS16(0x14), pz = PS16(0x18), k, best = -1;
     double a0 = atan2((double)g_cand[cur].x - px, (double)g_cand[cur].z - pz), bd = 1e30;
     for (k = 0; k < g_ncand; k++) {
         double d;
-        if (k == cur)
+        if (k == cur || !g_cand[k].seen)
             continue;
         d = atan2((double)g_cand[k].x - px, (double)g_cand[k].z - pz) - a0;
         while (d <= -PI) d += 2 * PI;
@@ -167,6 +199,7 @@ static void on_target_store(regs_t *r)
         return;
     }
     collect();
+    classify();
     if (g_lock_id >= 0)
         for (k = 0; k < g_ncand && g_cand[k].id != g_lock_id; k++)
             ;
