@@ -1224,6 +1224,12 @@ void controls_load_keys(const char *ini)
 
 /* while the orbit drives gameplay with KB+M on, the game's own keyboard
  * bindings (arrows, Z X C V, ...) are muted so remapped keys can't double up */
+/* normal play: the follow camera running, no script, menu or conversation */
+int controls_in_gameplay(void)
+{
+    return orbit_allowed();
+}
+
 int controls_mute_game_keys(void)
 {
     return g_kbm && orbit_live() && kbm_foreground();

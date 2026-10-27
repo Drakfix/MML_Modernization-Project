@@ -28,6 +28,7 @@
 #include "display.h"
 #include "interp.h"
 #include "frame_rec.h"
+#include "clipfix.h"
 #include "bglayer.h"
 #include "mml.h"
 #include "gfx.h"
@@ -1118,7 +1119,16 @@ static const rec_prev *world_prevs(const gfx_vertex *raw, DWORD n)
         interp_vec3 *c = &cur[k];
         how[k] = NONE;
         has_res[k] = 0;
-        if (interp_lookup(sx, sy, c, &prev[k]) == 2) {
+        int found = interp_lookup(sx, sy, c, &prev[k]);
+        if (found == 3) {
+            /* the ground: exact position, moved with the camera only */
+            if (interp_static_prev(c, &prev[k])) {
+                how[k] = EXACT;
+                res[k].x = res[k].y = res[k].z = 0;
+                has_res[k] = 1;
+                exact++;
+            }
+        } else if (found == 2) {
             how[k] = EXACT;
             if (interp_debug_last_rematched())
                 rematched = 1;
@@ -1447,6 +1457,10 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
             return D3D_OK;
         }
     }
+    if (g_cur_bucket == 4)
+        verts = (LPVOID)clipfix_apply((const gfx_vertex *)verts,
+                                            g_display_raw_verts ? (const gfx_vertex *)g_display_raw_verts
+                                                                : (const gfx_vertex *)verts, (unsigned)n);
     if (g_tint) {
         static gfx_vertex tv[4096];
         DWORD q;
@@ -1462,6 +1476,7 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
     rec_draw((int)pt, (const gfx_vertex *)verts, prevs, (int)n);
     return D3D_OK;
 }
+
 
 static void fill_device_desc(D3DDEVICEDESC *dd)
 {

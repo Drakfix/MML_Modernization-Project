@@ -60,6 +60,9 @@ static void report(uint32_t ret, uintptr_t v, uintptr_t sxy)
         tf[1] = (float)t[1];
         tf[2] = (float)t[2];
         interp_camera((const float *)G_GTE_ROT, tf);
+        /* the ground never moves: its exact position is all the blend needs */
+        interp_vertex_static((const float *)G_GTE_CAM, *(const float *)sxy, *(const float *)(sxy + 4));
+        return;
     }
     interp_vertex(ret, (const int16_t *)v, (const float *)G_GTE_CAM,
                   *(const float *)sxy, *(const float *)(sxy + 4));

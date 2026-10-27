@@ -12,7 +12,7 @@ public static class K {
 "@
 $p = Get-Process MEGAMAN_NATIVE -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($p) { [K]::SetForegroundWindow($p.MainWindowHandle) | Out-Null; Start-Sleep -Milliseconds 100 }
-$vk = @{ W=0x57; A=0x41; S=0x53; D=0x44; E=0x45; Q=0x51; M=0x4D; SPACE=0x20; LSHIFT=0xA0; LCTRL=0xA2; TAB=0x09; F5=0x74; J=0x4A; DOWN=0x28; UP=0x26; ENTER=0x0D }
+$vk = @{ W=0x57; A=0x41; S=0x53; D=0x44; E=0x45; Q=0x51; M=0x4D; SPACE=0x20; LSHIFT=0xA0; LCTRL=0xA2; TAB=0x09; F5=0x74; F6=0x75; J=0x4A; DOWN=0x28; UP=0x26; ENTER=0x0D }
 switch ($Action) {
   "hold" { $keys = $Arg.Split('+') | % { [byte]$vk[$_] }; foreach ($k in $keys) { [K]::keybd_event($k, 0, 0, [UIntPtr]::Zero) }; Start-Sleep -Milliseconds $Ms; foreach ($k in $keys) { [K]::keybd_event($k, 0, 2, [UIntPtr]::Zero) } }
   "move" { $xy = $Arg.Split(','); $steps = 20; for ($i = 0; $i -lt $steps; $i++) { [K]::mouse_event(1, [int]($xy[0] / $steps), [int]($xy[1] / $steps), 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds ([int]($Ms / $steps)) } }

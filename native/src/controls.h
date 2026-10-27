@@ -50,3 +50,6 @@ int controls_mute_game_keys(void);
 
 /* Called on every pad poll: releases the mouse cursor while the orbit isn't driving (menus). */
 void controls_poll_idle(void);
+
+/* 1 in normal play (follow camera running, no script, menu or conversation). */
+int controls_in_gameplay(void);

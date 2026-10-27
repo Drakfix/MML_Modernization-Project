@@ -21,7 +21,18 @@
  * character loses parts. The low models had big enough triangles to survive.
  * keep_small_triangles() swaps the truncation for one that gives +-1 when a
  * nonzero cross product would truncate to 0. Every caller only tests the sign,
- * and exactly degenerate triangles still come out 0. */
+ * and exactly degenerate triangles still come out 0.
+ *
+ * The ground does the same per terrain chunk (FUN_004345B3, which feeds the
+ * cell emitter 0x4346C6). By the chunk's depth:
+ *     <= 0x400   near: the subdivided cell renderer (always full detail)
+ *     <= 0xAF0   mesh +0x18 (full)
+ *     <= 0x1C20  mesh +0x1C (reduced)
+ *     beyond     mesh +0x20 (reduced further)
+ * so the far ground was coarser and switched to the full mesh as you came
+ * closer, which read as "low-res textures until close". Making both JLEs
+ * unconditional sends every chunk past the near range down the +0x18 path,
+ * the same one the closest chunks already take. */
 #include <windows.h>
 #include <stdint.h>
 #include <string.h>
@@ -38,6 +49,12 @@ static const struct { uintptr_t at; uint8_t modrm; uint32_t imm; } g_sites[] = {
     { 0x4EC93E, 0xFA, 0x708 }, { 0x4EC94D, 0xFA, 0x2BC },   /* cmp edx */
     { 0x4ECC76, 0xFA, 0x708 }, { 0x4ECC85, 0xFA, 0x2BC },
     { 0x4ED26F, 0xFA, 0x708 }, { 0x4ED27E, 0xFA, 0x2BC },
+};
+
+/* terrain chunk LOD: jle (7E rel8) -> jmp (EB rel8) */
+static const struct { uintptr_t at; uint8_t rel; } g_terrain[] = {
+    { 0x434644, 0x07 },   /* cmp edi,0x1C20 ; jle -> skip the +0x20 mesh */
+    { 0x434653, 0x05 },   /* cmp edi,0xAF0  ; jle -> skip the +0x1C mesh */
 };
 
 #define G_NCLIP_TRUNC_CALL 0x4EFD6Bu   /* in gte_nclip: call 0x4F915C (round toward zero), then fistp */
@@ -78,6 +95,44 @@ static __declspec(naked) void nclip_round(void)
     }
 }
 
+static int full_terrain(void)
+{
+    size_t i, n = sizeof g_terrain / sizeof g_terrain[0];
+    for (i = 0; i < n; i++) {
+        uint8_t expect[2] = { 0x7E, g_terrain[i].rel };
+        if (!mem_expect(g_terrain[i].at, expect, sizeof expect)) {
+            log_printf("lod: terrain site %08X unexpected, ground LODs left alone", (unsigned)g_terrain[i].at);
+            return 0;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        static const uint8_t jmp = 0xEB;
+        mem_write(g_terrain[i].at, &jmp, 1);
+    }
+    log_printf("lod: always full-detail ground");
+    return 1;
+}
+
+/* The nearest chunks (depth <= 0x400) went to a renderer that splits each
+ * cell into a 3x3 grid, a PS1 trick against affine texture warping. Our
+ * renderer is perspective-correct, so it only added trouble: the midpoints'
+ * texture coordinates are halved as whole texels (walls and floors swam
+ * close to the camera) and the split cells take their colour from another
+ * path (asphalt changed shade as you came near). They now go down the same
+ * full-detail path as every other chunk (cmp edi,0x400 ; jg -> jmp); terrain.c
+ * clips them at the near plane. [debug] near_subdiv=1 brings the split back. */
+int lod_no_subdiv(void)
+{
+    static const uint8_t expect[2] = { 0x7F, 0x34 }, jmp = 0xEB;
+    if (!mem_expect(0x434660, expect, sizeof expect)) {
+        log_printf("lod: near branch unexpected");
+        return 0;
+    }
+    mem_write(0x434660, &jmp, 1);
+    log_printf("lod: near ground cells not subdivided");
+    return 1;
+}
+
 static int keep_small_triangles(void)
 {
     uint8_t expect[5] = { 0xE8 }, call[5] = { 0xE8 };
@@ -110,6 +165,7 @@ int lod_install(int small_tris)
     for (i = 0; i < n; i++)
         mem_write(g_sites[i].at + 2, &never, 4);
     log_printf("lod: always full-detail models (%u thresholds raised)", (unsigned)n);
+    full_terrain();
     if (small_tris)
         keep_small_triangles();
     return 1;

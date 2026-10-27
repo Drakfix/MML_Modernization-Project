@@ -1,5 +1,5 @@
-/* Orbit-mode indicator: a coloured dot plus "ORBIT ON"/"ORBIT OFF" in the
- * game's font, top-left, sliding in and out. Drawn inside the game's display
+/* Short notices ("ORBIT ON", "QUICK SAVED"...): a coloured dot plus a word
+ * or two in the game's font, top-left, sliding in and out. Drawn inside the game's display
  * list so it shows up through DDrawCompat's flip presentation, which an
  * overlay window can't draw over.
  *
@@ -32,12 +32,13 @@
 #define TXT_DY (-2)
 #define TXT_COL 0x80
 #define FONT_PAGE 0x7f3c
-#define MAX_GLYPHS 12
+#define MAX_GLYPHS 24
 
 static __declspec(align(8)) uint8_t g_dot[0x40];
 static __declspec(align(8)) uint8_t g_glyph[MAX_GLYPHS][0x10];
 static volatile LONG g_frames_left;
-static volatile LONG g_on;
+static char g_text[MAX_GLYPHS + 1];
+static uint8_t g_rgb[3];
 
 static void put16(uint8_t *p, int off, int v) { *(uint16_t *)(p + off) = (uint16_t)(v & 0xffff); }
 
@@ -69,10 +70,18 @@ int toast_owns(const void *pkt)
     return p == g_dot || (p >= g_glyph[0] && p < g_glyph[0] + sizeof g_glyph);
 }
 
+void toast_message(const char *text, int r, int g, int b)
+{
+    strncpy_s(g_text, sizeof g_text, text, _TRUNCATE);
+    g_rgb[0] = (uint8_t)r;
+    g_rgb[1] = (uint8_t)g;
+    g_rgb[2] = (uint8_t)b;
+    g_frames_left = TOAST_DUR;
+}
+
 void toast_show(int on)
 {
-    g_on = on ? 1 : 0;
-    g_frames_left = TOAST_DUR;
+    toast_message(on ? "ORBIT ON" : "ORBIT OFF", on ? 0 : 224, on ? 224 : 0, 0);
 }
 
 void toast_frame(void)
@@ -91,9 +100,9 @@ void toast_frame(void)
         slide = (double)(TOAST_FADE - left) / TOAST_FADE * TOAST_SLIDE;
     y = TOAST_Y - (int)floor(slide + 0.5);
 
-    g_dot[4] = g_on ? 0 : 224;
-    g_dot[5] = g_on ? 224 : 0;
-    g_dot[6] = 0;
+    g_dot[4] = g_rgb[0];
+    g_dot[5] = g_rgb[1];
+    g_dot[6] = g_rgb[2];
     g_dot[7] = 0x2a;
     xl = sqx(x);
     xr = sqx(x + DOT_W);
@@ -105,7 +114,7 @@ void toast_frame(void)
         memcpy(g_dot + 0x18 + 4 * i, w01, 4);
     prepend_hud(g_dot);
 
-    s = g_on ? "ORBIT ON" : "ORBIT OFF";
+    s = g_text;
     ty = y + TXT_DY;
     cx = x + DOT_W + TXT_GAP;
     for (i = 0; s[i] && i < MAX_GLYPHS; i++) {

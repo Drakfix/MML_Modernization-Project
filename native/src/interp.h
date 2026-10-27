@@ -17,6 +17,10 @@ typedef struct {
 /* capture side: one projected vertex (sx, sy = the projector's raw output) */
 void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], float sx, float sy);
 
+/* capture side, for geometry fixed in the world (the ground): only where it
+ * is now; draw time derives where it was from the camera motion */
+void interp_vertex_static(const float cam[3], float sx, float sy);
+
 /* the world -> camera transform of this frame (rotation row-major, then
  * translation), as used for the static world: cam = R * world + T */
 void interp_camera(const float rot[9], const float trans[3]);
@@ -41,7 +45,8 @@ void interp_frame_end(void);
 
 /* draw side: camera-space position of the vertex projected to (sx, sy) in the
  * frame being drawn, and where the same vertex was the frame before.
- * Returns 0 if unknown, 1 if only the current position is known, 2 if both. */
+ * Returns 0 if unknown, 1 if only the current position is known, 2 if both,
+ * 3 if it's static geometry (cur known; the previous one is interp_static_prev). */
 int interp_lookup(float sx, float sy, interp_vec3 *cur, interp_vec3 *prev);
 
 /* nearest vertex (within max_dist, projector units) of the frame being drawn

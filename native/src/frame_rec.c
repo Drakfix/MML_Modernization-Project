@@ -371,9 +371,10 @@ void rec_present(int steps)
     }
     gfx_use_target(0);
     if (!g_mid_only) {
-        wait_until(t0 + tick * (steps - 1));
-        gfx_present_target(0);
-        note_present();
+        /* the game's frame goes up half a tick later from the timer thread, so
+         * the game thread can get on with the next frame meanwhile */
+        gfx_compose_target(0);
+        gfx_flip_at(t0 + tick * (steps - 1), note_present);
     }
     reset();
 }

@@ -10,6 +10,7 @@
 #include <windows.h>
 #include <initguid.h>   /* define the DXGI/D3D11 IIDs here instead of linking dxguid.lib */
 #include <d3d11.h>
+#include <d3d11_4.h>   /* ID3D11Multithread */
 #include <dxgi1_6.h>
 #include <float.h>
 #include <stdlib.h>
@@ -40,6 +41,10 @@ typedef struct {
 #define VB_BYTES (4 << 20)
 #define MAX_BLEND 64
 #define MAX_DEPTH 32
+
+static int g_flip_mt;   /* the context is multithread-protected */
+static void flush_batch(void);
+void gfx_wait_flip(void);
 
 static struct {
     int ready;
@@ -336,6 +341,14 @@ int gfx_init(HWND hwnd, int app_w, int app_h, const gfx_options *opt)
         REL(f1);
         return 0;
     }
+    {   /* the timer thread presents while the game thread draws: serialise the context */
+        ID3D11Multithread *mt = NULL;
+        if (SUCCEEDED(ID3D11Device_QueryInterface(g.dev, &IID_ID3D11Multithread, (void **)&mt))) {
+            ID3D11Multithread_SetMultithreadProtected(mt, TRUE);
+            g_flip_mt = 1;
+            REL(mt);
+        }
+    }
     place_window();
 
     if (FAILED(IDXGIFactory1_QueryInterface(f1, &IID_IDXGIFactory2, (void **)&f2))) {
@@ -459,6 +472,7 @@ void gfx_tex_upload(gfx_tex *t, const uint32_t *rgba, int w, int h)
 {
     if (!t || !g.ready || w != t->w || h != t->h)
         return;
+    flush_batch();   /* queued draws must see the old contents */
     ID3D11DeviceContext_UpdateSubresource(g.ctx, (ID3D11Resource *)t->tex, 0, NULL, rgba, (UINT)w * 4, 0);
 }
 
@@ -466,6 +480,7 @@ void gfx_tex_destroy(gfx_tex *t)
 {
     if (!t)
         return;
+    flush_batch();
     if (g.tex == t)
         g.tex = NULL;
     REL(t->srv);
@@ -562,6 +577,7 @@ static ID3D11DepthStencilState *depth_state(void)
 static void bind_scene(void)
 {
     D3D11_VIEWPORT vp;
+    flush_batch();
     UINT stride = sizeof(gfx_vertex), off = 0;
     vp.TopLeftX = 0;
     vp.TopLeftY = 0;
@@ -639,31 +655,58 @@ static void submit(D3D11_PRIMITIVE_TOPOLOGY topo, const gfx_vertex *v, int count
     g.vb_pos += bytes;
 }
 
+/* Batching: the game sends thousands of tiny draws a frame (one per polygon).
+ * Consecutive ones with the same state and texture are queued as one triangle
+ * list and submitted together when anything changes (state, texture, target,
+ * a clear, a texture upload or destroy, presenting). Order is kept, so the
+ * picture is the same with far fewer driver calls. */
+#define BATCH_MAX (3 * 16384)
+static gfx_vertex g_batch[BATCH_MAX];
+static int g_nbatch;
+
+static void flush_batch(void)
+{
+    if (g_nbatch) {
+        int n = g_nbatch;
+        g_nbatch = 0;
+        submit(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, g_batch, n);
+    }
+}
+
 void gfx_draw(int prim, const gfx_vertex *v, int count)
 {
+    int need, i;
+    gfx_vertex *o;
     if (!g.ready || count < 3)
         return;
-    apply_state();
-    if (prim == GFX_TRISTRIP) {
-        submit(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, v, count);
-    } else if (prim == GFX_TRILIST) {
-        submit(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, v, count - count % 3);
-    } else if (prim == GFX_TRIFAN) {
-        /* no fans in D3D11: expand to a list */
-        gfx_vertex tmp[3 * 64];
-        int i, n = 0;
-        for (i = 1; i + 1 < count; i++) {
-            tmp[n++] = v[0];
-            tmp[n++] = v[i];
-            tmp[n++] = v[i + 1];
-            if (n == 3 * 64) {
-                submit(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, tmp, n);
-                n = 0;
-            }
-        }
-        if (n)
-            submit(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, tmp, n);
+    if (g.state_dirty || g.cb_dirty) {
+        flush_batch();   /* what's queued goes out with the state it was made with */
+        apply_state();
     }
+    need = prim == GFX_TRILIST ? count - count % 3 : (count - 2) * 3;
+    if (need > BATCH_MAX)
+        return;
+    if (g_nbatch + need > BATCH_MAX)
+        flush_batch();
+    o = g_batch + g_nbatch;
+    if (prim == GFX_TRILIST) {
+        memcpy(o, v, sizeof *v * (size_t)need);
+    } else if (prim == GFX_TRISTRIP) {
+        for (i = 0; i + 2 < count; i++) {   /* first vertex stays first: flat colour comes from it */
+            *o++ = v[i];
+            *o++ = v[i + 1];
+            *o++ = v[i + 2];
+        }
+    } else if (prim == GFX_TRIFAN) {
+        for (i = 1; i + 1 < count; i++) {
+            *o++ = v[0];
+            *o++ = v[i];
+            *o++ = v[i + 1];
+        }
+    } else {
+        return;
+    }
+    g_nbatch += need;
 }
 
 void gfx_clear(const RECT *rect, int color_too, uint32_t color, int depth_too, float depth)
@@ -671,6 +714,7 @@ void gfx_clear(const RECT *rect, int color_too, uint32_t color, int depth_too, f
     float c[4];
     if (!g.ready)
         return;
+    flush_batch();
     (void)rect;   /* the game only clears the whole screen */
     if (color_too) {
         c[0] = ((color >> 16) & 0xFF) / 255.0f;
@@ -682,6 +726,85 @@ void gfx_clear(const RECT *rect, int color_too, uint32_t color, int depth_too, f
     if (depth_too)
         ID3D11DeviceContext_ClearDepthStencilView(g.ctx, g.tg[g.cur].dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, depth, 0);
     bind_scene();
+}
+
+/* ---- showing a composed frame later, from a timer thread ----
+ * With interpolation the game's own frame goes up 16.7 ms after the in-between
+ * one. Waiting for that on the game thread took half of its 33 ms frame away,
+ * which heavy scenes (City Hall at full detail) couldn't spare. Now the frame
+ * is composed into the back buffer right away and this thread presents it on
+ * time while the game carries on; anything that touches the back buffer next
+ * waits for it first. */
+static HANDLE g_flip_thread, g_flip_go, g_flip_idle, g_flip_timer;
+static volatile double g_flip_due;
+static void (*g_flip_cb)(void);
+
+static double flip_now_ms(void)
+{
+    static LARGE_INTEGER f;
+    LARGE_INTEGER c;
+    if (!f.QuadPart)
+        QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * 1000.0 / (double)f.QuadPart;
+}
+
+static DWORD WINAPI flip_thread(void *p)
+{
+    (void)p;
+    for (;;) {
+        double left;
+        WaitForSingleObject(g_flip_go, INFINITE);
+        left = g_flip_due - flip_now_ms();
+        if (left > 0.6 && g_flip_timer) {
+            LARGE_INTEGER due;
+            due.QuadPart = -(LONGLONG)((left - 0.5) * 10000.0);
+            if (SetWaitableTimer(g_flip_timer, &due, 0, NULL, NULL, FALSE))
+                WaitForSingleObject(g_flip_timer, INFINITE);
+        }
+        while (flip_now_ms() < g_flip_due)
+            YieldProcessor();
+        IDXGISwapChain1_Present(g.swap, g.opt.vsync ? 1 : 0, 0);
+        if (g_flip_cb)
+            g_flip_cb();
+        SetEvent(g_flip_idle);
+    }
+}
+
+void gfx_wait_flip(void)
+{
+    if (g_flip_idle)
+        WaitForSingleObject(g_flip_idle, INFINITE);
+}
+
+void gfx_flip_at(double due_ms, void (*on_flip)(void))
+{
+    if (!g.ready)
+        return;
+    if (g_flip_mt && !g_flip_thread) {
+        g_flip_go = CreateEventW(NULL, FALSE, FALSE, NULL);
+        g_flip_idle = CreateEventW(NULL, TRUE, TRUE, NULL);
+        g_flip_timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+        if (g_flip_go && g_flip_idle)
+            g_flip_thread = CreateThread(NULL, 0, flip_thread, NULL, 0, NULL);
+        if (g_flip_thread)
+            SetThreadPriority(g_flip_thread, THREAD_PRIORITY_HIGHEST);
+        log_printf("gfx: %s", g_flip_thread ? "game frames presented from a timer thread"
+                                            : "timer thread failed, presenting on the game thread");
+    }
+    if (!g_flip_thread) {   /* fallback: the old way, wait here */
+        while (flip_now_ms() < due_ms)
+            Sleep(0);
+        IDXGISwapChain1_Present(g.swap, g.opt.vsync ? 1 : 0, 0);
+        if (on_flip)
+            on_flip();
+        return;
+    }
+    gfx_wait_flip();
+    g_flip_cb = on_flip;
+    g_flip_due = due_ms;
+    ResetEvent(g_flip_idle);
+    SetEvent(g_flip_go);
 }
 
 void gfx_present(void)
@@ -734,7 +857,7 @@ static void exclusive_follow_focus(void)
         place_window();
 }
 
-void gfx_present_target(int t)
+void gfx_compose_target(int t)
 {
     static const float black[4] = { 0, 0, 0, 1 };
     D3D11_VIEWPORT vp;
@@ -743,6 +866,8 @@ void gfx_present_target(int t)
     double sx, sy, s;
     if (!g.ready)
         return;
+    flush_batch();
+    gfx_wait_flip();   /* the back buffer may still hold a frame waiting for its moment */
     if (t < 0 || t > 1 || !g.tg_used[t])
         t = 0;
     exclusive_follow_focus();
@@ -786,6 +911,12 @@ void gfx_present_target(int t)
     ID3D11DeviceContext_PSSetSamplers(g.ctx, 0, 1, g.opt.nearest_upscale ? &g.smp_blit_point : &g.smp_blit_linear);
     ID3D11DeviceContext_Draw(g.ctx, 3, 0);
     ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &none);
-    IDXGISwapChain1_Present(g.swap, g.opt.vsync ? 1 : 0, 0);
     bind_scene();
+}
+
+void gfx_present_target(int t)
+{
+    gfx_compose_target(t);
+    if (g.ready)
+        IDXGISwapChain1_Present(g.swap, g.opt.vsync ? 1 : 0, 0);
 }

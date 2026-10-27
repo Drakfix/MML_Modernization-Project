@@ -14,6 +14,8 @@ typedef struct {
     interp_vec3 world;     /* camera space taken back to the world (has_world) */
     int has_world;
     int rematched;         /* debug: took another copy of its model than the same-numbered one */
+    int is_static;         /* fixed in the world (the ground): no identity, its previous position
+                            * is just the camera motion applied to it */
     float sx, sy;          /* raw projector output */
     interp_vec3 prev;      /* same vertex one frame earlier (filled in at frame end) */
     int has_prev;
@@ -64,14 +66,30 @@ static int g_ready;
 static interp_stats g_stats;
 static unsigned g_last_projected, g_collisions;
 
-static uint64_t mix64(uint64_t h)
+/* table index from a 64-bit key with 32-bit arithmetic only (a 64-bit
+ * multiply is a runtime call in 32-bit code, and this runs several times for
+ * every vertex of every frame) */
+static uint32_t hash32(uint64_t key)
 {
-    h ^= h >> 33;
-    h *= 0xFF51AFD7ED558CCDull;
-    h ^= h >> 33;
-    h *= 0xC4CEB9FE1A85EC53ull;
-    h ^= h >> 33;
+    uint32_t h = (uint32_t)key * 0x9E3779B1u ^ (uint32_t)(key >> 32) * 0x85EBCA77u;
+    h ^= h >> 16;
+    h *= 0x7FEB352Du;
+    h ^= h >> 15;
     return h;
+}
+
+/* identity of a vertex without its occurrence number: which code drew it and
+ * its model coordinates, all 80 bits folded into 64 */
+static uint64_t base_key(uint32_t site, const int16_t model[3])
+{
+    uint32_t lo = ((uint32_t)(uint16_t)model[0] << 16) | (uint16_t)model[1];
+    uint32_t hi = site ^ ((uint32_t)(uint16_t)model[2] * 0x9E3779B1u);
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static uint64_t occurrence_key(uint64_t base, uint32_t n)
+{
+    return base ^ ((uint64_t)((n + 1) * 0x85EBCA77u) << 32) ^ (n + 1);
 }
 
 static void setup(void)
@@ -91,7 +109,7 @@ static void setup(void)
 /* find the slot for key (an empty one if it isn't there) */
 static slot *probe(slot *t, uint32_t gen, uint64_t key)
 {
-    uint32_t i = (uint32_t)(mix64(key) & (TABLE_SIZE - 1));
+    uint32_t i = hash32(key) & (TABLE_SIZE - 1);
     for (;;) {
         slot *s = &t[i];
         if (s->gen != gen || s->key == key)
@@ -113,8 +131,7 @@ void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], fl
     if (f->count >= MAX_VERTS)
         return;
 
-    base = mix64(((uint64_t)site << 32) ^ ((uint64_t)(uint16_t)model[0] << 16) ^ (uint16_t)model[1]) ^
-           ((uint64_t)(uint16_t)model[2] << 48);
+    base = base_key(site, model);
     occ = probe(f->occurrences, f->gen, base);
     if (occ->gen != f->gen) {
         occ->gen = f->gen;
@@ -122,7 +139,7 @@ void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], fl
         occ->val = 0;
     }
     n = occ->val++;
-    key = mix64(base + 0x9E3779B97F4A7C15ull * (n + 1));
+    key = occurrence_key(base, n);
 
     k = probe(f->by_key, f->gen, key);
     if (k->gen == f->gen)
@@ -138,6 +155,7 @@ void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], fl
     f->recs[f->count].sx = sx;
     f->recs[f->count].sy = sy;
     f->recs[f->count].has_prev = 0;
+    f->recs[f->count].is_static = 0;
 
     memcpy(&sxb, &sx, 4);
     memcpy(&syb, &sy, 4);
@@ -155,6 +173,42 @@ void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], fl
     f->count++;
 }
 
+void interp_vertex_static(const float cam[3], float sx, float sy)
+{
+    frame_set *f;
+    slot *s;
+    uint64_t screen;
+    uint32_t sxb, syb;
+    vrec *r;
+    if (!g_ready)
+        setup();
+    f = &g_sets[g_build];
+    if (f->count >= MAX_VERTS)
+        return;
+    memcpy(&sxb, &sx, 4);
+    memcpy(&syb, &sy, 4);
+    screen = ((uint64_t)sxb << 32) | syb;
+    s = probe(f->by_screen, f->gen, screen);
+    if (s->gen == f->gen)
+        return;                        /* that screen point is known already */
+    r = &f->recs[f->count];
+    r->key = r->base = 0;
+    r->cam.x = cam[0];
+    r->cam.y = cam[1];
+    r->cam.z = cam[2];
+    r->sx = sx;
+    r->sy = sy;
+    r->has_prev = 0;
+    r->is_static = 1;
+    r->has_world = 0;
+    r->rematched = 0;
+    r->next_in_cell = -1;
+    s->gen = f->gen;
+    s->key = screen;
+    s->val = f->count;
+    f->count++;
+}
+
 static int grid_cell(float sx, float sy)
 {
     int cx = (int)((sx - GRID_X0) / GRID_CELL), cy = (int)((sy - GRID_Y0) / GRID_CELL);
@@ -163,10 +217,6 @@ static int grid_cell(float sx, float sy)
     return cy * GRID_W + cx;
 }
 
-static uint64_t occurrence_key(uint64_t base, uint32_t n)
-{
-    return mix64(base + 0x9E3779B97F4A7C15ull * (n + 1));
-}
 
 static void to_world(const camera *c, const interp_vec3 *p, interp_vec3 *w)
 {
@@ -197,6 +247,8 @@ static void link_previous(void)
         int cell, best;
         r->has_prev = 0;
         r->next_in_cell = -1;
+        if (r->is_static)
+            continue;
         r->has_world = c->cam.valid;
         r->rematched = 0;
         if (r->has_world)
@@ -211,8 +263,8 @@ static void link_previous(void)
             const vrec *q0 = &p->recs[best];
             float ex = q0->world.x - r->world.x, ey = q0->world.y - r->world.y, ez = q0->world.z - r->world.z;
             float best_d = ex * ex + ey * ey + ez * ez - 1.0f;   /* another copy only if clearly nearer */
-            uint32_t n;
-            for (n = 0; n < 64; n++) {
+            uint32_t n = best_d <= 3.0f ? 64 : 0;   /* the same-numbered copy is right there: no search */
+            for (; n < 64; n++) {
                 const slot *o = probe(p->by_key, p->gen, occurrence_key(r->base, n));
                 const vrec *q;
                 float dx, dy, dz, d;
@@ -411,6 +463,8 @@ int interp_lookup(float sx, float sy, interp_vec3 *cur, interp_vec3 *prev)
         return 0;
     *cur = c->recs[s->val].cam;
     g_stats.found++;
+    if (c->recs[s->val].is_static)
+        return 3;
     if (!c->recs[s->val].has_prev || g_cut)
         return 1;
     *prev = c->recs[s->val].prev;

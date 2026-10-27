@@ -69,3 +69,9 @@ void gfx_present(void);
  * in-between frame. Draws and clears go to the target in use. */
 void gfx_use_target(int t);
 void gfx_present_target(int t);
+/* the same in two halves: draw scene target t into the back buffer now, and
+ * show it at due_ms (QPC milliseconds) from a timer thread, calling on_flip
+ * there once it's up; gfx_wait_flip blocks until a pending one has shown */
+void gfx_compose_target(int t);
+void gfx_flip_at(double due_ms, void (*on_flip)(void));
+void gfx_wait_flip(void);

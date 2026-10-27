@@ -35,6 +35,9 @@
 #include "terrain.h"
 #include "fog.h"
 #include "lod.h"
+#include "quicksave.h"
+#include "clipfix.h"
+#include "sampler.h"
 #include "gte_capture.h"
 #include "frame_rec.h"
 #include "bglayer.h"
@@ -97,6 +100,24 @@ static void on_h_set(regs_t *r)
     }
 }
 
+/* The near distance is H * 0.03125 (our exe patch), and the model clipper
+ * places its cut points at x * 32 (0x50A598), which is H / near only while
+ * that holds. The game computes near from the H it loaded BEFORE on_h_set
+ * pulls H in (and the default path stores a fixed 31.25 = 1000 / 32), so
+ * with H moved the cut points landed ~16% off from where their depth and
+ * texture coordinates belong, and walls next to the camera swam. Redo near
+ * from the adjusted H right after each write. */
+#define G_GTE_NEAR    0x77EBC0u   /* float: near distance */
+#define G_NEAR_FACTOR 0x50A518u   /* float 0.03125 */
+#define G_SITE_NEAR_AFTER_SET     0x4EF0EDu   /* fild dword [0x77EBC4], right after fstp near */
+#define G_SITE_NEAR_AFTER_DEFAULT 0x4EF0A1u   /* mov ebx,0x3333, right after mov near,31.25 */
+
+static void on_near_written(regs_t *r)
+{
+    (void)r;
+    *(float *)G_GTE_NEAR = *(float *)G_GTE_H_FLOAT * *(const float *)G_NEAR_FACTOR;
+}
+
 static void install_widescreen(void)
 {
     static const uintptr_t x_sites[] = { 0x4EEEED, 0x4EEF21, 0x4EEF8D, 0x4F0685, 0x4F07EE };
@@ -133,6 +154,13 @@ static void install_widescreen(void)
         !hook_mid(G_SITE_H_SET, sizeof h_set_bytes, h_set_bytes, on_h_set)) {
         log_printf("widescreen: H setter hooks failed");
         return;
+    }
+    {
+        static const uint8_t after_set[6] = { 0xDB, 0x05, 0xC4, 0xEB, 0x77, 0x00 };
+        static const uint8_t after_default[5] = { 0xBB, 0x33, 0x33, 0x00, 0x00 };
+        if (!hook_mid(G_SITE_NEAR_AFTER_SET, sizeof after_set, after_set, on_near_written) ||
+            !hook_mid(G_SITE_NEAR_AFTER_DEFAULT, sizeof after_default, after_default, on_near_written))
+            log_printf("widescreen: near-distance hooks failed, close model edges will be off");
     }
     for (i = 0; i < sizeof x_sites / sizeof x_sites[0]; i++)
         mem_write(x_sites[i] + 2, &shadow, 4);
@@ -212,6 +240,14 @@ static void limiter_frame(void);
 static void on_frame(regs_t *r)
 {
     (void)r;
+    {   /* [debug] sampler=1: where the game thread spends its time */
+        static int started;
+        if (!started) {
+            started = 1;
+            if (GetPrivateProfileIntA("debug", "sampler", 0, g_ini))
+                sampler_start();
+        }
+    }
     if (++g_frames == 300) {
         RECT rc = { 0 };
         HWND w = GetForegroundWindow();
@@ -254,6 +290,8 @@ static void on_frame(regs_t *r)
     apicensus_frame();
     ddshim_frame();
     display_frame();
+    quicksave_frame();
+    clipfix_frame();
     toast_frame();
     lockon_frame();
     terrain_frame();
@@ -430,8 +468,16 @@ static void init(void)
     {
         char l[16];
         ini_string("video", "lod", "full", l, sizeof l);
-        if (_stricmp(l, "original") != 0)
+        if (_stricmp(l, "original") != 0) {
             lod_install(GetPrivateProfileIntA("debug", "keep_small_tris", 1, g_ini));
+            if (!GetPrivateProfileIntA("debug", "near_subdiv", 0, g_ini))
+                lod_no_subdiv();
+        }
+    }
+    if (GetPrivateProfileIntA("debug", "clip_uv", 1, g_ini))
+        clipfix_install();
+    if (GetPrivateProfileIntA("debug", "quick_save", 0, g_ini)) {
+        quicksave_install(g_game_dir);
     }
     if (GetPrivateProfileIntA("video", "terrain_clip", 1, g_ini))
         terrain_clip_install(ini_float("debug", "clip_near_scale", 1.0f));
@@ -502,6 +548,7 @@ static void init(void)
                     rec_debug(GetPrivateProfileIntA("debug", "interp_mid_only", 0, g_ini),
                               GetPrivateProfileIntA("debug", "interp_timing", 0, g_ini));
                     log_printf("interp: %s", want ? "60 fps interpolation ON" : "census only");
+                    clipfix_report(1);
                 }
             }
         }
