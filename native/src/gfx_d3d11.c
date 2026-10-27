@@ -23,6 +23,8 @@
 #include "shaders/game_ps.h"
 #include "shaders/blit_vs.h"
 #include "shaders/blit_ps.h"
+#include "shaders/depth_copy_ps.h"
+#include "shaders/show_depth_ps.h"
 
 struct gfx_tex {
     ID3D11Texture2D *tex;
@@ -43,6 +45,8 @@ typedef struct {
 #define MAX_DEPTH 32
 
 static int g_flip_mt;   /* the context is multithread-protected */
+static int g_reshade;   /* ReShade is loaded: present on the game thread (see gfx_flip_at) */
+static int g_depth_done[2];   /* effects depth already copied into target t's depth buffer */
 static void flush_batch(void);
 void gfx_wait_flip(void);
 
@@ -62,12 +66,17 @@ static struct {
         ID3D11RenderTargetView *scene_rtv;
         ID3D11ShaderResourceView *scene_srv;
         ID3D11DepthStencilView *dsv;
+        /* effects depth (single-sample only): depth of every visible world surface */
+        ID3D11Texture2D *eff;
+        ID3D11RenderTargetView *eff_rtv;
+        ID3D11ShaderResourceView *eff_srv;
     } tg[2];
     int cur, tg_used[2];
     int scene_w, scene_h;
     /* pipeline */
     ID3D11VertexShader *vs, *blit_vs;
-    ID3D11PixelShader *ps, *blit_ps;
+    ID3D11PixelShader *ps, *blit_ps, *depth_copy_ps, *show_depth_ps;
+    ID3D11DepthStencilState *ds_always;
     ID3D11InputLayout *layout;
     ID3D11Buffer *vb, *cb;
     UINT vb_pos;
@@ -217,6 +226,9 @@ static void release_scene(void)
         REL(g.tg[t].scene);
         REL(g.tg[t].scene_resolved);
         REL(g.tg[t].depth);
+        REL(g.tg[t].eff_srv);
+        REL(g.tg[t].eff_rtv);
+        REL(g.tg[t].eff);
     }
 }
 
@@ -282,6 +294,14 @@ static int make_target(int t)
     if (FAILED(ID3D11Device_CreateTexture2D(g.dev, &d, NULL, &g.tg[t].depth)))
         return 0;
     ID3D11Device_CreateDepthStencilView(g.dev, (ID3D11Resource *)g.tg[t].depth, NULL, &g.tg[t].dsv);
+    if (samples == 1) {
+        d.Format = DXGI_FORMAT_R32_FLOAT;
+        d.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        if (SUCCEEDED(ID3D11Device_CreateTexture2D(g.dev, &d, NULL, &g.tg[t].eff))) {
+            ID3D11Device_CreateRenderTargetView(g.dev, (ID3D11Resource *)g.tg[t].eff, NULL, &g.tg[t].eff_rtv);
+            ID3D11Device_CreateShaderResourceView(g.dev, (ID3D11Resource *)g.tg[t].eff, NULL, &g.tg[t].eff_srv);
+        }
+    }
     g.scene_w = w;
     g.scene_h = h;
     if (t == 0)
@@ -377,11 +397,27 @@ int gfx_init(HWND hwnd, int app_w, int app_h, const gfx_options *opt)
     }
     if (!make_back() || !make_scene())
         return 0;
+    {
+        HMODULE m = GetModuleHandleA("dxgi.dll"), m2 = GetModuleHandleA("d3d11.dll");
+        g_reshade = (m && GetProcAddress(m, "ReShadeRegisterAddon")) || (m2 && GetProcAddress(m2, "ReShadeRegisterAddon"));
+        if (g_reshade)
+            log_printf("gfx: ReShade detected: frames presented on the game thread, finished depth for its effects");
+    }
 
     ID3D11Device_CreateVertexShader(g.dev, g_vs_main, sizeof g_vs_main, NULL, &g.vs);
     ID3D11Device_CreatePixelShader(g.dev, g_ps_main, sizeof g_ps_main, NULL, &g.ps);
     ID3D11Device_CreateVertexShader(g.dev, g_vs_blit, sizeof g_vs_blit, NULL, &g.blit_vs);
     ID3D11Device_CreatePixelShader(g.dev, g_ps_blit, sizeof g_ps_blit, NULL, &g.blit_ps);
+    ID3D11Device_CreatePixelShader(g.dev, g_ps_depth_copy, sizeof g_ps_depth_copy, NULL, &g.depth_copy_ps);
+    ID3D11Device_CreatePixelShader(g.dev, g_ps_show_depth, sizeof g_ps_show_depth, NULL, &g.show_depth_ps);
+    {
+        D3D11_DEPTH_STENCIL_DESC dd;
+        memset(&dd, 0, sizeof dd);
+        dd.DepthEnable = TRUE;
+        dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+        dd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+        ID3D11Device_CreateDepthStencilState(g.dev, &dd, &g.ds_always);
+    }
     ID3D11Device_CreateInputLayout(g.dev, il, 4, g_vs_main, sizeof g_vs_main, &g.layout);
 
     memset(&bd, 0, sizeof bd);
@@ -526,7 +562,12 @@ static D3D11_BLEND map_blend(int b, int alpha)
 
 static ID3D11BlendState *blend_state(void)
 {
-    uint32_t key = g.st.blend ? (1u << 16) | ((uint32_t)g.st.src_blend << 8) | g.st.dst_blend : 0;
+    /* world geometry records its depth: opaque draws, and ordinary alpha-blended ones
+     * (most of the game's world is drawn with SRCALPHA/INVSRCALPHA, mostly solid
+     * texels) weighted by coverage; additive glows and the like don't */
+    int alpha_blend = g.st.blend && g.st.src_blend == 5 && g.st.dst_blend == 6;
+    int eff = g.st.scene_depth && (!g.st.blend || alpha_blend);
+    uint32_t key = (g.st.blend ? (1u << 16) | ((uint32_t)g.st.src_blend << 8) | g.st.dst_blend : 0) | ((uint32_t)eff << 17);
     D3D11_BLEND_DESC d;
     ID3D11BlendState *s = NULL;
     int i;
@@ -542,6 +583,17 @@ static ID3D11BlendState *blend_state(void)
     d.RenderTarget[0].DestBlendAlpha = map_blend(g.st.dst_blend, 1);
     d.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
     d.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    d.IndependentBlendEnable = TRUE;
+    d.RenderTarget[1].RenderTargetWriteMask = eff ? D3D11_COLOR_WRITE_ENABLE_RED : 0;
+    if (eff && alpha_blend) {
+        d.RenderTarget[1].BlendEnable = TRUE;
+        d.RenderTarget[1].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        d.RenderTarget[1].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        d.RenderTarget[1].BlendOp = D3D11_BLEND_OP_ADD;
+        d.RenderTarget[1].SrcBlendAlpha = D3D11_BLEND_ONE;
+        d.RenderTarget[1].DestBlendAlpha = D3D11_BLEND_ZERO;
+        d.RenderTarget[1].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    }
     ID3D11Device_CreateBlendState(g.dev, &d, &s);
     if (g.nblend < MAX_BLEND) {
         g.blends[g.nblend].key = key;
@@ -585,7 +637,10 @@ static void bind_scene(void)
     vp.Height = (float)g.scene_h;
     vp.MinDepth = 0;
     vp.MaxDepth = 1;
-    ID3D11DeviceContext_OMSetRenderTargets(g.ctx, 1, &g.tg[g.cur].scene_rtv, g.tg[g.cur].dsv);
+    {
+        ID3D11RenderTargetView *rtv[2] = { g.tg[g.cur].scene_rtv, g.tg[g.cur].eff_rtv };
+        ID3D11DeviceContext_OMSetRenderTargets(g.ctx, rtv[1] ? 2 : 1, rtv, g.tg[g.cur].dsv);
+    }
     ID3D11DeviceContext_RSSetViewports(g.ctx, 1, &vp);
     ID3D11DeviceContext_RSSetState(g.ctx, g.raster);
     ID3D11DeviceContext_IASetInputLayout(g.ctx, g.layout);
@@ -723,8 +778,13 @@ void gfx_clear(const RECT *rect, int color_too, uint32_t color, int depth_too, f
         c[3] = 1.0f;
         ID3D11DeviceContext_ClearRenderTargetView(g.ctx, g.tg[g.cur].scene_rtv, c);
     }
-    if (depth_too)
+    if (depth_too) {
+        static const float far_[4] = { 1, 1, 1, 1 };
         ID3D11DeviceContext_ClearDepthStencilView(g.ctx, g.tg[g.cur].dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, depth, 0);
+        if (g.tg[g.cur].eff_rtv)
+            ID3D11DeviceContext_ClearRenderTargetView(g.ctx, g.tg[g.cur].eff_rtv, far_);
+        g_depth_done[g.cur] = 0;
+    }
     bind_scene();
 }
 
@@ -781,7 +841,9 @@ void gfx_flip_at(double due_ms, void (*on_flip)(void))
 {
     if (!g.ready)
         return;
-    if (g_flip_mt && !g_flip_thread) {
+    /* ReShade reads the depth buffer when a frame is presented: by the time a
+     * deferred present ran, the next frame had started drawing into it */
+    if (g_flip_mt && !g_flip_thread && !g_reshade) {
         g_flip_go = CreateEventW(NULL, FALSE, FALSE, NULL);
         g_flip_idle = CreateEventW(NULL, TRUE, TRUE, NULL);
         g_flip_timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
@@ -857,6 +919,38 @@ static void exclusive_follow_focus(void)
         place_window();
 }
 
+/* The game draws some world surfaces (ground pieces, decals) testing depth
+ * but not writing it, which left holes in the depth buffer that effects
+ * tools such as ReShade read (the floor looked infinitely far away). The
+ * effects depth target has every visible surface; at the end of the frame it
+ * becomes the depth buffer. Nothing of ours reads depth after this point. */
+void gfx_finish_depth(int t)
+{
+    D3D11_VIEWPORT vp;
+    ID3D11ShaderResourceView *none = NULL;
+    if (!g.ready || t < 0 || t > 1 || g_depth_done[t] || !g.tg[t].eff_srv || !g.depth_copy_ps || !g.ds_always)
+        return;
+    flush_batch();
+    g_depth_done[t] = 1;
+    ID3D11DeviceContext_OMSetRenderTargets(g.ctx, 0, NULL, g.tg[t].dsv);
+    vp.TopLeftX = vp.TopLeftY = 0;
+    vp.Width = (float)g.scene_w;
+    vp.Height = (float)g.scene_h;
+    vp.MinDepth = 0;
+    vp.MaxDepth = 1;
+    ID3D11DeviceContext_RSSetViewports(g.ctx, 1, &vp);
+    ID3D11DeviceContext_OMSetBlendState(g.ctx, NULL, NULL, 0xFFFFFFFF);
+    ID3D11DeviceContext_OMSetDepthStencilState(g.ctx, g.ds_always, 0);
+    ID3D11DeviceContext_IASetInputLayout(g.ctx, NULL);
+    ID3D11DeviceContext_IASetPrimitiveTopology(g.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ID3D11DeviceContext_VSSetShader(g.ctx, g.blit_vs, NULL, 0);
+    ID3D11DeviceContext_PSSetShader(g.ctx, g.depth_copy_ps, NULL, 0);
+    ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &g.tg[t].eff_srv);
+    ID3D11DeviceContext_Draw(g.ctx, 3, 0);
+    ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &none);
+    bind_scene();
+}
+
 void gfx_compose_target(int t)
 {
     static const float black[4] = { 0, 0, 0, 1 };
@@ -870,6 +964,7 @@ void gfx_compose_target(int t)
     gfx_wait_flip();   /* the back buffer may still hold a frame waiting for its moment */
     if (t < 0 || t > 1 || !g.tg_used[t])
         t = 0;
+    gfx_finish_depth(t);
     exclusive_follow_focus();
     if (g.tg[t].scene_resolved)
         ID3D11DeviceContext_ResolveSubresource(g.ctx, (ID3D11Resource *)g.tg[t].scene_resolved, 0,
@@ -906,8 +1001,13 @@ void gfx_compose_target(int t)
     ID3D11DeviceContext_IASetInputLayout(g.ctx, NULL);
     ID3D11DeviceContext_IASetPrimitiveTopology(g.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ID3D11DeviceContext_VSSetShader(g.ctx, g.blit_vs, NULL, 0);
-    ID3D11DeviceContext_PSSetShader(g.ctx, g.blit_ps, NULL, 0);
-    ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &g.tg[t].scene_srv);
+    if (g.opt.show_depth && g.tg[t].eff_srv) {
+        ID3D11DeviceContext_PSSetShader(g.ctx, g.show_depth_ps, NULL, 0);
+        ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &g.tg[t].eff_srv);
+    } else {
+        ID3D11DeviceContext_PSSetShader(g.ctx, g.blit_ps, NULL, 0);
+        ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &g.tg[t].scene_srv);
+    }
     ID3D11DeviceContext_PSSetSamplers(g.ctx, 0, 1, g.opt.nearest_upscale ? &g.smp_blit_point : &g.smp_blit_linear);
     ID3D11DeviceContext_Draw(g.ctx, 3, 0);
     ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &none);

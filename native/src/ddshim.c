@@ -1387,6 +1387,11 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
         s.dst_blend = D3DBLEND_INVSRCALPHA;
     }
     prepare_texture(d);
+    /* the 3D world's depth counts for effects (not 2D overlays drawn in its buckets) */
+    if ((g_cur_bucket == 3 || g_cur_bucket == 4) && s.z_enable) {
+        const gfx_vertex *v0 = (const gfx_vertex *)(g_display_raw_verts ? g_display_raw_verts : verts);
+        s.scene_depth = !(v0->z == 0.1f && v0->rhw == 1.0f) && v0->z < 0.98f;
+    }
     rec_state(&s);
     if (g_fog_debug)
         fog_debug(&s, (const gfx_vertex *)verts, n);

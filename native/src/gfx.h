@@ -30,6 +30,7 @@ typedef struct {
     uint8_t flat;                 /* flat shading: colour of the first vertex */
     uint8_t linear;               /* bilinear texture filtering (else point) */
     uint8_t fog;                  /* table fog on */
+    uint8_t scene_depth;          /* 3D world geometry: its depth counts for effects (ReShade) */
     uint32_t fog_color;           /* 0x00RRGGBB */
     float fog_start, fog_end;
 } gfx_state;
@@ -47,6 +48,7 @@ typedef struct {
     int no_fog;                   /* ignore the game's fog */
     int fog_from_w;               /* fog depth = 1/rhw instead of z */
     int gpu_display;              /* render on the GPU driving the monitor, not the fastest one */
+    int show_depth;               /* debug: show the effects depth instead of the picture */
 } gfx_options;
 
 int gfx_init(HWND game_window, int app_w, int app_h, const gfx_options *opt);
@@ -75,3 +77,7 @@ void gfx_present_target(int t);
 void gfx_compose_target(int t);
 void gfx_flip_at(double due_ms, void (*on_flip)(void));
 void gfx_wait_flip(void);
+/* end of frame for target t: every visible world surface's depth goes into its
+ * depth buffer, for effects tools (ReShade); done once per frame, on compose
+ * at the latest */
+void gfx_finish_depth(int t);

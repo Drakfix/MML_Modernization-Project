@@ -505,6 +505,7 @@ static void init(void)
                 char gpu[16];
                 ini_string("video", "gpu", "performance", gpu, sizeof gpu);
                 o.gpu_display = _stricmp(gpu, "display") == 0;
+                o.show_depth = GetPrivateProfileIntA("debug", "show_depth", 0, g_ini);
             }
             g_fog_debug = GetPrivateProfileIntA("debug", "fog_debug", 0, g_ini);
             g_drop_clamped = GetPrivateProfileIntA("video", "drop_clamped", 1, g_ini);

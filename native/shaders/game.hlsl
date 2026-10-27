@@ -69,15 +69,28 @@ bool alpha_pass(float a)
     return true;                               // ALWAYS
 }
 
-float4 ps_main(PSIn i) : SV_Target
+struct PSOut
 {
+    float4 color : SV_Target0;
+    float4 depth : SV_Target1;  // effects depth in .r, written only for world geometry (blend state);
+                                // .a = coverage, so alpha-blended pixels count as much as they cover
+};
+
+PSOut ps_main(PSIn i)
+{
+    PSOut o;
     float4 c = flat > 0.5 ? i.flat_color : i.color;
     if (textured > 0.5)
         c *= tex.Sample(smp, i.uv);
     if (alpha_test > 0.5 && !alpha_pass(c.a))
         discard;
     c.rgb = lerp(fog_color.rgb, c.rgb, i.fog);
-    return c;
+    o.color = c;
+    // The game's depth is linear (camera z / 16384). Effects tools expect a
+    // perspective depth buffer: store it the way ReShade's default
+    // linearisation (far plane 1000) reads back as the same linear value.
+    o.depth = float4(i.pos.z * 1000.0 / (1.0 + i.pos.z * 999.0), 0, 0, c.a);
+    return o;
 }
 
 // ---- final blit of the rendered frame to the window ----
@@ -103,4 +116,23 @@ BlitOut vs_blit(uint id : SV_VertexID)
 float4 ps_blit(BlitOut i) : SV_Target
 {
     return scene.Sample(scene_smp, i.uv);
+}
+
+// end of frame: the effects depth (every visible surface, including the ones
+// the game draws without writing depth) replaces the depth buffer
+Texture2D<float> effects_depth : register(t0);
+
+float ps_depth_copy(BlitOut i) : SV_Depth
+{
+    return effects_depth.Load(int3(i.pos.xy, 0));
+}
+
+// [debug] show_depth=1: the effects depth instead of the picture (linear, x4)
+float4 ps_show_depth(BlitOut i) : SV_Target
+{
+    uint w, h;
+    effects_depth.GetDimensions(w, h);
+    float d = effects_depth.Load(int3(i.uv * float2(w, h), 0));
+    d = d / (1000.0 - d * 999.0);
+    return float4(saturate(d * 4.0).xxx, 1.0);
 }

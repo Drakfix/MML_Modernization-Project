@@ -361,6 +361,7 @@ void rec_present(int steps)
     g_overflow = 0;
     t0 = now_ms();
     tick = 1000.0 / 60.0;
+    gfx_finish_depth(0);   /* the game's frame is complete: its depth is final before the replay */
     for (s = 1; s < steps; s++) {
         gfx_use_target(1);
         replay((float)s / (float)steps);
