@@ -204,7 +204,7 @@ static int g_limiter_init;
 
 static unsigned g_frames;
 static int g_interp_on, g_bglayer_on, g_player_log;
-extern int g_interp_census, g_smooth_bg, g_blend_census;
+extern int g_interp_census, g_interp_tint, g_smooth_bg, g_blend_census;
 
 static void limiter_frame(void);
 
@@ -495,6 +495,7 @@ static void init(void)
             {
                 int want = GetPrivateProfileIntA("video", "interp", 1, g_ini);
                 g_interp_census = GetPrivateProfileIntA("debug", "interp_census", 0, g_ini);
+                g_interp_tint = GetPrivateProfileIntA("debug", "interp_tint", 0, g_ini);
                 if ((want || g_interp_census) && gte_capture_install(g_interp_census)) {
                     g_interp_on = 1;
                     rec_enable(want);

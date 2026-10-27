@@ -104,10 +104,11 @@ void gte_capture_frame_end(void)
         return;
     interp_get_stats(&st, 1);
     log_printf("interp census: %u vertices projected (last frame), %u screen collisions, "
-               "draw lookups %u: found %u (%.1f%%), matched to previous frame %u (%.1f%%), scene build %.2f ms/frame",
+               "draw lookups %u: found %u (%.1f%%), matched to previous frame %u (%.1f%%), scene build %.2f ms/frame, "
+               "camera up to %.0f units %.1f deg/frame, %u vertices matched to a nearer copy",
                st.projected, st.collisions, st.lookups, st.found,
                st.lookups ? 100.0 * st.found / st.lookups : 0.0, st.matched,
-               st.lookups ? 100.0 * st.matched / st.lookups : 0.0, g_build_ms / 60.0);
+               st.lookups ? 100.0 * st.matched / st.lookups : 0.0, g_build_ms / 60.0, st.cam_move, st.cam_turn, st.rematched);
     g_build_ms = 0.0;
     {
         int i;

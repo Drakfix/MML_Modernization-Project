@@ -1,4 +1,5 @@
 /* Frame interpolation core: see interp.h. Portable C, no platform code. */
+#include <math.h>
 #include <string.h>
 
 #include "interp.h"
@@ -8,8 +9,11 @@
 #define TABLE_SIZE (1u << TABLE_BITS)
 
 typedef struct {
-    uint64_t key;
+    uint64_t key, base;    /* identity, and the same without the occurrence number */
     interp_vec3 cam;
+    interp_vec3 world;     /* camera space taken back to the world (has_world) */
+    int has_world;
+    int rematched;         /* debug: took another copy of its model than the same-numbered one */
     float sx, sy;          /* raw projector output */
     interp_vec3 prev;      /* same vertex one frame earlier (filled in at frame end) */
     int has_prev;
@@ -50,6 +54,12 @@ static vrec g_recs[3][MAX_VERTS];
 static slot g_tables[3][3][TABLE_SIZE];
 static frame_set g_sets[3];
 static int g_build, g_cur = -1, g_prev = -1;
+static float g_move, g_turn;   /* camera motion into the frame being drawn */
+static int g_cut;
+static unsigned g_rematched;
+static int g_last_rematched;
+
+int interp_debug_last_rematched(void) { return g_last_rematched; }   /* census: vertices that took another copy than the same-numbered one */              /* ... too much for one tick: a camera cut, nothing blends */
 static int g_ready;
 static interp_stats g_stats;
 static unsigned g_last_projected, g_collisions;
@@ -121,6 +131,7 @@ void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], fl
     k->key = key;
     k->val = f->count;
     f->recs[f->count].key = key;
+    f->recs[f->count].base = base;
     f->recs[f->count].cam.x = cam[0];
     f->recs[f->count].cam.y = cam[1];
     f->recs[f->count].cam.z = cam[2];
@@ -152,8 +163,24 @@ static int grid_cell(float sx, float sy)
     return cy * GRID_W + cx;
 }
 
+static uint64_t occurrence_key(uint64_t base, uint32_t n)
+{
+    return mix64(base + 0x9E3779B97F4A7C15ull * (n + 1));
+}
+
+static void to_world(const camera *c, const interp_vec3 *p, interp_vec3 *w)
+{
+    float d0 = p->x - c->t[0], d1 = p->y - c->t[1], d2 = p->z - c->t[2];
+    w->x = c->inv[0] * d0 + c->inv[1] * d1 + c->inv[2] * d2;
+    w->y = c->inv[3] * d0 + c->inv[4] * d1 + c->inv[5] * d2;
+    w->z = c->inv[6] * d0 + c->inv[7] * d1 + c->inv[8] * d2;
+}
+
 /* give every vertex of the frame about to be drawn its previous position, and
- * put the ones that have one into the grid */
+ * put the ones that have one into the grid. Copies of the same model (two
+ * trash cans) share a base identity and only differ by the order they were
+ * drawn in, which changes when one is culled or they swap; so a vertex takes
+ * the copy that was nearest in the world, not the one with the same number. */
 static void link_previous(void)
 {
     frame_set *c, *p;
@@ -167,15 +194,47 @@ static void link_previous(void)
     for (i = 0; i < c->count; i++) {
         vrec *r = &c->recs[i];
         const slot *k;
-        int cell;
+        int cell, best;
         r->has_prev = 0;
         r->next_in_cell = -1;
+        r->has_world = c->cam.valid;
+        r->rematched = 0;
+        if (r->has_world)
+            to_world(&c->cam, &r->cam, &r->world);
         if (!p)
             continue;
         k = probe(p->by_key, p->gen, r->key);
         if (k->gen != p->gen)
             continue;
-        r->prev = p->recs[k->val].cam;
+        best = (int)k->val;
+        if (r->has_world && p->recs[best].has_world) {
+            const vrec *q0 = &p->recs[best];
+            float ex = q0->world.x - r->world.x, ey = q0->world.y - r->world.y, ez = q0->world.z - r->world.z;
+            float best_d = ex * ex + ey * ey + ez * ez - 1.0f;   /* another copy only if clearly nearer */
+            uint32_t n;
+            for (n = 0; n < 64; n++) {
+                const slot *o = probe(p->by_key, p->gen, occurrence_key(r->base, n));
+                const vrec *q;
+                float dx, dy, dz, d;
+                if (o->gen != p->gen)
+                    break;
+                q = &p->recs[o->val];
+                if (!q->has_world)
+                    continue;
+                dx = q->world.x - r->world.x;
+                dy = q->world.y - r->world.y;
+                dz = q->world.z - r->world.z;
+                d = dx * dx + dy * dy + dz * dz;
+                if (d < best_d) {
+                    best_d = d;
+                    best = (int)o->val;
+                }
+            }
+            if (best != (int)k->val)
+                g_rematched++;
+            r->rematched = best != (int)k->val;
+        }
+        r->prev = p->recs[best].cam;
         r->has_prev = 1;
         cell = grid_cell(r->sx, r->sy);
         if (cell >= 0) {
@@ -235,25 +294,70 @@ static int camera_prev(const camera *cc, const camera *pc, const interp_vec3 *p,
     return 1;
 }
 
-int interp_estimate_prev(const interp_vec3 *cur, float sx, float sy, interp_vec3 *prev)
+int interp_static_prev(const interp_vec3 *cur, interp_vec3 *prev)
 {
-    const frame_set *c, *p;
-    interp_vec3 nb_cur, nb_prev, nb_static;
-    float nsx, nsy;
-    if (!g_ready || g_cur < 0 || g_prev < 0)
+    if (!g_ready || g_cur < 0 || g_prev < 0 || g_cut)
         return 0;
-    c = &g_sets[g_cur];
-    p = &g_sets[g_prev];
-    if (!camera_prev(&c->cam, &p->cam, cur, prev))
+    return camera_prev(&g_sets[g_cur].cam, &g_sets[g_prev].cam, cur, prev);
+}
+
+int interp_residual(const interp_vec3 *cur, const interp_vec3 *prev, interp_vec3 *resid)
+{
+    interp_vec3 still;
+    if (!interp_static_prev(cur, &still))
         return 0;
-    /* plus whatever the nearest captured vertex did beyond the camera motion */
-    if (interp_nearest(sx, sy, 24.0f, &nsx, &nsy, &nb_cur, &nb_prev) &&
-        camera_prev(&c->cam, &p->cam, &nb_cur, &nb_static)) {
-        prev->x += nb_prev.x - nb_static.x;
-        prev->y += nb_prev.y - nb_static.y;
-        prev->z += nb_prev.z - nb_static.z;
-    }
+    resid->x = prev->x - still.x;
+    resid->y = prev->y - still.y;
+    resid->z = prev->z - still.z;
     return 1;
+}
+
+int interp_borrow_residual(float sx, float sy, float z, interp_vec3 *resid)
+{
+    interp_vec3 nb_cur, nb_prev;
+    float nsx, nsy, dz;
+    if (!interp_nearest(sx, sy, 24.0f, &nsx, &nsy, &nb_cur, &nb_prev))
+        return 0;
+    /* only from something at about the same depth: a wall behind Mega Man
+     * is close to him on screen, not in the world */
+    dz = nb_cur.z - z;
+    if (dz < 0)
+        dz = -dz;
+    if (dz > 0.1f * z)
+        return 0;
+    return interp_residual(&nb_cur, &nb_prev, resid);
+}
+
+/* how far the camera moved and turned since the previous frame */
+static void camera_motion(void)
+{
+    const camera *c, *p;
+    float pc[3], pp[3], d[3], dot;
+    int i;
+    g_cut = 0;
+    if (g_cur < 0 || g_prev < 0)
+        return;
+    c = &g_sets[g_cur].cam;
+    p = &g_sets[g_prev].cam;
+    if (!c->valid || !p->valid)
+        return;
+    for (i = 0; i < 3; i++) {   /* camera position in the world = -R^-1 T */
+        pc[i] = -(c->inv[i * 3] * c->t[0] + c->inv[i * 3 + 1] * c->t[1] + c->inv[i * 3 + 2] * c->t[2]);
+        pp[i] = -(p->inv[i * 3] * p->t[0] + p->inv[i * 3 + 1] * p->t[1] + p->inv[i * 3 + 2] * p->t[2]);
+        d[i] = pc[i] - pp[i];
+    }
+    g_move = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    /* angle between the viewing directions (third rows), rows normalised */
+    dot = (c->r[6] * p->r[6] + c->r[7] * p->r[7] + c->r[8] * p->r[8]) /
+          (sqrtf(c->r[6] * c->r[6] + c->r[7] * c->r[7] + c->r[8] * c->r[8]) *
+           sqrtf(p->r[6] * p->r[6] + p->r[7] * p->r[7] + p->r[8] * p->r[8]) + 1e-20f);
+    g_turn = acosf(dot > 1.0f ? 1.0f : dot < -1.0f ? -1.0f : dot) * 57.29578f;
+    /* normal play peaks around 180 units and 5 degrees per tick */
+    g_cut = g_move > 600.0f || g_turn > 50.0f;
+    if (g_move > g_stats.cam_move)
+        g_stats.cam_move = g_move;
+    if (g_turn > g_stats.cam_turn)
+        g_stats.cam_turn = g_turn;
 }
 
 void interp_frame_end(void)
@@ -265,6 +369,8 @@ void interp_frame_end(void)
     g_stats.projected = g_last_projected;
     g_stats.collisions = g_collisions;
     g_collisions = 0;
+    g_stats.rematched += g_rematched;
+    g_rematched = 0;
 
     /* build -> current, current -> previous, the old previous is reused for building */
     {
@@ -280,6 +386,7 @@ void interp_frame_end(void)
         g_build = next;
     }
     link_previous();
+    camera_motion();
     g_sets[g_build].count = 0;
     g_sets[g_build].gen++;
     g_sets[g_build].cam.valid = 0;
@@ -304,10 +411,11 @@ int interp_lookup(float sx, float sy, interp_vec3 *cur, interp_vec3 *prev)
         return 0;
     *cur = c->recs[s->val].cam;
     g_stats.found++;
-    if (!c->recs[s->val].has_prev)
+    if (!c->recs[s->val].has_prev || g_cut)
         return 1;
     *prev = c->recs[s->val].prev;
     g_stats.matched++;
+    g_last_rematched = c->recs[s->val].rematched;
     return 2;
 }
 
@@ -316,6 +424,8 @@ void interp_get_stats(interp_stats *s, int reset)
     *s = g_stats;
     if (reset) {
         g_stats.lookups = g_stats.found = g_stats.matched = 0;
+        g_stats.cam_move = g_stats.cam_turn = 0;
+        g_stats.rematched = 0;
     }
 }
 

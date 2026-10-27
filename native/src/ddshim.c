@@ -1087,46 +1087,149 @@ static DWORD filter_clamped(int pt, const gfx_vertex *v, DWORD n, gfx_vertex *ou
 }
 
 /* Interpolation: where each world vertex of this draw was one game tick ago,
- * in final screen coordinates. Vertices the GTE projected know their own
- * previous camera-space position; ones the game built in screen space around
- * a projected point (grass, sprites, clipped terrain) borrow the motion of the
- * nearest one that does; anything else stays put. */
+ * in camera space (the replay blends in 3D and projects). Vertices the GTE projected know their own
+ * previous camera-space position. The rest (midpoints of the polygons the game
+ * subdivides near the camera, clipped edges, screen-space grass and sprites)
+ * are rebuilt from screen + depth, moved with the camera, plus whatever extra
+ * motion their own polygon's captured corners had (none for the static world,
+ * the character's own for its parts). Buildings and props aren't captured
+ * at all and move with the camera only; a small semi-transparent draw with
+ * no captured corner (a shadow) borrows from the nearest captured vertex at
+ * about the same depth. */
 
-static const rec_prev *world_prevs(const gfx_vertex *v, const gfx_vertex *raw, DWORD n)
+/* [debug] interp_tint=1: colour world draws by how they're interpolated */
+int g_interp_tint;
+static uint32_t g_tint;   /* colour for the draw world_prevs just handled, 0 = none */
+
+static const rec_prev *world_prevs(const gfx_vertex *raw, DWORD n)
 {
+    enum { NONE, EXACT, REBUILT };
     static rec_prev out[4096];
+    static interp_vec3 cur[4096], prev[4096], res[4096];
+    static unsigned char how[4096], has_res[4096];
     float hx = mml_h_x(), hy = *(const float *)G_GTE_H_ADDR, near_z = *(const float *)G_GTE_NEAR_ADDR;
     float ofx = (float)*(const int32_t *)G_GTE_OFX_ADDR, ofy = (float)*(const int32_t *)G_GTE_OFY_ADDR;
-    DWORD k;
+    DWORD k, j;
+    int exact = 0, little = 0, moves, rematched = 0, borrowed = 0, rebuilt = 0;
     if (n > sizeof out / sizeof out[0])
         return NULL;
     for (k = 0; k < n; k++) {
-        interp_vec3 c, p;
         float sx = raw[k].x * 0.5f, sy = raw[k].y * 0.5f;
-        int how = 0;
-        out[k].valid = 0;
-        if (interp_lookup(sx, sy, &c, &p) == 2) {
-            how = 1;
+        interp_vec3 *c = &cur[k];
+        how[k] = NONE;
+        has_res[k] = 0;
+        if (interp_lookup(sx, sy, c, &prev[k]) == 2) {
+            how[k] = EXACT;
+            if (interp_debug_last_rematched())
+                rematched = 1;
+            has_res[k] = (unsigned char)interp_residual(c, &prev[k], &res[k]);
+            exact += has_res[k];
         } else if (!(raw[k].z == 0.1f && raw[k].rhw == 1.0f) && raw[k].z < 0.98f) {
             /* not captured: rebuild its camera-space position from screen + depth */
-            c.z = raw[k].z * 16384.0f;
-            c.x = (sx - ofx) * c.z / hx;
-            c.y = (sy - ofy) * c.z / hy;
-            if (c.z >= near_z && interp_estimate_prev(&c, sx, sy, &p))
-                how = 2;
+            c->z = raw[k].z * 16384.0f;
+            c->x = (sx - ofx) * c->z / hx;
+            c->y = (sy - ofy) * c->z / hy;
+            if (c->z >= near_z && interp_static_prev(c, &prev[k]))
+                how[k] = REBUILT;
         }
-        if (how && c.z >= near_z && p.z >= near_z) {
-            float dsx = hx * (p.x / p.z - c.x / c.z), dsy = hy * (p.y / p.z - c.y / c.z);
-            if (dsx > -80.0f && dsx < 80.0f && dsy > -80.0f && dsy < 80.0f) {
-                out[k].x = v[k].x + 2.0f * dsx;
-                out[k].y = v[k].y + 2.0f * dsy;
-                out[k].z = v[k].z * (p.z / c.z);
-                out[k].valid = 1;
+    }
+    if (!exact && g_cur_pkt && (g_cur_pkt[7] & 2)) {
+        /* nothing captured in this draw: only something small and
+         * semi-transparent (a shadow, a glow, at most ~90 units) rides on a
+         * moving object. Buildings and props aren't captured either, but
+         * they're scenery: borrowing would drag a sidewalk quad or a trash
+         * can along with Mega Man when he's next to it */
+        float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
+        for (k = 0; k < n; k++) {
+            const float *c = &cur[k].x;
+            if (how[k] != REBUILT)
+                continue;
+            for (j = 0; j < 3; j++) {
+                if (c[j] < lo[j]) lo[j] = c[j];
+                if (c[j] > hi[j]) hi[j] = c[j];
             }
+        }
+        little = hi[0] - lo[0] < 150.0f && hi[1] - lo[1] < 150.0f && hi[2] - lo[2] < 150.0f;
+    }
+    for (k = 0; k < n; k++) {
+        interp_vec3 r = { 0, 0, 0 };
+        if (how[k] != REBUILT)
+            continue;
+        if (exact) {
+            /* the polygon's own captured corners (a polygon's vertices sit
+             * close together in the draw), nearer ones counting more */
+            float wsum = 0;
+            DWORD j0 = k > 12 ? k - 12 : 0, j1 = k + 13 < n ? k + 13 : n;
+            for (j = j0; j < j1; j++) {
+                float dx, dy, w;
+                if (!has_res[j])
+                    continue;
+                dx = raw[j].x - raw[k].x;
+                dy = raw[j].y - raw[k].y;
+                w = 1.0f / (dx * dx + dy * dy + 1.0f);
+                r.x += res[j].x * w;
+                r.y += res[j].y * w;
+                r.z += res[j].z * w;
+                wsum += w;
+            }
+            if (wsum > 0) {
+                r.x /= wsum;
+                r.y /= wsum;
+                r.z /= wsum;
+            }
+        } else if (little) {
+            borrowed |= interp_borrow_residual(raw[k].x * 0.5f, raw[k].y * 0.5f, cur[k].z, &r);   /* else camera motion only */
+        }
+        rebuilt = 1;
+        prev[k].x += r.x;
+        prev[k].y += r.y;
+        prev[k].z += r.z;
+        res[k] = r;
+    }
+    /* A draw whose own motion (beyond the camera's) is more than 60% of its
+     * distance is a mismatch or a teleport: it holds still for the in-between
+     * frame, all of it, since a polygon with only some corners blended tears.
+     * Camera cuts are caught for the whole frame by interp.c. Corners that end
+     * up behind the near plane mid-blend are fine: the replay cuts the
+     * triangles there, in 3D, like the game does. */
+    for (k = 0; k < n; k++) {
+        const interp_vec3 *c = &cur[k], *p = &prev[k];
+        interp_vec3 d = res[k];
+        float rc = c->x * c->x + c->y * c->y + c->z * c->z, rp = p->x * p->x + p->y * p->y + p->z * p->z;
+        if (how[k] == NONE)
+            continue;
+        if (how[k] == EXACT && !has_res[k]) {
+            d.x = p->x - c->x;
+            d.y = p->y - c->y;
+            d.z = p->z - c->z;
+        }
+        if (c->z < near_z || d.x * d.x + d.y * d.y + d.z * d.z > 0.36f * (rc > rp ? rc : rp))
+            break;
+    }
+    moves = k == n;
+    if (g_interp_tint) {
+        /* red: borrowed a nearby object's motion; blue: held still; yellow: took
+         * another copy of its model; green: nothing captured, camera motion only */
+        g_tint = !moves ? 0xFF2060FF : borrowed ? 0xFFFF2020 : rematched ? 0xFFFFE000 :
+                 (rebuilt && !exact) ? 0xFF20E040 : 0;
+    }
+    for (k = 0; k < n; k++) {
+        out[k].valid = REC_STILL;
+        if (moves && how[k] != NONE) {
+            out[k].valid = REC_PERSP;
+            out[k].cx = cur[k].x;
+            out[k].cy = cur[k].y;
+            out[k].cz = cur[k].z;
+            out[k].px = prev[k].x;
+            out[k].py = prev[k].y;
+            out[k].pz = prev[k].z;
+            out[k].kx = 2.0f * hx;
+            out[k].ky = 2.0f * hy;
+            out[k].near_z = near_z;
         }
         if (!out[k].valid)
             g_iv_static++;
-        else if (how == 1)
+        else if (how[k] == EXACT)
             g_iv_exact++;
         else
             g_iv_borrowed++;
@@ -1239,7 +1342,7 @@ static const rec_prev *background_prevs(const gfx_vertex *v, DWORD n, gfx_tex *t
         out[k].x = v[k].x + odx;
         out[k].y = v[k].y + ody;
         out[k].z = v[k].z;
-        out[k].valid = 1;
+        out[k].valid = REC_SCREEN;
     }
     return out;
 }
@@ -1296,7 +1399,7 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
                 bprev[k].x = fixed[k].x + px * sc;
                 bprev[k].y = fixed[k].y + py;
                 bprev[k].z = fixed[k].z;
-                bprev[k].valid = bl == 2;
+                bprev[k].valid = bl == 2 ? REC_SCREEN : REC_STILL;
             }
             verts = fixed;
             if (rec_enabled())
@@ -1328,8 +1431,7 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
     if (layer_tile)
         ;
     else if (rec_enabled() && g_cur_bucket == 4)
-        prevs = world_prevs((const gfx_vertex *)verts,
-                            g_display_raw_verts ? (const gfx_vertex *)g_display_raw_verts : (const gfx_vertex *)verts, n);
+        prevs = world_prevs(g_display_raw_verts ? (const gfx_vertex *)g_display_raw_verts : (const gfx_vertex *)verts, n);
     else if (rec_enabled() && g_cur_bucket >= 5)
         prevs = background_prevs((const gfx_vertex *)verts, n, d->tex ? d->tex->tex : NULL);
     if (g_drop_clamped && g_cur_bucket == 4 && (pt == D3DPT_TRIANGLESTRIP || pt == D3DPT_TRIANGLELIST)) {
@@ -1344,6 +1446,18 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
                 rec_draw(GFX_TRILIST, tmp, NULL, (int)m);
             return D3D_OK;
         }
+    }
+    if (g_tint) {
+        static gfx_vertex tv[4096];
+        DWORD q;
+        if (n <= 4096) {
+            for (q = 0; q < n; q++) {
+                tv[q] = ((const gfx_vertex *)verts)[q];
+                tv[q].diffuse = g_tint;
+            }
+            verts = tv;
+        }
+        g_tint = 0;
     }
     rec_draw((int)pt, (const gfx_vertex *)verts, prevs, (int)n);
     return D3D_OK;

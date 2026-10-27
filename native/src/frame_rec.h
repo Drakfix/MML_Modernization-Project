@@ -9,9 +9,16 @@
  * follows half a game tick later. */
 #include "gfx.h"
 
+enum { REC_STILL, REC_SCREEN, REC_PERSP };
+
 typedef struct {
-    float x, y, z;       /* where this vertex was on screen one game tick ago */
-    int valid;
+    int valid;           /* REC_STILL: stays where it is now */
+    float x, y, z;       /* REC_SCREEN: where it was on screen one game tick ago */
+    /* REC_PERSP (3D geometry): its camera-space position now (c) and one
+     * tick ago (p), blended in 3D and projected, which stays right for
+     * points very close to the camera; k = screen units per unit of x/z, y/z */
+    float cx, cy, cz, px, py, pz, kx, ky;
+    float near_z;        /* REC_PERSP: in-between triangles are cut at this depth, like the game's */
 } rec_prev;
 
 void rec_enable(int on);
