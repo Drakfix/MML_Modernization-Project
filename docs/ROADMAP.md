@@ -51,6 +51,9 @@ included, without emulation.
   - Z-targeting: hold aim with an enemy around to lock on and move freely while
     facing it, flick the right stick to switch targets, with a reticle whose
     colour you can pick in the launcher (done)
+  - Launcher split into Display / Graphics / Controls tabs; the Controls tab has
+    camera speed, inversion, deadzone, orbit at start, roll style, light-tilt
+    walk, controller backend and the reticle colour (done)
 - Mouse + keyboard with the orbit camera
 - Fix the known issues
 - Better presentation overall

@@ -27,3 +27,8 @@ int controls_debug_overlay(pad_t *p, int connected);
  * walk/run speed (in % of stock) at the low end of their tilt ranges.
  * Negative or zero = keep the default. */
 void controls_tune(int roll_speed, int roll_anim_pct, int walk_pct, int walk_min_pct, int run_min_pct);
+
+/* Orbit camera speed (% of the default, X = yaw, Y = pitch), inversion, stick
+ * deadzone (% of full tilt) and whether the orbit camera starts on.
+ * Zero/negative percentages keep the defaults. */
+void controls_camera(int speed_x_pct, int speed_y_pct, int invert_x, int invert_y, int deadzone_pct, int orbit_start);

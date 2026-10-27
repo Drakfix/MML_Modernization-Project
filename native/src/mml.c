@@ -358,6 +358,12 @@ static void init(void)
         if (strlen(c) == 6 && strspn(c, "0123456789abcdefABCDEF") == 6)
             lockon_set_color((unsigned)strtoul(c, NULL, 16));
     }
+    controls_camera(GetPrivateProfileIntA("controls", "camera_speed_x", 100, g_ini),
+                    GetPrivateProfileIntA("controls", "camera_speed_y", 100, g_ini),
+                    GetPrivateProfileIntA("controls", "invert_x", 0, g_ini),
+                    GetPrivateProfileIntA("controls", "invert_y", 0, g_ini),
+                    GetPrivateProfileIntA("controls", "deadzone", 24, g_ini),
+                    GetPrivateProfileIntA("controls", "orbit_start", 0, g_ini));
     controls_tune(GetPrivateProfileIntA("controls", "roll_speed", 0, g_ini),
                   GetPrivateProfileIntA("controls", "roll_anim", -1, g_ini),
                   GetPrivateProfileIntA("controls", "walk_tilt", -1, g_ini),

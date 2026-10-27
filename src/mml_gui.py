@@ -94,7 +94,12 @@ LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
 DEFAULTS = {"renderer": "mml", "window": "fullscreen",
             "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
-            "lod": "full", "fps": "60", "reticle": "FFD840"}
+            "lod": "full", "fps": "60", "reticle": "FFD840",
+            "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
+            "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display"}
+
+# roll style -> mml.ini roll_speed (stock cartwheel 512 = running speed), roll_anim (% faster)
+ROLL_STYLES = {"classic": (512, 0), "fast": (768, 50), "snappy": (896, 80)}
 
 # lock-on reticle colours offered in the launcher (any RRGGBB works in mml.ini)
 RETICLE_PRESETS = [("Yellow", "FFD840"), ("Orange", "FF9A30"), ("Red", "FF4848"), ("Pink", "FF70C8"),
@@ -257,6 +262,25 @@ def reticle_hex(s):
     return v if len(v) == 6 and all(c in "0123456789ABCDEF" for c in v) else DEFAULTS["reticle"]
 
 
+def controls_ini(s):
+    roll_speed, roll_anim = ROLL_STYLES.get(s["roll"], ROLL_STYLES["fast"])
+    speed = int(s["cam_speed"]) if str(s["cam_speed"]).isdigit() else 100
+    return {
+        "mode": s["controls"],
+        "input": s["input"],
+        "orbit_start": 1 if s["orbit_start"] == "on" else 0,
+        "camera_speed_x": speed,
+        "camera_speed_y": speed,
+        "invert_x": 1 if s["invert_x"] == "on" else 0,
+        "invert_y": 1 if s["invert_y"] == "on" else 0,
+        "deadzone": int(s["deadzone"]) if str(s["deadzone"]).isdigit() else 24,
+        "roll_speed": roll_speed,
+        "roll_anim": roll_anim,
+        "walk_tilt": 55 if s["walk"] == "on" else 0,
+        "reticle_color": reticle_hex(s),
+    }
+
+
 def write_mml_ini(s, width):
     """Settings for mml.dll, merged into the existing file so hand-edited keys survive."""
     aa = {"off": 1, "msaa4x": 4, "msaa8x": 8}.get(s["aa"], 1)
@@ -278,7 +302,7 @@ def write_mml_ini(s, width):
             "lod": s["lod"],
             "interp": 1 if s["fps"] == "60" else 0,
         },
-        "controls": {"mode": s["controls"], "reticle_color": reticle_hex(s)},
+        "controls": controls_ini(s),
         "general": {"intro": s["intro"]},
     }, header="; Mega Man Legends Modernization - settings, read by mml.dll when the game starts.\n"
               "; The launcher updates the keys it manages and leaves everything else alone.\n")
@@ -367,12 +391,18 @@ class App:
         self.exe_item = c.create_text(COL_X, 94, anchor="nw", font=("Segoe UI", 10), fill=DIM, text="…")
         self.pad_item = c.create_text(COL_X, 114, anchor="nw", font=("Segoe UI", 10), fill=DIM, text="…")
 
-        # options column (frame hosted on the canvas)
+        # options column (frame hosted on the canvas): a tab bar over three pages
         col = tk.Frame(root, bg=BG)
         c.create_window(COL_X, 140, window=col, anchor="nw", width=COL_W)
+        tabs = tk.Frame(col, bg=BG)
+        tabs.pack(fill="x", pady=(0, 4))
+        self.pages = {}
+        for key in ("display", "graphics", "controls"):
+            self.pages[key] = tk.Frame(col, bg=BG)
+        page = [self.pages["display"]]
 
         def option(label, key, choices, hint=None, row=None, side=None):
-            card = tk.Frame(row or col, bg=CARD)
+            card = tk.Frame(row or page[0], bg=CARD)
             if row:   # half-width card sharing a row with another
                 card.pack(side="left", fill="both", expand=True,
                           padx=(0, 2) if side == "left" else (2, 0))
@@ -390,6 +420,13 @@ class App:
                 anchor="w", padx=10, pady=(1, 6))
             return card
 
+        def pair():
+            r = tk.Frame(page[0], bg=BG)
+            r.pack(fill="x", pady=2)
+            return r
+
+        # ---- Display ----
+        page[0] = self.pages["display"]
         option("Renderer", "renderer",
                [("Modern (Direct3D 11)", "mml"), ("Compatibility", "ddrawcompat")],
                "Modern = 60 fps, alt-tab, screenshots, windowed")
@@ -397,30 +434,58 @@ class App:
                [("Borderless", "fullscreen"), ("Exclusive", "exclusive"), ("Windowed", "windowed")],
                "Exclusive = lowest GPU use, limited Alt+Tab and capture")
         option("Resolution", "res", RES_CHOICES, "Display = your monitor (recommended)")
-        pair3 = tk.Frame(col, bg=BG)
-        pair3.pack(fill="x", pady=2)
-        option("Aspect ratio", "aspect", [("16:9 Wide", "16:9"), ("4:3 Classic", "4:3")], row=pair3, side="left")
-        option("Frame rate", "fps", [("60 fps", "60"), ("30 fps", "30")], row=pair3, side="right")
-        ctl = option("Controls", "controls",
-                     [("Modern twin-stick", "modern"), ("Vanilla (1997)", "vanilla")],
-                     "LT aim · RT shoot · X dodge · F5 orbit")
-        self.reticle_swatch(ctl)
+        r = pair()
+        option("Aspect ratio", "aspect", [("16:9 Wide", "16:9"), ("4:3 Classic", "4:3")], row=r, side="left")
+        option("Frame rate", "fps", [("60 fps", "60"), ("30 fps", "30")], row=r, side="right")
         option("Intro video", "intro",
                [("Play (any button skips)", "play"), ("Skip entirely", "skip")])
+
+        # ---- Graphics ----
+        page[0] = self.pages["graphics"]
         option("Texture filter", "texfilter",
                [("Game default", "app"), ("Trilinear", "trilinear"), ("Anisotropic 16x", "af16x")])
-        pair = tk.Frame(col, bg=BG)
-        pair.pack(fill="x", pady=2)
+        r = pair()
         option("Upscaling", "scalefilter",
-               [("Bilinear", "bilinear"), ("Nearest", "nearest")], row=pair, side="left")
+               [("Bilinear", "bilinear"), ("Nearest", "nearest")], row=r, side="left")
         option("Antialiasing", "aa",
-               [("Off", "off"), ("4x", "msaa4x"), ("8x", "msaa8x")], row=pair, side="right")
-        pair2 = tk.Frame(col, bg=BG)
-        pair2.pack(fill="x", pady=2)
+               [("Off", "off"), ("4x", "msaa4x"), ("8x", "msaa8x")], row=r, side="right")
+        r = pair()
         option("Distance fog", "fog",
-               [("Original", "original"), ("Light", "light"), ("Off", "off")], row=pair2, side="left")
+               [("Original", "original"), ("Light", "light"), ("Off", "off")], row=r, side="left")
         option("Model detail", "lod",
-               [("Full detail", "full"), ("Original", "original")], row=pair2, side="right")
+               [("Full detail", "full"), ("Original", "original")], row=r, side="right")
+
+        # ---- Controls ----
+        page[0] = self.pages["controls"]
+        option("Controls", "controls",
+               [("Modern twin-stick", "modern"), ("Vanilla (1997)", "vanilla")],
+               "LT aim/lock-on · RT shoot · X roll · L3/R3 orbit")
+        r = pair()
+        option("Orbit camera at start", "orbit_start", [("Off", "off"), ("On", "on")], row=r, side="left")
+        option("Controller", "input", [("Any (SDL)", "sdl"), ("Legacy", "legacy")], row=r, side="right")
+        option("Camera speed", "cam_speed",
+               [("50%", "50"), ("75%", "75"), ("100%", "100"), ("125%", "125"), ("150%", "150"), ("200%", "200")])
+        r = pair()
+        option("Invert camera X", "invert_x", [("Off", "off"), ("On", "on")], row=r, side="left")
+        option("Invert camera Y", "invert_y", [("Off", "off"), ("On", "on")], row=r, side="right")
+        r = pair()
+        option("Stick deadzone", "deadzone", [("Small", "12"), ("Default", "24"), ("Large", "32")],
+               row=r, side="left")
+        option("Light tilt", "walk", [("Walks", "on"), ("Runs", "off")], row=r, side="right")
+        option("Roll", "roll", [("Classic", "classic"), ("Fast", "fast"), ("Snappy", "snappy")],
+               "Classic = the original cartwheel speed")
+        self.reticle_card(page[0])
+
+        # tab bar
+        self.tab_buttons = {}
+        for i, (label, key) in enumerate((("Display", "display"), ("Graphics", "graphics"),
+                                          ("Controls", "controls"))):
+            b = tk.Label(tabs, text=label, padx=18, pady=6, cursor="hand2", bd=0,
+                         font=("Segoe UI", 11, "bold"))
+            b.pack(side="left", padx=(0 if i == 0 else 4, 0))
+            b.bind("<Button-1>", lambda e, k=key: self.show_tab(k))
+            self.tab_buttons[key] = b
+        self.show_tab(self.settings.get("tab", "display"))
 
         # PLAY pill (canvas image + text, hover swap)
         self.play_img = c.create_image(PLAY_X, PLAY_Y, image=self.img_play, anchor="nw")
@@ -446,62 +511,61 @@ class App:
 
         self.refresh_status()
 
-    def reticle_swatch(self, card):
-        """Lock-on reticle colour: a swatch at the right of the Controls card that
-        opens a small picker (presets + the Windows colour dialog)."""
-        box = tk.Frame(card, bg=CARD, cursor="hand2")
-        box.place(relx=1.0, rely=1.0, x=-10, y=-7, anchor="se")
-        lbl = tk.Label(box, text="Lock-on", bg=CARD, fg=DIM, font=("Segoe UI", 9), cursor="hand2")
-        lbl.pack(side="left", padx=(0, 6))
-        self.ret_sw = tk.Label(box, width=3, bg="#" + reticle_hex(self.settings), cursor="hand2",
-                               highlightthickness=1, highlightbackground=DIM, bd=0)
-        self.ret_sw.pack(side="left", ipady=1)
-        for w in (box, lbl, self.ret_sw):
-            w.bind("<Button-1>", lambda e: self.pick_reticle())
+    def show_tab(self, key):
+        if key not in self.pages:
+            key = "display"
+        for p in self.pages.values():
+            p.pack_forget()
+        self.pages[key].pack(fill="x")
+        for k, b in self.tab_buttons.items():
+            b.configure(bg=CARD if k == key else BG, fg="white" if k == key else DIM)
+        if self.settings.get("tab") != key:
+            self.settings["tab"] = key
+            save_settings(self.settings)
 
-    def set_reticle(self, hexcol, win=None):
+    def reticle_card(self, parent):
+        """Lock-on reticle colour: preset swatches plus the Windows colour dialog."""
+        card = tk.Frame(parent, bg=CARD)
+        card.pack(fill="x", pady=2)
+        top = tk.Frame(card, bg=CARD)
+        top.pack(fill="x", padx=10, pady=(5, 0))
+        tk.Label(top, text="Lock-on reticle", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(top, text="  marker on the locked enemy", bg=CARD, fg=DIM,
+                 font=("Segoe UI", 9)).pack(side="left")
+        row = tk.Frame(card, bg=CARD)
+        row.pack(anchor="w", padx=10, pady=(3, 7))
+        self.ret_swatches = {}
+        for name, hexcol in RETICLE_PRESETS:
+            sw = tk.Label(row, width=3, bg="#" + hexcol, cursor="hand2", bd=0, highlightthickness=2)
+            sw.pack(side="left", padx=(0, 5), ipady=3)
+            sw.bind("<Button-1>", lambda e, h=hexcol: self.set_reticle(h))
+            self.ret_swatches[hexcol] = sw
+        self.ret_custom = tk.Label(row, text="Custom…", bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9),
+                                   padx=9, pady=3, cursor="hand2", highlightthickness=2)
+        self.ret_custom.pack(side="left", padx=(4, 0))
+        self.ret_custom.bind("<Button-1>", lambda e: self.custom_reticle())
+        self.refresh_reticle()
+
+    def refresh_reticle(self):
+        cur = reticle_hex(self.settings)
+        for hexcol, sw in self.ret_swatches.items():
+            sw.configure(highlightbackground=ACCENT if hexcol == cur else CARD)
+        custom = cur not in self.ret_swatches
+        self.ret_custom.configure(highlightbackground=ACCENT if custom else CARD,
+                                  bg=("#" + cur) if custom else SEG_OFF,
+                                  fg="black" if custom else TEXT)
+
+    def set_reticle(self, hexcol):
         self.settings["reticle"] = hexcol.lstrip("#").upper()
         save_settings(self.settings)
-        self.ret_sw.configure(bg="#" + reticle_hex(self.settings))
-        if win:
-            win.destroy()
+        self.refresh_reticle()
 
-    def pick_reticle(self):
-        win = tk.Toplevel(self.root, bg=CARD)
-        win.title("Lock-on reticle")
-        win.resizable(False, False)
-        win.transient(self.root)
-        try:
-            win.iconbitmap(self.res_path("mml.ico"))
-        except Exception:
-            pass
-        x = self.ret_sw.winfo_rootx() - 300
-        y = self.ret_sw.winfo_rooty() + 24
-        win.geometry(f"+{max(x, 0)}+{y}")
-        tk.Label(win, text="Lock-on reticle colour", bg=CARD, fg=TEXT,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=12, pady=(10, 6))
-        row = tk.Frame(win, bg=CARD)
-        row.pack(padx=12)
-        cur = reticle_hex(self.settings)
-        for name, hexcol in RETICLE_PRESETS:
-            sw = tk.Label(row, width=3, height=1, bg="#" + hexcol, cursor="hand2", bd=0,
-                          highlightthickness=2, highlightbackground=ACCENT if hexcol == cur else CARD)
-            sw.pack(side="left", padx=3, ipady=4)
-            sw.bind("<Button-1>", lambda e, h=hexcol: self.set_reticle(h, win))
-
-        def custom():
-            from tkinter import colorchooser
-            rgb, hexcol = colorchooser.askcolor(color="#" + reticle_hex(self.settings), parent=win,
-                                                title="Lock-on reticle colour")
-            if hexcol:
-                self.set_reticle(hexcol, win)
-        b = tk.Label(win, text="Custom colour…", bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9),
-                     padx=10, pady=4, cursor="hand2")
-        b.pack(anchor="w", padx=12, pady=(8, 12))
-        b.bind("<Button-1>", lambda e: custom())
-        b.bind("<Enter>", lambda e: b.configure(bg=SEG_HOVER))
-        b.bind("<Leave>", lambda e: b.configure(bg=SEG_OFF))
-        win.grab_set()
+    def custom_reticle(self):
+        from tkinter import colorchooser
+        rgb, hexcol = colorchooser.askcolor(color="#" + reticle_hex(self.settings), parent=self.root,
+                                            title="Lock-on reticle colour")
+        if hexcol:
+            self.set_reticle(hexcol)
 
     @staticmethod
     def centered_pos():

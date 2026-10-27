@@ -52,6 +52,8 @@
 #define G_SITE_WALKER_CALL      0x4A70E5u   /* game_frame: call gfx_walk_display_list (once per frame) */
 #define G_SITE_INTRO_CALL       0x4A6F7Eu   /* call intro_play_avi */
 #define G_FN_CAM_APPLY          0x42961Bu   /* cam_apply_angles: EAX pos*, EDX dist, EBX yaw, ECX -pitch */
+#define G_RET_CAM_COMMON_BLEND  0x42A2BBu   /* return addresses of camera_apply_common's two cam_apply_angles */
+#define G_RET_CAM_COMMON        0x42A2E0u   /* calls (the gameplay camera; other callers: cam_follow_* etc.) */
 #define G_FN_CAM_SET_B          0x4298F6u   /* cam_set_angles_b: yaw in EDX */
 #define G_FN_PLAYER_MOVE        0x4B53D3u   /* runs each frame while the player has control */
 #define G_FN_PLAYER_UPDATE      0x4A9A31u   /* player_update(EAX = object): pre + state handlers */

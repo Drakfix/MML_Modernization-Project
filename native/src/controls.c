@@ -42,7 +42,7 @@ typedef struct {
 typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 
 #define TRIG_ON        40
-#define STICK_DZ       7849
+#define STICK_DZ       7849    /* default deadzone (~24%), [controls] deadzone */
 
 /* Tuning carried over from the Frida build (user-calibrated). Speeds are in
  * angle units (4096 = 360 deg) per 1/60 s at full deflection. */
@@ -61,6 +61,7 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define RUN_MIN_PCT      50      /* run speed/animation right past the walk range */
 #define ROLL_BUFFER      12      /* player updates a roll press waits for a chance to start */
 #define LOOK_ORBIT_MAX   100     /* the camera orbits up to this pitch; looking further up tilts in place */
+#define ORBIT_SETTLE     20      /* camera calls the game camera keeps after a handover */
 #define LOCK_CAM_EASE    0.12    /* per 1/60 s: how fast the camera swings behind Mega Man on lock-on */
 #define LOCK_STEP_PCT    200     /* walk / backstep speed while locked on, % of stock */
 #define LOCK_SIDESTEP_PCT 500    /* sidestep while locked on (stock 0x20 is 1/16 of a run) */
@@ -112,6 +113,8 @@ static int talk_hidden, walk_injected;
 /* input state (this was the Python thread) */
 static double st_yaw, st_pitch;
 static int st_allowed = 1, flick_armed = 1;
+/* launcher Controls tab: camera speed (signed: negative = inverted) and deadzone */
+static double g_yaw_speed = YAW_SPEED, g_pitch_speed = PITCH_SPEED, g_stick_dz = STICK_DZ;
 static double cam_dist_cur = -1;
 static int32_t g_view_target[4];
 static int st_active, prev_key, prev_click;
@@ -216,9 +219,9 @@ static int pad_read(pad_t *out)
 static double stick_norm(int v)
 {
     double a = v < 0 ? -(double)v : (double)v;
-    if (a <= STICK_DZ)
+    if (a <= g_stick_dz)
         return 0;
-    a = (a - STICK_DZ) / (32767.0 - STICK_DZ);
+    a = (a - g_stick_dz) / (32767.0 - g_stick_dz);
     if (a > 1)
         a = 1;
     return v < 0 ? -a : a;
@@ -226,11 +229,27 @@ static double stick_norm(int v)
 
 static int signed12(int raw) { return raw > 2048 ? raw - 4096 : raw; }
 
+/* the camera the game itself asked for this call (cam_apply_angles EBX yaw,
+ * ECX -pitch); the stored angles at 0x77EA0A/0x77EA08 lag a frame and read 0
+ * before a level's first camera */
+static int g_game_yaw, g_game_pitch_ecx, g_game_cam_valid, g_game_cam_age = 1000;
+
+static double game_yaw(void)
+{
+    return g_game_cam_valid ? (double)(g_game_yaw & 0xfff) : (double)RD16(G_CAM_YAW);
+}
+
+static double game_pitch(void)
+{
+    return g_game_cam_valid ? (double)-signed12(g_game_pitch_ecx & 0xfff) : (double)signed12(RD16(G_CAM_PITCH));
+}
+
 static int orbit_allowed(void)
 {
     /* +4 rig active, +5 mode 0 (follow), +6 no script, +1 follow not suspended
      * (talking sets it and blends the camera to frame both speakers) */
-    return RIG8(4) == 1 && RIG8(5) == 0 && RIG8(6) == 0 && RIG8(1) == 0 && !(P8(PL_INPUT_FLAGS) & 0x60);
+    return RIG8(4) == 1 && RIG8(5) == 0 && RIG8(6) == 0 && RIG8(1) == 0 && !(P8(PL_INPUT_FLAGS) & 0x60) &&
+           g_game_cam_age < 24;   /* the gameplay camera itself is running (not title/menus/other cameras) */
 }
 
 /* facing that looks from Mega Man at a world point (same as FUN_004DDE21) */
@@ -311,8 +330,8 @@ static void input_update(void)
     click = (p.wButtons & (BTN_L3 | BTN_R3)) != 0;
     if (g_modern && ((f5 && !prev_key) || (click && !prev_click))) {
         if (!st_active) {
-            st_yaw = RD16(G_CAM_YAW);
-            st_pitch = clampd(signed12(RD16(G_CAM_PITCH)), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+            st_yaw = game_yaw();
+            st_pitch = clampd(game_pitch(), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
             st_active = 1;
             log_printf("orbit ON (yaw %d pitch %d)", (int)st_yaw, (int)st_pitch);
         } else {
@@ -327,10 +346,19 @@ static void input_update(void)
     /* the orbit only drives the plain follow camera with the player in control;
      * cutscenes, scripted cameras, talk/boss framing get the game camera back */
     {
+        /* coming back, the game camera keeps driving for a moment: right after a
+         * load, a scene or a talk it is still blending in, so its angle (and Mega
+         * Man's facing) isn't settled yet; then the orbit takes over from it */
+        static int settle;
         int allowed = orbit_allowed();
+        if (!allowed)
+            settle = 0;
+        else if (settle < ORBIT_SETTLE)
+            settle++;
+        allowed = allowed && (settle >= ORBIT_SETTLE || st_allowed);
         if (st_active && allowed && !st_allowed) {
-            st_yaw = RD16(G_CAM_YAW);
-            st_pitch = clampd(signed12(RD16(G_CAM_PITCH)), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+            st_yaw = game_yaw();
+            st_pitch = clampd(game_pitch(), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
             cam_dist_cur = -1;
             log_printf("orbit: back from the game camera (yaw %d pitch %d)", (int)st_yaw, (int)st_pitch);
         } else if (st_active && !allowed && st_allowed) {
@@ -381,30 +409,30 @@ static void input_update(void)
     if (lock_active) {
         n = stick_norm(p.sThumbRY);
         if (n != 0)
-            st_pitch = clampd(st_pitch + PITCH_SPEED * n * ticks, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+            st_pitch = clampd(st_pitch + g_pitch_speed * n * ticks, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
     } else if (st_active && aiming && !lock_free) {
-        st_yaw = RD16(G_CAM_YAW);
-        st_pitch = clampd(signed12(RD16(G_CAM_PITCH)), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+        st_yaw = game_yaw();
+        st_pitch = clampd(game_pitch(), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
     } else {
         n = stick_norm(p.sThumbRX);
         if (n != 0) {
-            st_yaw = fmod(st_yaw + YAW_SPEED * n * ticks, 65536.0);
+            st_yaw = fmod(st_yaw + g_yaw_speed * n * ticks, 65536.0);
             if (st_yaw < 0)
                 st_yaw += 65536.0;
         }
         n = stick_norm(p.sThumbRY);   /* stick up tilts the view up */
         if (n != 0)
-            st_pitch = clampd(st_pitch + PITCH_SPEED * n * ticks, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+            st_pitch = clampd(st_pitch + g_pitch_speed * n * ticks, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
     }
 
     /* camera-relative movement on the left stick */
     if (st_active && st_allowed && (!aiming || lock_active || lock_free)) {
         double mag = sqrt((double)p.sThumbLX * p.sThumbLX + (double)p.sThumbLY * p.sThumbLY);
-        if (mag > STICK_DZ) {
+        if (mag > g_stick_dz) {
             double theta = atan2((double)p.sThumbLX, (double)p.sThumbLY);   /* 0 = up, + = right */
             int units = (int)(theta * 4096.0 / (2.0 * PI));
             facing = ((int)st_yaw + FACE_OFFSET + FACE_SIGN * units) & 0xffff;
-            fwd = (int)(clampd((mag - STICK_DZ) / (32767.0 - STICK_DZ), 0, 1) * 32767);
+            fwd = (int)(clampd((mag - g_stick_dz) / (32767.0 - g_stick_dz), 0, 1) * 32767);
             moving = 1;
         }
     }
@@ -447,6 +475,20 @@ static void on_cam_apply(regs_t *r)
     int gate, ma;
 
     frame_tick = (frame_tick + 1) & 0x3fffffff;
+    {
+        /* only the gameplay camera (camera_update's common tail) is "the game's
+         * camera"; cam_follow_lookat & co. also come through here every frame
+         * with angles of their own */
+        uint32_t ret = *(uint32_t *)(uintptr_t)(r->esp + 4);
+        if (ret == G_RET_CAM_COMMON_BLEND || ret == G_RET_CAM_COMMON) {
+            g_game_yaw = (int)r->ebx;
+            g_game_pitch_ecx = (int)r->ecx;
+            g_game_cam_valid = 1;
+            g_game_cam_age = 0;
+        } else if (g_game_cam_age < 1000) {
+            g_game_cam_age++;
+        }
+    }
     input_update();
 
     /* position-change credit: opens the facing gate at a standstill start,
@@ -938,6 +980,29 @@ static DWORD WINAPI intro_skip_thread(LPVOID unused)
         }
     }
     return 0;
+}
+
+void controls_camera(int speed_x_pct, int speed_y_pct, int invert_x, int invert_y, int deadzone_pct, int orbit_start)
+{
+    if (speed_x_pct > 0)
+        g_yaw_speed = YAW_SPEED * speed_x_pct / 100.0;
+    if (speed_y_pct > 0)
+        g_pitch_speed = PITCH_SPEED * speed_y_pct / 100.0;
+    if (invert_x)
+        g_yaw_speed = -g_yaw_speed;
+    if (invert_y)
+        g_pitch_speed = -g_pitch_speed;
+    if (deadzone_pct > 0 && deadzone_pct < 90)
+        g_stick_dz = 32767.0 * deadzone_pct / 100.0;
+    if (orbit_start && g_modern) {
+        /* resyncs to the game camera on the first frame the orbit may drive */
+        st_active = 1;
+        st_allowed = 0;
+    }
+    log_printf("controls: camera speed %.0f/%.0f%s%s, deadzone %.0f%%, orbit %s at start",
+               g_yaw_speed / YAW_SPEED * 100, g_pitch_speed / PITCH_SPEED * 100,
+               invert_x ? " invert X" : "", invert_y ? " invert Y" : "", g_stick_dz / 327.67,
+               st_active ? "on" : "off");
 }
 
 void controls_tune(int roll_speed, int roll_anim_pct, int walk_pct, int walk_min_pct, int run_min_pct)
