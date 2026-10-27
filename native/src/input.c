@@ -296,6 +296,7 @@ static void on_poll_entry(regs_t *r)
     pad_t p;
     int conn;
     (void)r;
+    controls_poll_idle();
     if (!g_active) {
         g_gate = *(volatile uint32_t *)G_JOY_DEVICE;
         return;
@@ -319,9 +320,22 @@ static void on_poll_entry(regs_t *r)
 }
 
 /* pad_poll, right before the keyboard half */
+static uint8_t g_kb_saved;
+static int g_kb_muted;
+
 static void on_poll_keyboard(regs_t *r)
 {
     (void)r;
+    /* orbit gameplay with keyboard+mouse: the game's own keyboard bindings stand
+     * down (remapped keys can't double up); its binding loop stops at the first
+     * empty slot, so blank slot 0 for this poll and put it back right after */
+    if (controls_mute_game_keys()) {
+        g_kb_saved = *(volatile uint8_t *)G_KB_BINDINGS;
+        if (g_kb_saved) {
+            *(volatile uint8_t *)G_KB_BINDINGS = 0;
+            g_kb_muted = 1;
+        }
+    }
     if (g_active && g_bits) {
         uint16_t *pad = (uint16_t *)(uintptr_t)(*(volatile uint32_t *)G_PAD_BUF_PTR + 2);
         *pad &= (uint16_t)~g_bits;
@@ -354,6 +368,16 @@ void *input_sdl_proc(const char *name)
     return g_sdl_dll ? (void *)GetProcAddress(g_sdl_dll, name) : NULL;
 }
 
+/* right after pad_poll returns (FUN_004A694A) */
+static void on_poll_done(regs_t *r)
+{
+    (void)r;
+    if (g_kb_muted) {
+        *(volatile uint8_t *)G_KB_BINDINGS = g_kb_saved;
+        g_kb_muted = 0;
+    }
+}
+
 int input_sdl_active(void)
 {
     return g_active && g_ready;
@@ -371,6 +395,7 @@ int input_install(void)
     static const uint8_t kb_bytes[] = { 0x83, 0x3D, 0x3C, 0x1F, 0x55, 0x00, 0x00 };
     static const uint8_t gate_cmp[] = { 0x83, 0x3D, 0x40, 0x1F, 0x55, 0x00, 0x00 };
     static const uint8_t intro_call[] = { 0xE8, 0xB0, 0x29, 0x05, 0x00 };
+    static const uint8_t after_poll[] = { 0xB8, 0xB4, 0x08, 0x57, 0x00 };   /* mov eax,0x5708B4 */
     uint32_t gate_addr = (uint32_t)(uintptr_t)&g_gate;
 
     if (!load_sdl()) {
@@ -389,6 +414,8 @@ int input_install(void)
         return 0;
     }
     InitializeCriticalSection(&g_cs);
+    if (!hook_mid(G_SITE_AFTER_POLL, sizeof after_poll, after_poll, on_poll_done))
+        log_printf("input: no post-poll hook, the game's keyboard keys stay live with KB+M");
     g_active = 1;
     /* absent when the intro is bypassed (the call is patched out) */
     if (mem_expect(G_SITE_INTRO_CALL, intro_call, sizeof intro_call))

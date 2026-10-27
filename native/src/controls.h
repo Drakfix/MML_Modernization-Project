@@ -41,3 +41,12 @@ void controls_load_buttons(const char *ini);
  * mouse Y. controls_kbm_active: the game is in front and keyboard/mouse count. */
 void controls_mouse(int enabled, int sens_pct, int invert_y);
 int controls_kbm_active(void);
+
+/* Keyboard bindings ([controls] key_up .. key_orbit, up to two keys each:
+ * "W", "SPACE", "MOUSE1", "F5", "W,UP"...). */
+void controls_load_keys(const char *ini);
+/* 1 while the game's own keyboard bindings should be muted (orbit gameplay, KB+M on). */
+int controls_mute_game_keys(void);
+
+/* Called on every pad poll: releases the mouse cursor while the orbit isn't driving (menus). */
+void controls_poll_idle(void);

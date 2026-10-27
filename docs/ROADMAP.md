@@ -58,8 +58,28 @@ included, without emulation.
 - New intro played by our own video player (1080p, any folder path), the original
   intro stays for the Compatibility renderer (done)
 - Mouse + keyboard with the orbit camera: mouse look, WASD, mouse aiming (done)
-- Fix the known issues
+- Keyboard remapping and the old 1997 developer keys switched off (done)
+- Fix the known issues (most are fixed; black textures in some cutscenes still to check)
 - Better presentation overall
+
+## Next up, before the big ports
+
+Things on the list after the controls work, roughly in no order yet:
+
+- Screen transitions and fades that went missing with the new renderer
+- The flicker some walls and props show next to moving characters at 60 fps
+- Distant floors and walls using low detail textures until you get close
+- Optional post effects (CRT and friends) and checking ReShade works with the new renderer
+- Moving some HUD pieces to make better use of the wide screen
+- Title screen and pause menu touches
+- Mod support: HD textures, extra geometry precision, plus playing nice with the
+  Unfinished Business audio mod
+- Seeing what else the new renderer can realistically do (lighting, bloom, shadows, upscaling)
+- A debug room for testing (items, enemies, movement and camera test spots)
+- Smaller screens like the Steam Deck (the launcher doesn't fit there yet)
+- Looking into the Japanese PC release (Rockman DASH), maybe an undub option someday
+
+After that come the big ones: Android and Linux.
 
 ## The long road (native port)
 

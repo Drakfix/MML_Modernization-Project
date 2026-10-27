@@ -8,3 +8,4 @@ int kbm_foreground(void);                         /* the game window is in front
 int kbm_key(int vk);                              /* key/mouse button down, game in front */
 void kbm_take_mouse(int *dx, int *dy, int *wheel_steps);   /* motion since the last call */
 void kbm_capture(int want);                       /* clip + hide the cursor while the orbit drives */
+int kbm_vk_from_name(const char *name);           /* "SPACE", "W", "MOUSE1", "F5"... -> VK (0 = unknown) */

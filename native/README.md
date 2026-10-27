@@ -53,6 +53,7 @@ invert_x=0           ; 1 = inverted (invert_y likewise)
 deadzone=24          ; stick deadzone, % of full tilt
 reticle_color=FFD840 ; lock-on reticle colour (RRGGBB)
 mouse_keyboard=1     ; WASD + mouse look with the orbit camera (mouse_speed %, mouse_invert_y)
+key_jump=SPACE       ; keyboard remap: key_up .. key_orbit, two keys each ("W,UP")
 btn_rb=none          ; button remap for the orbit layout: btn_a .. btn_start = jump, shoot,
                      ; special, talk, roll, aim, orbit, menu, select or none
 roll_speed=768       ; roll (X) speed, stock is 512

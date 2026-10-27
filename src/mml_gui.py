@@ -113,6 +113,48 @@ BUTTON_DEFAULTS = {"btn_a": "jump", "btn_b": "special", "btn_x": "roll", "btn_y"
                    "btn_back": "select", "btn_start": "menu"}
 DEFAULTS.update(BUTTON_DEFAULTS)
 
+# keyboard + mouse bindings (orbit layout): slot -> "KEY" or "KEY,KEY", mml.ini [controls] key_*
+KEY_SLOTS = [("key_up", "Forward"), ("key_down", "Back"), ("key_left", "Left"), ("key_right", "Right"),
+             ("key_walk", "Walk (hold)"), ("key_jump", "Jump"), ("key_shoot", "Shoot"), ("key_aim", "Aim / lock"),
+             ("key_roll", "Roll"), ("key_talk", "Talk / check"), ("key_special", "Special"), ("key_menu", "Menu"),
+             ("key_select", "Select"), ("key_orbit", "Orbit camera")]
+KEY_DEFAULTS = {"key_up": "W,UP", "key_down": "S,DOWN", "key_left": "A,LEFT", "key_right": "D,RIGHT",
+                "key_walk": "LCTRL", "key_jump": "SPACE", "key_shoot": "MOUSE1", "key_aim": "MOUSE2",
+                "key_roll": "LSHIFT", "key_talk": "E", "key_special": "Q", "key_menu": "TAB",
+                "key_select": "M", "key_orbit": "F5"}
+DEFAULTS.update(KEY_DEFAULTS)
+DEFAULTS["buttons_view"] = "pad"
+# Tk key names -> mml.ini key names (anything else: letters, digits, F1-F12 as they are)
+TK_KEYS = {"space": "SPACE", "Tab": "TAB", "Return": "ENTER", "BackSpace": "BACKSPACE", "Caps_Lock": "CAPSLOCK",
+           "Shift_L": "LSHIFT", "Shift_R": "RSHIFT", "Control_L": "LCTRL", "Control_R": "RCTRL",
+           "Alt_L": "LALT", "Alt_R": "RALT", "Up": "UP", "Down": "DOWN", "Left": "LEFT", "Right": "RIGHT",
+           "Insert": "INSERT", "Delete": "DELETE", "Home": "HOME", "End": "END", "Prior": "PGUP", "Next": "PGDN",
+           "comma": "COMMA", "period": "PERIOD", "slash": "SLASH", "semicolon": "SEMICOLON",
+           "apostrophe": "QUOTE", "bracketleft": "LBRACKET", "bracketright": "RBRACKET", "minus": "MINUS",
+           "equal": "EQUALS", "grave": "BACKQUOTE", "backslash": "BACKSLASH"}
+KEY_LABELS = {"MOUSE1": "L click", "MOUSE2": "R click", "MOUSE3": "M click", "MOUSE4": "Mouse 4",
+              "MOUSE5": "Mouse 5", "LSHIFT": "L Shift", "RSHIFT": "R Shift", "LCTRL": "L Ctrl", "RCTRL": "R Ctrl",
+              "LALT": "L Alt", "RALT": "R Alt", "SPACE": "Space", "TAB": "Tab", "ENTER": "Enter",
+              "BACKSPACE": "Bksp", "CAPSLOCK": "Caps", "UP": "Up", "DOWN": "Down", "LEFT": "Left",
+              "RIGHT": "Right", "PGUP": "PgUp", "PGDN": "PgDn", "INSERT": "Ins", "DELETE": "Del"}
+
+
+def tk_key_name(keysym):
+    """Tk keysym -> mml.ini key name, or None if it can't be bound."""
+    if keysym in TK_KEYS:
+        return TK_KEYS[keysym]
+    if len(keysym) == 1 and keysym.isalnum():
+        return keysym.upper()
+    if keysym.startswith("KP_") and keysym[3:].isdigit():
+        return "NUM" + keysym[3:]
+    if keysym[:1] == "F" and keysym[1:].isdigit() and 1 <= int(keysym[1:]) <= 12 and keysym not in ("F9", "F10"):
+        return keysym
+    return None
+
+
+def key_label(name):
+    return KEY_LABELS.get(name, name.title() if name.startswith("NUM") else name) if name else "-"
+
 # roll style -> mml.ini roll_speed (stock cartwheel 512 = running speed), roll_anim (% faster)
 ROLL_STYLES = {"classic": (512, 0), "fast": (768, 50), "snappy": (896, 80)}
 
@@ -297,6 +339,7 @@ def controls_ini(s):
         "mouse_speed": int(s["mouse"]) if str(s["mouse"]).isdigit() else 100,
         "mouse_invert_y": 1 if s["invert_y"] == "on" else 0,
         **{k: (s.get(k) if s.get(k) in dict(ACTIONS) else v) for k, v in BUTTON_DEFAULTS.items()},
+        **{k: (str(s.get(k)) if s.get(k) is not None else v) for k, v in KEY_DEFAULTS.items()},
     }
 
 
@@ -549,7 +592,24 @@ class App:
             save_settings(self.settings)
 
     def buttons_page(self, parent):
-        """Button remapping: one dropdown per physical input (orbit-camera layout)."""
+        """Controller and keyboard remapping (orbit-camera layout), one view at a time."""
+        switch = tk.Frame(parent, bg=BG)
+        switch.pack(fill="x", pady=(0, 2))
+        self.btn_views = {"pad": tk.Frame(parent, bg=BG), "keys": tk.Frame(parent, bg=BG)}
+        Segmented(switch, self.settings, "buttons_view", [("Controller", "pad"), ("Keyboard & mouse", "keys")],
+                  on_change=self.show_buttons_view).pack(anchor="w")
+        self.pad_buttons(self.btn_views["pad"])
+        self.key_buttons(self.btn_views["keys"])
+        self.show_buttons_view()
+
+    def show_buttons_view(self):
+        view = self.settings.get("buttons_view", "pad")
+        for k, f in self.btn_views.items():
+            f.pack_forget()
+        self.btn_views["keys" if view == "keys" else "pad"].pack(fill="x")
+        save_settings(self.settings)
+
+    def pad_buttons(self, parent):
         head = tk.Frame(parent, bg=CARD)
         head.pack(fill="x", pady=2)
         top = tk.Frame(head, bg=CARD)
@@ -586,15 +646,93 @@ class App:
         grid.columnconfigure(0, weight=1, uniform="b")
         grid.columnconfigure(1, weight=1, uniform="b")
 
-        keys = tk.Frame(parent, bg=CARD)
-        keys.pack(fill="x", pady=2)
-        tk.Label(keys, text="Keyboard & mouse", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(
-            anchor="w", padx=10, pady=(6, 0))
-        tk.Label(keys, text="WASD move · Ctrl walk · mouse look · left click shoot · right click aim / "
-                            "lock-on · wheel next target · Space jump · Shift roll · E talk · Q special "
-                            "weapon · Tab menu · M select · F5 orbit camera",
+    def key_buttons(self, parent):
+        """Keyboard + mouse bindings: two keys per action, click one and press the new key."""
+        head = tk.Frame(parent, bg=CARD)
+        head.pack(fill="x", pady=2)
+        top = tk.Frame(head, bg=CARD)
+        top.pack(fill="x", padx=10, pady=(6, 0))
+        tk.Label(top, text="Keyboard & mouse", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        reset = tk.Label(top, text="Reset to default", bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9), padx=10,
+                         pady=2, cursor="hand2")
+        reset.pack(side="right")
+        reset.bind("<Button-1>", lambda e: self.reset_keys())
+        reset.bind("<Enter>", lambda e: reset.configure(bg=SEG_HOVER))
+        reset.bind("<Leave>", lambda e: reset.configure(bg=SEG_OFF))
+        tk.Label(head, text="Click a key, then press the new key or mouse button (Esc cancels, Delete clears). "
+                            "Mouse look and the wheel (next target) are fixed. While these are used the "
+                            "game's own keyboard keys rest; menus keep them.",
                  bg=CARD, fg=DIM, font=("Segoe UI", 9), wraplength=440, justify="left").pack(
             anchor="w", padx=10, pady=(2, 7))
+        grid = tk.Frame(parent, bg=BG)
+        grid.pack(fill="x")
+        self.key_btns = {}
+        for i, (key, label) in enumerate(KEY_SLOTS):
+            card = tk.Frame(grid, bg=CARD)
+            card.grid(row=i // 2, column=i % 2, sticky="nsew", padx=(0, 2) if i % 2 == 0 else (2, 0), pady=2)
+            tk.Label(card, text=label, bg=CARD, fg=TEXT, font=("Segoe UI", 9, "bold"), width=10,
+                     anchor="w").pack(side="left", padx=(10, 2), pady=7)
+            for slot in (0, 1):
+                b = tk.Label(card, text="", bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9), width=7 if slot == 0 else 6,
+                             pady=3, cursor="hand2")
+                b.pack(side="left", padx=(0, 4 if slot == 0 else 8))
+                b.bind("<Button-1>", lambda e, k=key, sl=slot: self.capture_key(k, sl))
+                self.key_btns[(key, slot)] = b
+        grid.columnconfigure(0, weight=1, uniform="k")
+        grid.columnconfigure(1, weight=1, uniform="k")
+        self.refresh_keys()
+
+    def key_pair(self, key):
+        parts = [p.strip().upper() for p in str(self.settings.get(key, KEY_DEFAULTS[key])).split(",")]
+        return (parts + ["", ""])[:2]
+
+    def refresh_keys(self):
+        for (key, slot), b in self.key_btns.items():
+            b.configure(text=key_label(self.key_pair(key)[slot]), bg=SEG_OFF, fg=TEXT)
+
+    def set_key(self, key, slot, name):
+        pair = self.key_pair(key)
+        pair[slot] = name
+        if pair[0] == "" and pair[1]:
+            pair = [pair[1], ""]
+        self.settings[key] = ",".join(p for p in pair if p)
+        save_settings(self.settings)
+
+    def capture_key(self, key, slot):
+        b = self.key_btns[(key, slot)]
+        b.configure(text="press…", bg=ACCENT, fg="white")
+        root = self.root
+
+        def done():
+            root.unbind("<KeyPress>")
+            for n in (1, 2, 3):
+                root.unbind(f"<ButtonPress-{n}>")
+            self.refresh_keys()
+
+        def on_key(e):
+            if e.keysym == "Escape":
+                return done()
+            if e.keysym == "Delete":
+                self.set_key(key, slot, "")
+                return done()
+            name = tk_key_name(e.keysym)
+            if name:
+                self.set_key(key, slot, name)
+                done()
+
+        def on_mouse(e):
+            self.set_key(key, slot, {1: "MOUSE1", 3: "MOUSE2", 2: "MOUSE3"}.get(e.num, "MOUSE1"))
+            done()
+            return "break"
+        # the click that started the capture must not count: arm the mouse a moment later
+        root.bind("<KeyPress>", on_key)
+        root.after(250, lambda: [root.bind(f"<ButtonPress-{n}>", on_mouse) for n in (1, 2, 3)])
+
+    def reset_keys(self):
+        for key, v in KEY_DEFAULTS.items():
+            self.settings[key] = v
+        save_settings(self.settings)
+        self.refresh_keys()
 
     def dropdown(self, parent, var, choices, on_pick):
         """Flat dropdown in the launcher's style: a label showing var, a menu on click."""

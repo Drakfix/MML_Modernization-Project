@@ -318,6 +318,28 @@ static int install_intro(void)
     return 0;
 }
 
+/* ---- 1997 developer keys ----
+ * The main window procedure (0x4A6A5E) still reacts to F8 (toggle its own
+ * windowed mode and re-run the DirectDraw setup), F7 (cycle a display setting,
+ * same re-init) and F11 (GDI debug text drawn straight onto the DirectDraw back
+ * buffer). None of that fits our renderer or the launcher's display options, so
+ * their compares are pointed at VK 0xFF (never sent). F9 (the port's own pause,
+ * any key resumes) and the F10/Alt menu swallowing stay as they are. */
+static void disable_dev_keys(void)
+{
+    static const struct { uintptr_t at; uint8_t vk; const char *name; } keys[] = {
+        { 0x4A6C17u, 0x77, "F8" }, { 0x4A6CF8u, 0x76, "F7" }, { 0x4A6D35u, 0x7A, "F11" },
+    };
+    size_t i;
+    for (i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        uint8_t cmp[3] = { 0x83, 0xFE, keys[i].vk }, off = 0xFF;   /* cmp esi, imm8 */
+        if (mem_expect(keys[i].at, cmp, 3) && mem_write(keys[i].at + 2, &off, 1))
+            log_printf("devkeys: %s disabled", keys[i].name);
+        else
+            log_printf("devkeys: %s compare not found, left alone", keys[i].name);
+    }
+}
+
 /* ---- entry ---- */
 
 static void init(void)
@@ -339,6 +361,7 @@ static void init(void)
     g_closer = ini_float("video", "closer_factor", g_closer);
 
     install_timing();
+    disable_dev_keys();
     ini_string("video", "mode", "anamorphic", mode, sizeof mode);
     if (strcmp(aspect, "4:3") != 0) {
         if (_stricmp(mode, "native") == 0)
@@ -360,6 +383,7 @@ static void init(void)
             lockon_set_color((unsigned)strtoul(c, NULL, 16));
     }
     controls_load_buttons(g_ini);
+    controls_load_keys(g_ini);
     controls_mouse(GetPrivateProfileIntA("controls", "mouse_keyboard", 1, g_ini),
                    GetPrivateProfileIntA("controls", "mouse_speed", 100, g_ini),
                    GetPrivateProfileIntA("controls", "mouse_invert_y", 0, g_ini));

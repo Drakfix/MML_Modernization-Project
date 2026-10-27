@@ -120,11 +120,24 @@ static unsigned actions_of(const pad_t *p)
     return set & ~(1u << ACT_NONE);
 }
 
-/* keyboard + mouse (orbit layout): key -> action */
-static const struct { int vk; uint8_t act; } g_kbm_keys[] = {
-    { VK_SPACE, ACT_JUMP }, { VK_LSHIFT, ACT_ROLL }, { 'E', ACT_TALK }, { 'Q', ACT_SPECIAL },
-    { VK_LBUTTON, ACT_SHOOT }, { VK_RBUTTON, ACT_AIM }, { VK_TAB, ACT_MENU }, { 'M', ACT_SELECT },
+/* keyboard + mouse (orbit layout): bindable slots, two keys each ([controls] key_*) */
+enum { KS_UP, KS_DOWN, KS_LEFT, KS_RIGHT, KS_WALK, KS_JUMP, KS_SHOOT, KS_AIM, KS_ROLL, KS_TALK, KS_SPECIAL,
+       KS_MENU, KS_SELECT, KS_ORBIT, KS_COUNT };
+static const struct { const char *key; uint8_t act; int def0, def1; } g_slot_info[KS_COUNT] = {
+    { "key_up", ACT_NONE, 'W', VK_UP },          { "key_down", ACT_NONE, 'S', VK_DOWN },
+    { "key_left", ACT_NONE, 'A', VK_LEFT },      { "key_right", ACT_NONE, 'D', VK_RIGHT },
+    { "key_walk", ACT_NONE, VK_LCONTROL, 0 },    { "key_jump", ACT_JUMP, VK_SPACE, 0 },
+    { "key_shoot", ACT_SHOOT, VK_LBUTTON, 0 },   { "key_aim", ACT_AIM, VK_RBUTTON, 0 },
+    { "key_roll", ACT_ROLL, VK_LSHIFT, 0 },      { "key_talk", ACT_TALK, 'E', 0 },
+    { "key_special", ACT_SPECIAL, 'Q', 0 },      { "key_menu", ACT_MENU, VK_TAB, 0 },
+    { "key_select", ACT_SELECT, 'M', 0 },        { "key_orbit", ACT_ORBIT, VK_F5, 0 },
 };
+static int g_slot_vk[KS_COUNT][2];
+
+static int slot_down(int slot)
+{
+    return (g_slot_vk[slot][0] && kbm_key(g_slot_vk[slot][0])) || (g_slot_vk[slot][1] && kbm_key(g_slot_vk[slot][1]));
+}
 #define MOUSE_YAW_PER_COUNT   0.75   /* angle units (4096 = 360 deg) per raw mouse count at 100% */
 #define MOUSE_PITCH_PER_COUNT 0.60
 #define KBM_WALK_TILT         0.35   /* Left Ctrl: a light tilt, the walk range */
@@ -139,22 +152,22 @@ static volatile LONG g_aim_mdx, g_aim_mdy;   /* mouse motion for the stock (root
 static unsigned kbm_actions(void)
 {
     unsigned set = 0;
-    size_t i;
-    for (i = 0; i < sizeof g_kbm_keys / sizeof g_kbm_keys[0]; i++)
-        if (kbm_key(g_kbm_keys[i].vk))
-            set |= 1u << g_kbm_keys[i].act;
+    int i;
+    for (i = KS_JUMP; i < KS_COUNT; i++)
+        if (g_slot_info[i].act != ACT_NONE && slot_down(i))
+            set |= 1u << g_slot_info[i].act;
     return set;
 }
 
 /* WASD as a left stick (camera-relative like the stick); 0 if no key */
 static int kbm_move(SHORT *lx, SHORT *ly)
 {
-    int x = (kbm_key('D') ? 1 : 0) - (kbm_key('A') ? 1 : 0);
-    int y = (kbm_key('W') ? 1 : 0) - (kbm_key('S') ? 1 : 0);
+    int x = (slot_down(KS_RIGHT) ? 1 : 0) - (slot_down(KS_LEFT) ? 1 : 0);
+    int y = (slot_down(KS_UP) ? 1 : 0) - (slot_down(KS_DOWN) ? 1 : 0);
     double m;
     if (!x && !y)
         return 0;
-    m = (kbm_key(VK_LCONTROL) ? KBM_WALK_TILT : 1.0) * 32767.0 / ((x && y) ? 1.41421356 : 1.0);
+    m = (slot_down(KS_WALK) ? KBM_WALK_TILT : 1.0) * 32767.0 / ((x && y) ? 1.41421356 : 1.0);
     *lx = (SHORT)(x * m);
     *ly = (SHORT)(y * m);
     return 1;
@@ -313,6 +326,18 @@ static int signed12(int raw) { return raw > 2048 ? raw - 4096 : raw; }
  * ECX -pitch); the stored angles at 0x77EA0A/0x77EA08 lag a frame and read 0
  * before a level's first camera */
 static int g_game_yaw, g_game_pitch_ecx, g_game_cam_valid, g_game_cam_age = 1000;
+static LARGE_INTEGER g_last_cam_qpc;   /* last camera update: menus don't run the camera at all */
+
+/* the orbit is really driving right now: on, and the game camera ran in the last 0.1 s
+ * (cam_active alone goes stale while a menu is open) */
+static int orbit_live(void)
+{
+    LARGE_INTEGER now;
+    if (!cam_active || !g_last_cam_qpc.QuadPart || !qpc_freq.QuadPart)
+        return 0;
+    QueryPerformanceCounter(&now);
+    return (now.QuadPart - g_last_cam_qpc.QuadPart) * 10 < qpc_freq.QuadPart;
+}
 
 static double game_yaw(void)
 {
@@ -422,7 +447,7 @@ static void input_update(void)
     qpc_last = now;
 
     /* toggle: F5 or either stick click, edge-triggered */
-    f5 = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
+    f5 = g_kbm ? 0 : (GetAsyncKeyState(VK_F5) & 0x8000) != 0;   /* with KB+M on: key_orbit (default F5) */
     click = ACT(actions_of(&p) | (unsigned)g_kbm_acts, ACT_ORBIT) != 0;
     if (g_modern && ((f5 && !prev_key) || (click && !prev_click))) {
         if (!st_active) {
@@ -626,6 +651,7 @@ static void on_cam_apply(regs_t *r)
     int gate, ma, is_gameplay_cam;
 
     frame_tick = (frame_tick + 1) & 0x3fffffff;
+    QueryPerformanceCounter(&g_last_cam_qpc);
     {
         /* only the gameplay camera (camera_update's common tail) is "the game's
          * camera"; cam_follow_lookat & co. also come through here every frame
@@ -980,8 +1006,24 @@ void controls_filter(pad_t *p)
         p->sThumbLX = (SHORT)(ddx * 32767);
         p->sThumbLY = (SHORT)(ddy * 32767);
     }
-    if (!cam_active)
+    if (!orbit_live()) {
+        /* menus and the classic camera keep the game's own keys; the bound Menu and
+         * Select keys still work there (the key that opened a menu also closes it) and
+         * the movement keys move menu cursors */
+        if (g_kbm && g_modern && kbm_foreground()) {
+            int x = (slot_down(KS_RIGHT) ? 1 : 0) - (slot_down(KS_LEFT) ? 1 : 0);
+            int y = (slot_down(KS_UP) ? 1 : 0) - (slot_down(KS_DOWN) ? 1 : 0);
+            if (slot_down(KS_MENU))
+                p->wButtons |= BTN_START;
+            if (slot_down(KS_SELECT))
+                p->wButtons |= BTN_BACK;
+            if (x || y) {   /* the movement keys move menu cursors too */
+                p->sThumbLX = (SHORT)(x * 32767);
+                p->sThumbLY = (SHORT)(y * 32767);
+            }
+        }
         return;
+    }
 
     /* flags set by the frame hook go stale when it stops running (pause, transitions) */
     if (frame_tick == last_ft) {
@@ -1153,6 +1195,45 @@ void controls_load_buttons(const char *ini)
         sprintf_s(line + strlen(line), sizeof line - strlen(line), "%s%s=%s", i ? " " : "", g_ph_keys[i] + 4,
                   g_act_names[g_map[i]]);
     log_printf("controls: buttons %s", line);
+}
+
+void controls_load_keys(const char *ini)
+{
+    char v[64], line[512] = "";
+    int i;
+    for (i = 0; i < KS_COUNT; i++) {
+        char *comma;
+        g_slot_vk[i][0] = g_slot_info[i].def0;
+        g_slot_vk[i][1] = g_slot_info[i].def1;
+        GetPrivateProfileStringA("controls", g_slot_info[i].key, "", v, sizeof v, ini);
+        if (!v[0])
+            continue;
+        comma = strchr(v, ',');
+        if (comma)
+            *comma++ = 0;
+        g_slot_vk[i][0] = kbm_vk_from_name(v);
+        g_slot_vk[i][1] = comma ? kbm_vk_from_name(comma) : 0;
+        if (!g_slot_vk[i][0] && !g_slot_vk[i][1])
+            log_printf("controls: %s=\"%s\" not understood, unbound", g_slot_info[i].key, v);
+    }
+    for (i = 0; i < KS_COUNT; i++)
+        sprintf_s(line + strlen(line), sizeof line - strlen(line), "%s%s=%02X/%02X", i ? " " : "",
+                  g_slot_info[i].key + 4, g_slot_vk[i][0], g_slot_vk[i][1]);
+    log_printf("controls: keys %s", line);
+}
+
+/* while the orbit drives gameplay with KB+M on, the game's own keyboard
+ * bindings (arrows, Z X C V, ...) are muted so remapped keys can't double up */
+int controls_mute_game_keys(void)
+{
+    return g_kbm && orbit_live() && kbm_foreground();
+}
+
+/* every pad poll (menus too): let the cursor go once the orbit isn't driving */
+void controls_poll_idle(void)
+{
+    if (!orbit_live())
+        kbm_capture(0);
 }
 
 void controls_mouse(int enabled, int sens_pct, int invert_y)

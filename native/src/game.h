@@ -71,4 +71,6 @@
 #define G_PAD_MASKS             0x551F84u   /* u16[14]: game button index -> PS1 bit (Up Down Left Right Tri X Sq O L1 L2 R1 R2 Start Select) */
 #define G_JOY_BINDINGS          0x887A34u   /* {dinput button, game button}[9] */
 #define G_JOY_BINDING_COUNT     9
+#define G_KB_BINDINGS           0x887A0Cu   /* {scancode, game button}[20], scancode 0 ends the list */
+#define G_SITE_AFTER_POLL       0x4A694Fu   /* FUN_004A694A: mov eax,0x5708B4 right after the pad_poll call */
 #define G_SITE_PLAYER_TURN_RET  0x4B55B6u   /* player_turn epilogue: mov eax,ecx; pop edi; pop esi; ret */
