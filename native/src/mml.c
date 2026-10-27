@@ -358,6 +358,7 @@ static void init(void)
         if (strlen(c) == 6 && strspn(c, "0123456789abcdefABCDEF") == 6)
             lockon_set_color((unsigned)strtoul(c, NULL, 16));
     }
+    controls_load_buttons(g_ini);
     controls_camera(GetPrivateProfileIntA("controls", "camera_speed_x", 100, g_ini),
                     GetPrivateProfileIntA("controls", "camera_speed_y", 100, g_ini),
                     GetPrivateProfileIntA("controls", "invert_x", 0, g_ini),

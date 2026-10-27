@@ -24,6 +24,7 @@
 #include <windows.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "controls.h"
@@ -84,6 +85,39 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define RIG8(o) (*(volatile uint8_t *)(uintptr_t)(G_CAM_RIG + (o)))
 
 static int g_modern;
+
+/* ---- button remapping ----
+ * While the orbit camera drives, physical inputs are read as actions
+ * ([controls] btn_a=jump ...). The game actions are then fed to the game as
+ * the virtual buttons its own bindings expect (A Cross, B Triangle, X Square,
+ * Y Circle, LB R2, Start, Back Select); roll, aim/lock-on and the orbit toggle
+ * are ours. Menus and orbit-off tank controls keep the stock layout. */
+enum { ACT_NONE, ACT_JUMP, ACT_SHOOT, ACT_SPECIAL, ACT_TALK, ACT_ROLL, ACT_AIM, ACT_ORBIT, ACT_MENU, ACT_SELECT,
+       ACT_COUNT };
+enum { PH_A, PH_B, PH_X, PH_Y, PH_LB, PH_RB, PH_LT, PH_RT, PH_L3, PH_R3, PH_BACK, PH_START, PH_COUNT };
+static const char *const g_act_names[ACT_COUNT] = { "none", "jump", "shoot", "special", "talk", "roll", "aim",
+                                                    "orbit", "menu", "select" };
+static const char *const g_ph_keys[PH_COUNT] = { "btn_a", "btn_b", "btn_x", "btn_y", "btn_lb", "btn_rb", "btn_lt",
+                                                 "btn_rt", "btn_l3", "btn_r3", "btn_back", "btn_start" };
+static const WORD g_ph_btn[PH_COUNT] = { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LB, BTN_RB, 0, 0, BTN_L3, BTN_R3,
+                                         BTN_BACK, BTN_START };
+static uint8_t g_map[PH_COUNT] = { ACT_JUMP, ACT_SPECIAL, ACT_ROLL, ACT_TALK, ACT_AIM, ACT_NONE, ACT_AIM, ACT_SHOOT,
+                                   ACT_ORBIT, ACT_ORBIT, ACT_SELECT, ACT_MENU };
+#define ACT(set, a) (((set) >> (a)) & 1u)
+
+static unsigned actions_of(const pad_t *p)
+{
+    unsigned set = 0;
+    int i;
+    for (i = 0; i < PH_COUNT; i++) {
+        int down = i == PH_LT ? p->bLeftTrigger > TRIG_ON
+                 : i == PH_RT ? p->bRightTrigger > TRIG_ON
+                 : (p->wButtons & g_ph_btn[i]) != 0;
+        if (down)
+            set |= 1u << g_map[i];
+    }
+    return set & ~(1u << ACT_NONE);
+}
 
 /* shared between the frame hook and the pad wrapper */
 static volatile LONG cam_active, cam_suppress;
@@ -327,7 +361,7 @@ static void input_update(void)
 
     /* toggle: F5 or either stick click, edge-triggered */
     f5 = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
-    click = (p.wButtons & (BTN_L3 | BTN_R3)) != 0;
+    click = ACT(actions_of(&p), ACT_ORBIT) != 0;
     if (g_modern && ((f5 && !prev_key) || (click && !prev_click))) {
         if (!st_active) {
             st_yaw = game_yaw();
@@ -372,7 +406,7 @@ static void input_update(void)
      * and moves freely, the camera swings behind him; without a target, aiming
      * hands the camera back to the game (stock aim, rooted) and we keep
      * tracking it so release doesn't snap */
-    aiming = (p.wButtons & BTN_LB) || p.bLeftTrigger > TRIG_ON;
+    aiming = ACT(actions_of(&p), ACT_AIM) != 0;
     {
         int hold = st_active && st_allowed && aiming, was = lock_active;
         /* a lock starts only where the game allows targeting (combat HUD up);
@@ -823,8 +857,9 @@ static void on_player_turn_ret(regs_t *r)
 
 void controls_filter(pad_t *p)
 {
-    static int prev_x, last_ft = -1, ft_stale, req_age;
-    int ddx, ddy, fresh, phys_x, phys_lt, phys_rt, aiming;
+    static int prev_roll, last_ft = -1, ft_stale, req_age;
+    int ddx, ddy, fresh, roll, aiming;
+    unsigned acts;
     WORD out;
 
     /* D-pad drives the left stick (menus + movement), in both control modes */
@@ -847,25 +882,27 @@ void controls_filter(pad_t *p)
     }
     fresh = ft_stale < STALE_POLLS;
 
-    phys_x = (p->wButtons & BTN_X) != 0;
-    phys_lt = p->bLeftTrigger > TRIG_ON;
-    phys_rt = p->bRightTrigger > TRIG_ON;
-
-    /* triggers no longer rotate the camera; RT shoots, LT (or LB) aims, X dodges */
+    /* physical buttons -> actions -> the virtual buttons the game's bindings expect */
+    acts = actions_of(p);
+    roll = ACT(acts, ACT_ROLL) != 0;
+    aiming = ACT(acts, ACT_AIM) != 0;
     p->bLeftTrigger = 0;
     p->bRightTrigger = 0;
-    out = p->wButtons & ~BTN_X;
-    if (phys_rt)
-        out |= BTN_X;
-    aiming = phys_lt || (p->wButtons & BTN_LB);
+    out = p->wButtons & (BTN_DPAD_UP | BTN_DPAD_DOWN | BTN_DPAD_LEFT | BTN_DPAD_RIGHT);
+    if (ACT(acts, ACT_JUMP))    out |= BTN_A;      /* Cross */
+    if (ACT(acts, ACT_SHOOT))   out |= BTN_X;      /* Square: buster */
+    if (ACT(acts, ACT_SPECIAL)) out |= BTN_B;      /* Triangle: special weapon */
+    if (ACT(acts, ACT_TALK))    out |= BTN_Y;      /* Circle: talk / check / walk */
+    if (ACT(acts, ACT_MENU))    out |= BTN_START;
+    if (ACT(acts, ACT_SELECT))  out |= BTN_BACK;
     if (aiming && !lock_active && !lock_free)   /* locked on: no stock aim state, it roots Mega Man */
-        out |= BTN_LB;
+        out |= BTN_LB;                             /* R2 */
 
-    if (phys_x && !prev_x && (!aiming || lock_active || lock_free)) {
+    if (roll && !prev_roll && (!aiming || lock_active || lock_free)) {
         dodge_req = 1;
         req_age = 0;
     }
-    prev_x = phys_x;
+    prev_roll = roll;
     if (dodge_req) {
         if (++req_age > 60)   /* never consumed (menu): drop it, no phantom roll later */
             dodge_req = 0;
@@ -980,6 +1017,27 @@ static DWORD WINAPI intro_skip_thread(LPVOID unused)
         }
     }
     return 0;
+}
+
+void controls_load_buttons(const char *ini)
+{
+    char v[32], line[256] = "";
+    int i, a;
+    for (i = 0; i < PH_COUNT; i++) {
+        GetPrivateProfileStringA("controls", g_ph_keys[i], "", v, sizeof v, ini);
+        if (!v[0])
+            continue;
+        for (a = 0; a < ACT_COUNT && _stricmp(v, g_act_names[a]) != 0; a++)
+            ;
+        if (a < ACT_COUNT)
+            g_map[i] = (uint8_t)a;
+        else
+            log_printf("controls: unknown action \"%s\" for %s, kept %s", v, g_ph_keys[i], g_act_names[g_map[i]]);
+    }
+    for (i = 0; i < PH_COUNT; i++)
+        sprintf_s(line + strlen(line), sizeof line - strlen(line), "%s%s=%s", i ? " " : "", g_ph_keys[i] + 4,
+                  g_act_names[g_map[i]]);
+    log_printf("controls: buttons %s", line);
 }
 
 void controls_camera(int speed_x_pct, int speed_y_pct, int invert_x, int invert_y, int deadzone_pct, int orbit_start)

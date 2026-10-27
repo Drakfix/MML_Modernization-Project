@@ -98,6 +98,20 @@ DEFAULTS = {"renderer": "mml", "window": "fullscreen",
             "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
             "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display"}
 
+# button remapping (orbit-camera layout): physical input -> action, mml.ini [controls] btn_*
+BUTTONS = [("btn_a", "A", "Cross"), ("btn_b", "B", "Circle"), ("btn_x", "X", "Square"),
+           ("btn_y", "Y", "Triangle"), ("btn_lb", "LB", "L1"), ("btn_rb", "RB", "R1"),
+           ("btn_lt", "LT", "L2"), ("btn_rt", "RT", "R2"), ("btn_l3", "L3", "left stick click"),
+           ("btn_r3", "R3", "right stick click"), ("btn_back", "Back", "Share / −"),
+           ("btn_start", "Start", "Options / +")]
+ACTIONS = [("jump", "Jump"), ("shoot", "Shoot"), ("special", "Special weapon"), ("talk", "Talk / check"),
+           ("roll", "Roll"), ("aim", "Aim / lock-on"), ("orbit", "Orbit camera on/off"),
+           ("menu", "Menu"), ("select", "Select"), ("none", "Nothing")]
+BUTTON_DEFAULTS = {"btn_a": "jump", "btn_b": "special", "btn_x": "roll", "btn_y": "talk", "btn_lb": "aim",
+                   "btn_rb": "none", "btn_lt": "aim", "btn_rt": "shoot", "btn_l3": "orbit", "btn_r3": "orbit",
+                   "btn_back": "select", "btn_start": "menu"}
+DEFAULTS.update(BUTTON_DEFAULTS)
+
 # roll style -> mml.ini roll_speed (stock cartwheel 512 = running speed), roll_anim (% faster)
 ROLL_STYLES = {"classic": (512, 0), "fast": (768, 50), "snappy": (896, 80)}
 
@@ -278,6 +292,7 @@ def controls_ini(s):
         "roll_anim": roll_anim,
         "walk_tilt": 55 if s["walk"] == "on" else 0,
         "reticle_color": reticle_hex(s),
+        **{k: (s.get(k) if s.get(k) in dict(ACTIONS) else v) for k, v in BUTTON_DEFAULTS.items()},
     }
 
 
@@ -397,7 +412,7 @@ class App:
         tabs = tk.Frame(col, bg=BG)
         tabs.pack(fill="x", pady=(0, 4))
         self.pages = {}
-        for key in ("display", "graphics", "controls"):
+        for key in ("display", "graphics", "controls", "buttons"):
             self.pages[key] = tk.Frame(col, bg=BG)
         page = [self.pages["display"]]
 
@@ -476,10 +491,13 @@ class App:
                "Classic = the original cartwheel speed")
         self.reticle_card(page[0])
 
+        # ---- Buttons ----
+        self.buttons_page(self.pages["buttons"])
+
         # tab bar
         self.tab_buttons = {}
         for i, (label, key) in enumerate((("Display", "display"), ("Graphics", "graphics"),
-                                          ("Controls", "controls"))):
+                                          ("Controls", "controls"), ("Buttons", "buttons"))):
             b = tk.Label(tabs, text=label, padx=18, pady=6, cursor="hand2", bd=0,
                          font=("Segoe UI", 11, "bold"))
             b.pack(side="left", padx=(0 if i == 0 else 4, 0))
@@ -522,6 +540,77 @@ class App:
         if self.settings.get("tab") != key:
             self.settings["tab"] = key
             save_settings(self.settings)
+
+    def buttons_page(self, parent):
+        """Button remapping: one dropdown per physical input (orbit-camera layout)."""
+        head = tk.Frame(parent, bg=CARD)
+        head.pack(fill="x", pady=2)
+        top = tk.Frame(head, bg=CARD)
+        top.pack(fill="x", padx=10, pady=(6, 0))
+        tk.Label(top, text="Buttons", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        reset = tk.Label(top, text="Reset to default", bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9), padx=10,
+                         pady=2, cursor="hand2")
+        reset.pack(side="right")
+        tk.Label(head, text="Used while the orbit camera is on. Menus and the classic camera keep the "
+                            "original buttons.", bg=CARD, fg=DIM, font=("Segoe UI", 9), wraplength=440,
+                 justify="left").pack(anchor="w", padx=10, pady=(2, 7))
+        reset.bind("<Button-1>", lambda e: self.reset_buttons())
+        reset.bind("<Enter>", lambda e: reset.configure(bg=SEG_HOVER))
+        reset.bind("<Leave>", lambda e: reset.configure(bg=SEG_OFF))
+        self.btn_vars = {}
+        names = dict(ACTIONS)
+        by_name = {v: k for k, v in ACTIONS}
+        grid = tk.Frame(parent, bg=BG)
+        grid.pack(fill="x")
+        for i, (key, pad, ps) in enumerate(BUTTONS):
+            card = tk.Frame(grid, bg=CARD)
+            card.grid(row=i // 2, column=i % 2, sticky="nsew", padx=(0, 2) if i % 2 == 0 else (2, 0), pady=2)
+            tk.Label(card, text=pad, bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(
+                anchor="w", padx=10, pady=(5, 0))
+            tk.Label(card, text=ps, bg=CARD, fg=DIM, font=("Segoe UI", 8)).place(relx=1.0, x=-10, y=7, anchor="ne")
+            var = tk.StringVar(value=names.get(self.settings.get(key), names[BUTTON_DEFAULTS[key]]))
+            self.btn_vars[key] = var
+            self.dropdown(card, var, [n for _, n in ACTIONS],
+                          lambda v, k=key: self.set_button(k, by_name[v])).pack(
+                anchor="w", fill="x", padx=10, pady=(2, 7))
+        grid.columnconfigure(0, weight=1, uniform="b")
+        grid.columnconfigure(1, weight=1, uniform="b")
+
+    def dropdown(self, parent, var, choices, on_pick):
+        """Flat dropdown in the launcher's style: a label showing var, a menu on click."""
+        box = tk.Frame(parent, bg=SEG_OFF, cursor="hand2")
+        text = tk.Label(box, textvariable=var, bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 10), anchor="w",
+                        padx=9, pady=4, cursor="hand2")
+        text.pack(side="left", fill="x", expand=True)
+        arrow = tk.Label(box, text="▾", bg=SEG_OFF, fg=DIM, font=("Segoe UI", 10), padx=8, cursor="hand2")
+        arrow.pack(side="right")
+        menu = tk.Menu(box, tearoff=0, bg=CARD_HI, fg=TEXT, activebackground=ACCENT, activeforeground="white",
+                       bd=0, font=("Segoe UI", 10))
+        for c in choices:
+            menu.add_command(label=c, command=lambda c=c: (var.set(c), on_pick(c)))
+
+        def show(e):
+            menu.tk_popup(box.winfo_rootx(), box.winfo_rooty() + box.winfo_height())
+
+        def hover(on):
+            for w in (box, text, arrow):
+                w.configure(bg=SEG_HOVER if on else SEG_OFF)
+        for w in (box, text, arrow):
+            w.bind("<Button-1>", show)
+            w.bind("<Enter>", lambda e: hover(True))
+            w.bind("<Leave>", lambda e: hover(False))
+        return box
+
+    def set_button(self, key, action):
+        self.settings[key] = action
+        save_settings(self.settings)
+
+    def reset_buttons(self):
+        names = dict(ACTIONS)
+        for key, action in BUTTON_DEFAULTS.items():
+            self.settings[key] = action
+            self.btn_vars[key].set(names[action])
+        save_settings(self.settings)
 
     def reticle_card(self, parent):
         """Lock-on reticle colour: preset swatches plus the Windows colour dialog."""

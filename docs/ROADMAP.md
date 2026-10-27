@@ -54,6 +54,7 @@ included, without emulation.
   - Launcher split into Display / Graphics / Controls tabs; the Controls tab has
     camera speed, inversion, deadzone, orbit at start, roll style, light-tilt
     walk, controller backend and the reticle colour (done)
+  - Button remapping for the modern layout, in a Buttons tab of the launcher (done)
 - Mouse + keyboard with the orbit camera
 - Fix the known issues
 - Better presentation overall

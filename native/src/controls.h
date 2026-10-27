@@ -32,3 +32,7 @@ void controls_tune(int roll_speed, int roll_anim_pct, int walk_pct, int walk_min
  * deadzone (% of full tilt) and whether the orbit camera starts on.
  * Zero/negative percentages keep the defaults. */
 void controls_camera(int speed_x_pct, int speed_y_pct, int invert_x, int invert_y, int deadzone_pct, int orbit_start);
+
+/* Button remapping for the orbit-camera layout: reads [controls] btn_a .. btn_start
+ * (jump, shoot, special, talk, roll, aim, orbit, menu, select, none). */
+void controls_load_buttons(const char *ini);

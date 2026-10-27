@@ -52,6 +52,8 @@ camera_speed_x=100   ; orbit camera speed in % (y = pitch)
 invert_x=0           ; 1 = inverted (invert_y likewise)
 deadzone=24          ; stick deadzone, % of full tilt
 reticle_color=FFD840 ; lock-on reticle colour (RRGGBB)
+btn_rb=none          ; button remap for the orbit layout: btn_a .. btn_start = jump, shoot,
+                     ; special, talk, roll, aim, orbit, menu, select or none
 roll_speed=768       ; roll (X) speed, stock is 512
 roll_anim=50         ; roll animation plays this % faster
 walk_tilt=55         ; tilt the stick less than this % to walk
