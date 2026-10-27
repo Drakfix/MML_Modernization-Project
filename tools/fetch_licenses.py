@@ -7,6 +7,8 @@ We ship these binaries UNMODIFIED:
   dsound.dll        = DSOAL          (LGPL-2.1)       github.com/kcat/dsoal
   dsoal-aldrv.dll   = OpenAL Soft    (LGPL-2.1)       github.com/kcat/openal-soft
   SDL3.dll          = SDL3           (zlib)           github.com/libsdl-org/SDL
+  (mml.dll embeds pl_mpeg, MIT, github.com/phoboslab/pl_mpeg; its license text is kept in
+   native/vendor/pl_mpeg/LICENSE.txt and copied to licenses/ by hand)
 
 Run once (or when a component is updated): python fetch_licenses.py
 """
@@ -47,6 +49,11 @@ is used under its own license (full texts in this "licenses" folder). You may
 replace any of these DLLs with your own build from the linked source.
 
 --------------------------------------------------------------------------------
+pl_mpeg                  built into: mml.dll
+  MPEG-1 video / MP2 audio decoder (plays the intro video).
+  (c) Dominic Szablewski.  License: MIT  ->  licenses/pl_mpeg-LICENSE.txt
+  Source: https://github.com/phoboslab/pl_mpeg
+
 SDL3                     file: SDL3.dll
   Controller input (Xbox, PlayStation, Switch and other gamepads).
   (c) 1997-2026 Sam Lantinga.  License: zlib  ->  licenses/SDL3-LICENSE.txt

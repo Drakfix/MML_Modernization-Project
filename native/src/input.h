@@ -40,3 +40,6 @@ int input_sdl_pad(pad_t *out);
 /* For the intro-skip poller (any thread): 1 if any button or trigger is
  * down, 0 if not, -1 if SDL isn't running (use XInput instead). */
 int input_sdl_any_button(void);
+
+/* An SDL3 export by name (NULL without SDL3.dll), for other modules (intro audio). */
+void *input_sdl_proc(const char *name);

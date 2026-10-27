@@ -10,3 +10,6 @@ extern int g_fog_debug;
 void ddshim_frame(void);
 extern int g_probe_x, g_probe_y;
 extern int g_drop_clamped;
+
+/* Bring the renderer up early for our intro player (see intro_video.c). */
+int ddshim_video_begin(HWND w);

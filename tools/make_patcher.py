@@ -125,6 +125,12 @@ for fn in DLL_FILES:
 for fn in CONFIG_FILES:
     shutil.copyfile(os.path.join(CONFIG, fn), os.path.join(gf, fn))
 shutil.copyfile(NATIVE_DLL, os.path.join(gf, "mml.dll"))
+# our intro (played by mml.dll's own player; CAPCOM.AVI stays for the Compatibility renderer)
+INTRO_MPG = os.path.join(GAME, "Modernization", "intro.mpg")
+if os.path.isfile(INTRO_MPG):
+    shutil.copyfile(INTRO_MPG, os.path.join(mod, "intro.mpg"))
+else:
+    print("WARNING: Modernization/intro.mpg missing in the game folder - package keeps the MCI intro only")
 if os.path.exists(GUI_EXE):
     shutil.copyfile(GUI_EXE, os.path.join(gf, "MML Launcher.exe"))
 else:

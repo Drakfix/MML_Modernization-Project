@@ -13,6 +13,11 @@ is used under its own license (full texts in this "licenses" folder). You may
 replace any of these DLLs with your own build from the linked source.
 
 --------------------------------------------------------------------------------
+pl_mpeg                  built into: mml.dll
+  MPEG-1 video / MP2 audio decoder (plays the intro video).
+  (c) Dominic Szablewski.  License: MIT  ->  licenses/pl_mpeg-LICENSE.txt
+  Source: https://github.com/phoboslab/pl_mpeg
+
 SDL3                     file: SDL3.dll
   Controller input (Xbox, PlayStation, Switch and other gamepads).
   (c) 1997-2026 Sam Lantinga.  License: zlib  ->  licenses/SDL3-LICENSE.txt

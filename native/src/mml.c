@@ -22,6 +22,7 @@
 #include "apicensus.h"
 #include "controls.h"
 #include "input.h"
+#include "intro_video.h"
 #include "lockon.h"
 #include "ddshim.h"
 #include "display.h"
@@ -455,7 +456,8 @@ static void init(void)
                            err, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), get_dpi ? get_dpi() : 0);
             }
             g_blend_census = GetPrivateProfileIntA("debug", "blend_census", 0, g_ini);
-            ddshim_install(&o);
+            if (ddshim_install(&o))
+                intro_video_install(g_game_dir);   /* our intro player, if Modernization\intro.mpg exists */
             /* [video] smooth_sky=1: background layers scroll sub-pixel smooth */
             if (GetPrivateProfileIntA("video", "smooth_sky", 1, g_ini) && bglayer_install()) {
                 extern int g_bglayer_log;

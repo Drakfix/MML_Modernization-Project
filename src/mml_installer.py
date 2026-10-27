@@ -76,6 +76,11 @@ LEGACY_FILES = [
 KEEP_IF_PRESENT = {"mml.ini"}
 
 
+# The game opens CAPCOM.AVI through MCI, which can't handle a full path of 128 characters or
+# more: from a deeper folder the intro silently doesn't play (everything else works; measured).
+MAX_INTRO_DIR = 116
+
+
 def do_install(game_dir, add_desktop_shortcut, log):
     """Patch + install into game_dir. `log(msg, frac)` reports progress (frac 0..1).
     Returns (ok, message)."""
@@ -212,6 +217,7 @@ def run_gui():
 
     BG = "#0c141d"; CARD = "#16202d"; ACCENT = "#3b96ff"; ACCENT_DK = "#2f7fd8"
     TEXT = "#e8eef5"; DIM = "#93a5b7"; GREEN = "#4ad073"; RED = "#e06555"; FIELD = "#22303f"
+    AMBER = "#e0af45"
 
     root = tk.Tk()
     root.title(f"{APP_NAME} - Setup")
@@ -256,13 +262,20 @@ def run_gui():
     entry = tk.Entry(rowf, textvariable=path_var, bg=FIELD, fg=TEXT, insertbackground=TEXT,
                      relief="flat", font=("Segoe UI", 10))
     entry.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 8))
-    status = tk.Label(p1, text="", bg=BG, fg=DIM, font=("Segoe UI", 9))
+    status = tk.Label(p1, text="", bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left", wraplength=560)
     status.pack(anchor="w")
 
     def validate(*_):
         d = path_var.get().strip('"').strip()
         state["dir"] = d
-        if is_game_folder(d):
+        if is_game_folder(d) and len(os.path.abspath(d)) > MAX_INTRO_DIR:
+            status.configure(text=f"✓  MEGAMAN.EXE found. Heads up: this folder path is long "
+                                  f"({len(os.path.abspath(d))} characters). The game runs fine, but its "
+                                  f"intro video can't play from folders longer than {MAX_INTRO_DIR} "
+                                  f"characters. A shorter folder (like " + r"C:\Games\Mega Man Legends"
+                                  + ") avoids that.", fg=AMBER)
+            install_btn.configure(state="normal", bg=ACCENT_DK)
+        elif is_game_folder(d):
             status.configure(text="✓  MEGAMAN.EXE found - ready to install.", fg=GREEN)
             install_btn.configure(state="normal", bg=ACCENT_DK)
         else:

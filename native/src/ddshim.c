@@ -1799,6 +1799,22 @@ static HRESULT WINAPI shim_direct_draw_enumerate(LPDDENUMCALLBACKA cb, LPVOID ct
     return DD_OK;
 }
 
+/* For our intro player: the renderer up before the game's first draw, in the
+ * widescreen mode the game will use. */
+int ddshim_video_begin(HWND w)
+{
+    if (!g_installed || !w)
+        return 0;
+    if (!gfx_ready()) {
+        unsigned int cw;
+        _controlfp_s(&cw, _PC_24, _MCW_PC);
+        if (!gfx_init(w, display_native_width(), 480, &g_opt))
+            return 0;
+    }
+    gfx_set_mode(display_native_width(), 480);
+    return 1;
+}
+
 int ddshim_install(const gfx_options *opt)
 {
     void *create = (void *)shim_direct_draw_create, *enumerate = (void *)shim_direct_draw_enumerate;

@@ -297,6 +297,11 @@ int input_sdl_any_button(void)
     return down;
 }
 
+void *input_sdl_proc(const char *name)
+{
+    return g_sdl_dll ? (void *)GetProcAddress(g_sdl_dll, name) : NULL;
+}
+
 int input_sdl_active(void)
 {
     return g_active && g_ready;
