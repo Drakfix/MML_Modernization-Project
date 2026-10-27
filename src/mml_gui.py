@@ -96,16 +96,17 @@ DEFAULTS = {"renderer": "mml", "window": "fullscreen",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
             "lod": "full", "fps": "60", "reticle": "FFD840",
             "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
-            "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display"}
+            "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display",
+            "mouse": "100"}
 
 # button remapping (orbit-camera layout): physical input -> action, mml.ini [controls] btn_*
 BUTTONS = [("btn_a", "A", "Cross"), ("btn_b", "B", "Circle"), ("btn_x", "X", "Square"),
            ("btn_y", "Y", "Triangle"), ("btn_lb", "LB", "L1"), ("btn_rb", "RB", "R1"),
-           ("btn_lt", "LT", "L2"), ("btn_rt", "RT", "R2"), ("btn_l3", "L3", "left stick click"),
-           ("btn_r3", "R3", "right stick click"), ("btn_back", "Back", "Share / −"),
+           ("btn_lt", "LT", "L2"), ("btn_rt", "RT", "R2"), ("btn_l3", "L3", "stick"),
+           ("btn_r3", "R3", "stick"), ("btn_back", "Back", "Share / −"),
            ("btn_start", "Start", "Options / +")]
-ACTIONS = [("jump", "Jump"), ("shoot", "Shoot"), ("special", "Special weapon"), ("talk", "Talk / check"),
-           ("roll", "Roll"), ("aim", "Aim / lock-on"), ("orbit", "Orbit camera on/off"),
+ACTIONS = [("jump", "Jump"), ("shoot", "Shoot"), ("special", "Special"), ("talk", "Talk / check"),
+           ("roll", "Roll"), ("aim", "Aim / lock-on"), ("orbit", "Orbit camera"),
            ("menu", "Menu"), ("select", "Select"), ("none", "Nothing")]
 BUTTON_DEFAULTS = {"btn_a": "jump", "btn_b": "special", "btn_x": "roll", "btn_y": "talk", "btn_lb": "aim",
                    "btn_rb": "none", "btn_lt": "aim", "btn_rt": "shoot", "btn_l3": "orbit", "btn_r3": "orbit",
@@ -292,6 +293,9 @@ def controls_ini(s):
         "roll_anim": roll_anim,
         "walk_tilt": 55 if s["walk"] == "on" else 0,
         "reticle_color": reticle_hex(s),
+        "mouse_keyboard": 0 if s["mouse"] == "off" else 1,
+        "mouse_speed": int(s["mouse"]) if str(s["mouse"]).isdigit() else 100,
+        "mouse_invert_y": 1 if s["invert_y"] == "on" else 0,
         **{k: (s.get(k) if s.get(k) in dict(ACTIONS) else v) for k, v in BUTTON_DEFAULTS.items()},
     }
 
@@ -489,6 +493,9 @@ class App:
         option("Light tilt", "walk", [("Walks", "on"), ("Runs", "off")], row=r, side="right")
         option("Roll", "roll", [("Classic", "classic"), ("Fast", "fast"), ("Snappy", "snappy")],
                "Classic = the original cartwheel speed")
+        option("Mouse & keyboard", "mouse",
+               [("Off", "off"), ("50%", "50"), ("75%", "75"), ("100%", "100"), ("150%", "150"), ("200%", "200")],
+               "mouse look speed")
         self.reticle_card(page[0])
 
         # ---- Buttons ----
@@ -565,25 +572,38 @@ class App:
         for i, (key, pad, ps) in enumerate(BUTTONS):
             card = tk.Frame(grid, bg=CARD)
             card.grid(row=i // 2, column=i % 2, sticky="nsew", padx=(0, 2) if i % 2 == 0 else (2, 0), pady=2)
-            tk.Label(card, text=pad, bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(
-                anchor="w", padx=10, pady=(5, 0))
-            tk.Label(card, text=ps, bg=CARD, fg=DIM, font=("Segoe UI", 8)).place(relx=1.0, x=-10, y=7, anchor="ne")
+            name = tk.Frame(card, bg=CARD)
+            name.pack(side="left", padx=(10, 6), pady=4)
+            tk.Label(name, text=pad, bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold"), width=5,
+                     anchor="w").pack(anchor="w")
+            tk.Label(name, text=ps.split()[0], bg=CARD, fg=DIM, font=("Segoe UI", 8), anchor="w").pack(
+                anchor="w", pady=(0, 2))
             var = tk.StringVar(value=names.get(self.settings.get(key), names[BUTTON_DEFAULTS[key]]))
             self.btn_vars[key] = var
             self.dropdown(card, var, [n for _, n in ACTIONS],
                           lambda v, k=key: self.set_button(k, by_name[v])).pack(
-                anchor="w", fill="x", padx=10, pady=(2, 7))
+                side="left", fill="x", expand=True, padx=(0, 8), pady=8)
         grid.columnconfigure(0, weight=1, uniform="b")
         grid.columnconfigure(1, weight=1, uniform="b")
+
+        keys = tk.Frame(parent, bg=CARD)
+        keys.pack(fill="x", pady=2)
+        tk.Label(keys, text="Keyboard & mouse", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(
+            anchor="w", padx=10, pady=(6, 0))
+        tk.Label(keys, text="WASD move · Ctrl walk · mouse look · left click shoot · right click aim / "
+                            "lock-on · wheel next target · Space jump · Shift roll · E talk · Q special "
+                            "weapon · Tab menu · M select · F5 orbit camera",
+                 bg=CARD, fg=DIM, font=("Segoe UI", 9), wraplength=440, justify="left").pack(
+            anchor="w", padx=10, pady=(2, 7))
 
     def dropdown(self, parent, var, choices, on_pick):
         """Flat dropdown in the launcher's style: a label showing var, a menu on click."""
         box = tk.Frame(parent, bg=SEG_OFF, cursor="hand2")
-        text = tk.Label(box, textvariable=var, bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 10), anchor="w",
-                        padx=9, pady=4, cursor="hand2")
-        text.pack(side="left", fill="x", expand=True)
         arrow = tk.Label(box, text="▾", bg=SEG_OFF, fg=DIM, font=("Segoe UI", 10), padx=8, cursor="hand2")
-        arrow.pack(side="right")
+        arrow.pack(side="right")   # first, so the text can't squeeze it out
+        text = tk.Label(box, textvariable=var, bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 10), anchor="w",
+                        padx=9, pady=4, cursor="hand2", width=12)
+        text.pack(side="left", fill="x", expand=True)
         menu = tk.Menu(box, tearoff=0, bg=CARD_HI, fg=TEXT, activebackground=ACCENT, activeforeground="white",
                        bd=0, font=("Segoe UI", 10))
         for c in choices:

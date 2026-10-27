@@ -57,7 +57,7 @@ included, without emulation.
   - Button remapping for the modern layout, in a Buttons tab of the launcher (done)
 - New intro played by our own video player (1080p, any folder path), the original
   intro stays for the Compatibility renderer (done)
-- Mouse + keyboard with the orbit camera
+- Mouse + keyboard with the orbit camera: mouse look, WASD, mouse aiming (done)
 - Fix the known issues
 - Better presentation overall
 

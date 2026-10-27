@@ -35,6 +35,7 @@
 #define PL_ANIM_HOLD            0xA5
 #define PL_ANIM_FLAGS           0xA7
 #define PL_ANIM_ID              0xAC
+#define PL_AIM_PITCH            0x108       /* s16 aim up/down in the aim state (clamped +-0x1C0) */
 #define PL_INPUT_FLAGS          0xBD        /* 0x40 input locked, 0x20 scripted input */
 #define PL_RUN_DIR              0x112
 #define PL_MOVE_ANGLE           0x116       /* s16 travel offset from facing */

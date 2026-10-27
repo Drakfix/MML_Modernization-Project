@@ -31,6 +31,7 @@
 #include "game.h"
 #include "hook.h"
 #include "iat.h"
+#include "kbm.h"
 #include "input.h"
 #include "lockon.h"
 #include "log.h"
@@ -117,6 +118,51 @@ static unsigned actions_of(const pad_t *p)
             set |= 1u << g_map[i];
     }
     return set & ~(1u << ACT_NONE);
+}
+
+/* keyboard + mouse (orbit layout): key -> action */
+static const struct { int vk; uint8_t act; } g_kbm_keys[] = {
+    { VK_SPACE, ACT_JUMP }, { VK_LSHIFT, ACT_ROLL }, { 'E', ACT_TALK }, { 'Q', ACT_SPECIAL },
+    { VK_LBUTTON, ACT_SHOOT }, { VK_RBUTTON, ACT_AIM }, { VK_TAB, ACT_MENU }, { 'M', ACT_SELECT },
+};
+#define MOUSE_YAW_PER_COUNT   0.75   /* angle units (4096 = 360 deg) per raw mouse count at 100% */
+#define MOUSE_PITCH_PER_COUNT 0.60
+#define KBM_WALK_TILT         0.35   /* Left Ctrl: a light tilt, the walk range */
+static int g_kbm = 1, g_mouse_invert_y;
+static double g_mouse_scale = 1.0;
+static volatile LONG g_kbm_acts;   /* actions from keys/buttons, refreshed every camera update */
+static volatile LONG g_kbm_lx, g_kbm_ly;     /* WASD as a stick, for the stock aim's turn/tilt */
+static volatile LONG g_aim_mdx, g_aim_mdy;   /* mouse motion for the stock (rooted) aim */
+#define AIM_PITCH_LIMIT       0x1C0  /* the aim state's own clamp on +0x108 */
+#define AIM_PITCH_SIGN        (-1)   /* +0x108 grows downward: mouse up = aim up (checked in game) */
+
+static unsigned kbm_actions(void)
+{
+    unsigned set = 0;
+    size_t i;
+    for (i = 0; i < sizeof g_kbm_keys / sizeof g_kbm_keys[0]; i++)
+        if (kbm_key(g_kbm_keys[i].vk))
+            set |= 1u << g_kbm_keys[i].act;
+    return set;
+}
+
+/* WASD as a left stick (camera-relative like the stick); 0 if no key */
+static int kbm_move(SHORT *lx, SHORT *ly)
+{
+    int x = (kbm_key('D') ? 1 : 0) - (kbm_key('A') ? 1 : 0);
+    int y = (kbm_key('W') ? 1 : 0) - (kbm_key('S') ? 1 : 0);
+    double m;
+    if (!x && !y)
+        return 0;
+    m = (kbm_key(VK_LCONTROL) ? KBM_WALK_TILT : 1.0) * 32767.0 / ((x && y) ? 1.41421356 : 1.0);
+    *lx = (SHORT)(x * m);
+    *ly = (SHORT)(y * m);
+    return 1;
+}
+
+int controls_kbm_active(void)
+{
+    return g_modern && g_kbm && kbm_foreground();
 }
 
 /* shared between the frame hook and the pad wrapper */
@@ -351,9 +397,25 @@ static void input_update(void)
     pad_t p;
     LARGE_INTEGER now;
     double ticks = 0, n;
-    int f5, click, aiming, moving = 0, fwd = 0, facing = 0;
+    int f5, click, aiming, moving = 0, fwd = 0, facing = 0, mdx = 0, mdy = 0, mwheel = 0;
 
     pad_read(&p);
+    if (g_kbm && g_modern) {
+        SHORT kx, ky;
+        kbm_attach_auto();
+        kbm_take_mouse(&mdx, &mdy, &mwheel);
+        g_kbm_acts = (LONG)kbm_actions();
+        if (kbm_move(&kx, &ky)) {   /* keys win over a resting stick */
+            p.sThumbLX = kx;
+            p.sThumbLY = ky;
+        } else {
+            kx = ky = 0;
+        }
+        g_kbm_lx = kx;
+        g_kbm_ly = ky;
+    } else {
+        g_kbm_acts = 0;
+    }
     QueryPerformanceCounter(&now);
     if (qpc_last.QuadPart)
         ticks = clampd((double)(now.QuadPart - qpc_last.QuadPart) / qpc_freq.QuadPart, 0, 0.1) * 60.0;
@@ -361,7 +423,7 @@ static void input_update(void)
 
     /* toggle: F5 or either stick click, edge-triggered */
     f5 = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
-    click = ACT(actions_of(&p), ACT_ORBIT) != 0;
+    click = ACT(actions_of(&p) | (unsigned)g_kbm_acts, ACT_ORBIT) != 0;
     if (g_modern && ((f5 && !prev_key) || (click && !prev_click))) {
         if (!st_active) {
             st_yaw = game_yaw();
@@ -406,7 +468,7 @@ static void input_update(void)
      * and moves freely, the camera swings behind him; without a target, aiming
      * hands the camera back to the game (stock aim, rooted) and we keep
      * tracking it so release doesn't snap */
-    aiming = ACT(actions_of(&p), ACT_AIM) != 0;
+    aiming = ACT(actions_of(&p) | (unsigned)g_kbm_acts, ACT_AIM) != 0;
     {
         int hold = st_active && st_allowed && aiming, was = lock_active;
         /* a lock starts only where the game allows targeting (combat HUD up);
@@ -439,6 +501,22 @@ static void input_update(void)
         }
         if (lock_active && !was)
             log_printf("lock-on: on");
+    }
+    /* mouse look (raw counts), wheel = next lock-on target */
+    if (st_active && st_allowed && (mdx || mdy || mwheel)) {
+        if (lock_active) {
+            if (mwheel)
+                lockon_switch(mwheel < 0 ? 1 : -1);
+        } else if (!aiming || lock_free) {
+            st_yaw = fmod(st_yaw + mdx * MOUSE_YAW_PER_COUNT * g_mouse_scale + 65536.0, 65536.0);
+        }
+        if (!aiming || lock_active || lock_free)
+            st_pitch = clampd(st_pitch - mdy * MOUSE_PITCH_PER_COUNT * g_mouse_scale * (g_mouse_invert_y ? -1 : 1),
+                              PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+        else {   /* stock aim (no target): the mouse turns and tilts Mega Man, see on_player_update */
+            InterlockedExchangeAdd(&g_aim_mdx, mdx);
+            InterlockedExchangeAdd(&g_aim_mdy, mdy);
+        }
     }
     if (lock_active) {
         n = stick_norm(p.sThumbRY);
@@ -477,6 +555,8 @@ static void input_update(void)
     cam_yaw = (int)st_yaw & 0xffff;
     cam_active = st_active && st_allowed;
     cam_suppress = cam_active && aiming && !lock_active && !lock_free;
+    /* the cursor stays put and hidden while the orbit drives gameplay */
+    kbm_capture(g_kbm && g_modern && cam_active);
 }
 
 /* ---- per-frame hook: cam_apply_angles entry ---- */
@@ -503,10 +583,47 @@ static void true_orbit(void)
     }
 }
 
+/* Camera collision and floor-safe look-up for the call in progress: r holds
+ * cam_apply_angles' target (EAX), distance (EDX), yaw (EBX) and -pitch (ECX).
+ * The camera orbits the target only up to LOOK_ORBIT_MAX; looking further up
+ * keeps it there and tilts the view through a virtual target. `mode` keeps the
+ * eased distance per camera (0 orbit, 1 stock aim). */
+static void place_camera(regs_t *r, int yaw, int pitch, int mode)
+{
+    static int last_mode = -1;
+    const int32_t *t = (const int32_t *)(uintptr_t)r->eax;
+    int orbit = pitch > LOOK_ORBIT_MAX ? LOOK_ORBIT_MAX : pitch;
+    int want, d;
+    if (mode != last_mode)
+        cam_dist_cur = -1;
+    last_mode = mode;
+    /* pull in at once, ease back out */
+    want = cam_collide(t, (int)r->edx, yaw, -orbit);
+    if (cam_dist_cur < 0 || want < cam_dist_cur)
+        cam_dist_cur = want;
+    else
+        cam_dist_cur += (want - cam_dist_cur) * CAM_EASE_OUT;
+    d = iround(cam_dist_cur);
+    r->edx = (uint32_t)d;
+    r->ecx = (uint32_t)(-pitch & 0xffff);   /* cam_apply_angles negates ECX */
+    if (pitch > orbit) {
+        /* cam_apply_angles places the camera at target - d * dir(pitch), so hand
+         * it a virtual target d along the steeper view from where the orbit stops */
+        double a = (yaw & 0xfff) * (PI / 2048.0);
+        double bo = -orbit * (PI / 2048.0), bv = -pitch * (PI / 2048.0);
+        double cx = t[0] - d * sin(a) * cos(bo), cy = t[1] - d * sin(bo), cz = t[2] - d * cos(a) * cos(bo);
+        g_view_target[0] = iround(cx + d * sin(a) * cos(bv));
+        g_view_target[1] = iround(cy + d * sin(bv));
+        g_view_target[2] = iround(cz + d * cos(a) * cos(bv));
+        g_view_target[3] = t[3];
+        r->eax = (uint32_t)(uintptr_t)g_view_target;
+    }
+}
+
 static void on_cam_apply(regs_t *r)
 {
     int32_t px, pz;
-    int gate, ma;
+    int gate, ma, is_gameplay_cam;
 
     frame_tick = (frame_tick + 1) & 0x3fffffff;
     {
@@ -514,7 +631,8 @@ static void on_cam_apply(regs_t *r)
          * camera"; cam_follow_lookat & co. also come through here every frame
          * with angles of their own */
         uint32_t ret = *(uint32_t *)(uintptr_t)(r->esp + 4);
-        if (ret == G_RET_CAM_COMMON_BLEND || ret == G_RET_CAM_COMMON) {
+        is_gameplay_cam = ret == G_RET_CAM_COMMON_BLEND || ret == G_RET_CAM_COMMON;
+        if (is_gameplay_cam) {
             g_game_yaw = (int)r->ebx;
             g_game_pitch_ecx = (int)r->ecx;
             g_game_cam_valid = 1;
@@ -560,34 +678,13 @@ static void on_cam_apply(regs_t *r)
 
 
     if (cam_active && !cam_suppress) {
-        const int32_t *t = (const int32_t *)(uintptr_t)r->eax;
-        int pitch = iround(st_pitch), orbit = pitch > LOOK_ORBIT_MAX ? LOOK_ORBIT_MAX : pitch;
-        int want, d;
         r->ebx = (uint32_t)cam_yaw;
         true_orbit();
-        /* camera collision on the orbit position: pull in at once, ease back out */
-        want = cam_collide(t, (int)r->edx, cam_yaw, -orbit);
-        if (cam_dist_cur < 0 || want < cam_dist_cur)
-            cam_dist_cur = want;
-        else
-            cam_dist_cur += (want - cam_dist_cur) * CAM_EASE_OUT;
-        d = iround(cam_dist_cur);
-        r->edx = (uint32_t)d;
-        r->ecx = (uint32_t)(-pitch & 0xffff);   /* cam_apply_angles negates ECX */
-        if (pitch > orbit) {
-            /* looking up past the orbit range: the camera stays where the orbit
-             * put it (above the floor) and only the view tilts further up.
-             * cam_apply_angles places the camera at target - d * dir(pitch), so
-             * hand it a virtual target d along the steeper view from there. */
-            double a = (cam_yaw & 0xfff) * (PI / 2048.0);
-            double bo = -orbit * (PI / 2048.0), bv = -pitch * (PI / 2048.0);
-            double cx = t[0] - d * sin(a) * cos(bo), cy = t[1] - d * sin(bo), cz = t[2] - d * cos(a) * cos(bo);
-            g_view_target[0] = iround(cx + d * sin(a) * cos(bv));
-            g_view_target[1] = iround(cy + d * sin(bv));
-            g_view_target[2] = iround(cz + d * cos(a) * cos(bv));
-            g_view_target[3] = t[3];
-            r->eax = (uint32_t)(uintptr_t)g_view_target;
-        }
+        place_camera(r, cam_yaw, iround(st_pitch), 0);
+    } else if (cam_active && cam_suppress && is_gameplay_cam) {
+        /* stock aim (no target): the game's own, closer aim camera; same wall
+         * stop and floor-safe look-up as the orbit (classic camera stays vanilla) */
+        place_camera(r, (int)r->ebx & 0xfff, -signed12((int)r->ecx & 0xfff), 1);
     } else {
         cam_dist_cur = -1;
     }
@@ -769,6 +866,20 @@ static void on_player_update(regs_t *r)
         return;
     }
     /* a press that can't start yet (mid-roll, mid-air) stays buffered for a few updates */
+    /* stock aim with the mouse: turn (facing) and tilt (the aim angle +0x108,
+     * which the aim state also feeds to its camera) */
+    {
+        int dx = (int)InterlockedExchange(&g_aim_mdx, 0), dy = (int)InterlockedExchange(&g_aim_mdy, 0);
+        if ((dx || dy) && P8(PL_STATE) == 14 && !(P8(PL_INPUT_FLAGS) & 0x60)) {
+            int cur = (RD32(G_PLAYER_FACING) >> 16) & 0xfff, pitch;
+            write_facing(cur + iround(dx * MOUSE_YAW_PER_COUNT * g_mouse_scale));
+            pitch = S16(PL_AIM_PITCH) - iround(dy * MOUSE_PITCH_PER_COUNT * g_mouse_scale * AIM_PITCH_SIGN *
+                                                (g_mouse_invert_y ? -1 : 1));
+            if (pitch > AIM_PITCH_LIMIT) pitch = AIM_PITCH_LIMIT;
+            if (pitch < -AIM_PITCH_LIMIT) pitch = -AIM_PITCH_LIMIT;
+            S16(PL_AIM_PITCH) = (int16_t)pitch;
+        }
+    }
     if (dodge_req && !cam_suppress) {
         if (!roll_buffer)
             roll_buffer = ROLL_BUFFER;
@@ -883,7 +994,7 @@ void controls_filter(pad_t *p)
     fresh = ft_stale < STALE_POLLS;
 
     /* physical buttons -> actions -> the virtual buttons the game's bindings expect */
-    acts = actions_of(p);
+    acts = actions_of(p) | (unsigned)g_kbm_acts;
     roll = ACT(acts, ACT_ROLL) != 0;
     aiming = ACT(acts, ACT_AIM) != 0;
     p->bLeftTrigger = 0;
@@ -932,6 +1043,10 @@ void controls_filter(pad_t *p)
         p->sThumbLY = p->sThumbRY;
         p->sThumbRX = lx;
         p->sThumbRY = ly;
+        if (!p->sThumbLX && !p->sThumbLY && (g_kbm_lx || g_kbm_ly)) {   /* keyboard: A/D turn, W/S tilt */
+            p->sThumbLX = (SHORT)g_kbm_lx;
+            p->sThumbLY = (SHORT)g_kbm_ly;
+        }
     } else if (fresh && move_active && inject_fwd) {
         p->sThumbLX = 0;
         p->sThumbLY = 32767;   /* walk vs run is decided in the player hook */
@@ -1038,6 +1153,16 @@ void controls_load_buttons(const char *ini)
         sprintf_s(line + strlen(line), sizeof line - strlen(line), "%s%s=%s", i ? " " : "", g_ph_keys[i] + 4,
                   g_act_names[g_map[i]]);
     log_printf("controls: buttons %s", line);
+}
+
+void controls_mouse(int enabled, int sens_pct, int invert_y)
+{
+    g_kbm = enabled != 0;
+    if (sens_pct > 0)
+        g_mouse_scale = sens_pct / 100.0;
+    g_mouse_invert_y = invert_y != 0;
+    log_printf("controls: keyboard + mouse %s, mouse speed %d%%%s", g_kbm ? "on" : "off",
+               (int)(g_mouse_scale * 100 + 0.5), g_mouse_invert_y ? ", inverted" : "");
 }
 
 void controls_camera(int speed_x_pct, int speed_y_pct, int invert_x, int invert_y, int deadzone_pct, int orbit_start)

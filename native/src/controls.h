@@ -36,3 +36,8 @@ void controls_camera(int speed_x_pct, int speed_y_pct, int invert_x, int invert_
 /* Button remapping for the orbit-camera layout: reads [controls] btn_a .. btn_start
  * (jump, shoot, special, talk, roll, aim, orbit, menu, select, none). */
 void controls_load_buttons(const char *ini);
+
+/* Keyboard + mouse for the orbit camera: on/off, mouse speed in %, inverted
+ * mouse Y. controls_kbm_active: the game is in front and keyboard/mouse count. */
+void controls_mouse(int enabled, int sens_pct, int invert_y);
+int controls_kbm_active(void);

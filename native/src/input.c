@@ -62,7 +62,7 @@ static struct {
 
 #define TRIGGER_BUTTON  30      /* XINPUT_GAMEPAD_TRIGGER_THRESHOLD */
 #define STICK_HALF      16384   /* the game's +-500 of +-1000 */
-#define RESCAN_POLLS    60
+#define RESCAN_POLLS    250   /* SDL-thread reads (2 ms): look for a new controller every ~0.5 s */
 
 static HMODULE g_sdl_dll;
 static int g_active;            /* SDL path selected (gate patched) */
@@ -74,7 +74,10 @@ static int g_connected;
 static int g_rescan;
 static uint16_t g_bits;         /* PS1 buttons to press this poll */
 static volatile uint32_t g_gate;   /* stands in for the joystick device pointer */
-static CRITICAL_SECTION g_cs;   /* game thread vs the intro-skip poller */
+static CRITICAL_SECTION g_cs;   /* the SDL thread's snapshot vs its readers */
+static pad_t g_snap;            /* latest controller state, written by the SDL thread */
+static int g_snap_connected;
+static HANDLE g_ready_event;
 
 static int load_sdl(void)
 {
@@ -123,23 +126,62 @@ static void fall_back(const char *why)
     log_printf("input: %s, falling back to the DirectInput joystick (Xidi)", why);
 }
 
-static void start_sdl(void)
+static void sdl_read(pad_t *out, int *connected);
+
+/* SDL lives on this thread: init, device tracking, polling. Its helper windows
+ * (device notifications, HID discovery) belong to this thread and their
+ * messages are drained here. On the game's thread SDL's PeekMessage on those
+ * windows also took the game's WM_QUIT, so the game never closed (Alt+F4). */
+static DWORD WINAPI sdl_thread(LPVOID unused)
 {
-    g_started = 1;
-    /* device add/remove handled on SDL's own thread: we never pump messages here */
+    HANDLE timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+    (void)unused;
+    if (!timer)
+        timer = CreateWaitableTimerW(NULL, FALSE, NULL);
     sdl.SetHint("SDL_JOYSTICK_THREAD", "1");
     /* the game pauses itself when unfocused; don't let SDL second-guess focus */
     sdl.SetHint("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1");
     if (!sdl.Init(SDL_INIT_GAMEPAD_)) {
         log_printf("input: SDL_Init failed: %s", sdl.GetError());
         fall_back("SDL could not start");
-        return;
+        SetEvent(g_ready_event);
+        return 0;
     }
     /* nobody drains SDL's event queue; keep it from filling up */
     sdl.SetGamepadEventsEnabled(0);
     sdl.SetJoystickEventsEnabled(0);
     InterlockedExchange(&g_ready, 1);
-    log_printf("input: SDL3 started");
+    log_printf("input: SDL3 started on its own thread");
+    SetEvent(g_ready_event);
+    for (;;) {
+        pad_t p;
+        int c;
+        LARGE_INTEGER due;
+        sdl_read(&p, &c);
+        EnterCriticalSection(&g_cs);
+        g_snap = p;
+        g_snap_connected = c;
+        LeaveCriticalSection(&g_cs);
+        due.QuadPart = -20000;   /* 2 ms: ~500 controller reads a second */
+        if (timer && SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE))
+            WaitForSingleObject(timer, 10);
+        else
+            Sleep(1);
+    }
+}
+
+static void start_sdl(void)
+{
+    if (g_started)
+        return;
+    g_started = 1;
+    g_ready_event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (!g_ready_event || !CreateThread(NULL, 0, sdl_thread, NULL, 0, NULL)) {
+        fall_back("no SDL thread");
+        return;
+    }
+    if (WaitForSingleObject(g_ready_event, 3000) != WAIT_OBJECT_0 && !g_ready)
+        fall_back("SDL took too long to start");
 }
 
 static const char *type_name(int t)
@@ -179,7 +221,8 @@ static void track_gamepad(void)
 static SHORT flip(int16_t v) { return (SHORT)(v == -32768 ? 32767 : -v); }
 static BYTE trig(int16_t v) { return (BYTE)(v <= 0 ? 0 : v >= 32767 ? 255 : (v * 255) / 32767); }
 
-static void read_gamepad(void)
+/* SDL thread: one controller read */
+static void sdl_read(pad_t *out, int *connected)
 {
     static const struct { int sdl; WORD x; } map[] = {
         { PAD_SOUTH, BTN_A }, { PAD_EAST, BTN_B }, { PAD_WEST, BTN_X }, { PAD_NORTH, BTN_Y },
@@ -189,22 +232,31 @@ static void read_gamepad(void)
         { PAD_DRIGHT, BTN_DPAD_RIGHT },
     };
     size_t i;
-    memset(&g_raw, 0, sizeof g_raw);
-    g_connected = 0;
+    memset(out, 0, sizeof *out);
+    *connected = 0;
     sdl.UpdateGamepads();
     track_gamepad();
     if (!g_pad)
         return;
     for (i = 0; i < sizeof map / sizeof map[0]; i++)
         if (sdl.GetGamepadButton(g_pad, map[i].sdl))
-            g_raw.wButtons |= map[i].x;
-    g_raw.sThumbLX = sdl.GetGamepadAxis(g_pad, AX_LX);
-    g_raw.sThumbLY = flip(sdl.GetGamepadAxis(g_pad, AX_LY));   /* SDL: down is +, XInput: up is + */
-    g_raw.sThumbRX = sdl.GetGamepadAxis(g_pad, AX_RX);
-    g_raw.sThumbRY = flip(sdl.GetGamepadAxis(g_pad, AX_RY));
-    g_raw.bLeftTrigger = trig(sdl.GetGamepadAxis(g_pad, AX_LT));
-    g_raw.bRightTrigger = trig(sdl.GetGamepadAxis(g_pad, AX_RT));
-    g_connected = 1;
+            out->wButtons |= map[i].x;
+    out->sThumbLX = sdl.GetGamepadAxis(g_pad, AX_LX);
+    out->sThumbLY = flip(sdl.GetGamepadAxis(g_pad, AX_LY));   /* SDL: down is +, XInput: up is + */
+    out->sThumbRX = sdl.GetGamepadAxis(g_pad, AX_RX);
+    out->sThumbRY = flip(sdl.GetGamepadAxis(g_pad, AX_RY));
+    out->bLeftTrigger = trig(sdl.GetGamepadAxis(g_pad, AX_LT));
+    out->bRightTrigger = trig(sdl.GetGamepadAxis(g_pad, AX_RT));
+    *connected = 1;
+}
+
+/* game thread: the latest controller state the SDL thread published */
+static void read_gamepad(void)
+{
+    EnterCriticalSection(&g_cs);
+    g_raw = g_snap;
+    g_connected = g_snap_connected;
+    LeaveCriticalSection(&g_cs);
 }
 
 /* What the game's joystick half would have produced from this pad (as Xidi
@@ -256,11 +308,13 @@ static void on_poll_entry(regs_t *r)
         return;
     }
     g_gate = 0;
-    EnterCriticalSection(&g_cs);
     read_gamepad();
     p = g_raw;
-    LeaveCriticalSection(&g_cs);
     conn = controls_debug_overlay(&p, g_connected);
+    if (!conn && controls_kbm_active()) {   /* no controller: keyboard/mouse still drive the modern layout */
+        memset(&p, 0, sizeof p);
+        conn = 1;
+    }
     g_bits = conn ? (controls_filter(&p), ps1_bits(&p)) : 0;
 }
 
@@ -274,9 +328,8 @@ static void on_poll_keyboard(regs_t *r)
     }
 }
 
-/* The game doesn't poll the pad while CAPCOM.AVI plays, so SDL is started
- * here instead (still the game thread, which owns SDL's helper windows) and
- * the intro-skip poller reads it through input_sdl_any_button. */
+/* The game doesn't poll the pad while the intro plays, so SDL is started here
+ * already (our intro player uses it for sound and skipping). */
 static void on_intro(regs_t *r)
 {
     (void)r;
@@ -290,9 +343,8 @@ int input_sdl_any_button(void)
     if (!input_sdl_active())
         return -1;
     EnterCriticalSection(&g_cs);
-    read_gamepad();
-    if (g_connected)
-        down = g_raw.wButtons || g_raw.bLeftTrigger > 40 || g_raw.bRightTrigger > 40;
+    if (g_snap_connected)
+        down = g_snap.wButtons || g_snap.bLeftTrigger > 40 || g_snap.bRightTrigger > 40;
     LeaveCriticalSection(&g_cs);
     return down;
 }

@@ -360,6 +360,9 @@ static void init(void)
             lockon_set_color((unsigned)strtoul(c, NULL, 16));
     }
     controls_load_buttons(g_ini);
+    controls_mouse(GetPrivateProfileIntA("controls", "mouse_keyboard", 1, g_ini),
+                   GetPrivateProfileIntA("controls", "mouse_speed", 100, g_ini),
+                   GetPrivateProfileIntA("controls", "mouse_invert_y", 0, g_ini));
     controls_camera(GetPrivateProfileIntA("controls", "camera_speed_x", 100, g_ini),
                     GetPrivateProfileIntA("controls", "camera_speed_y", 100, g_ini),
                     GetPrivateProfileIntA("controls", "invert_x", 0, g_ini),

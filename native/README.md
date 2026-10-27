@@ -52,6 +52,7 @@ camera_speed_x=100   ; orbit camera speed in % (y = pitch)
 invert_x=0           ; 1 = inverted (invert_y likewise)
 deadzone=24          ; stick deadzone, % of full tilt
 reticle_color=FFD840 ; lock-on reticle colour (RRGGBB)
+mouse_keyboard=1     ; WASD + mouse look with the orbit camera (mouse_speed %, mouse_invert_y)
 btn_rb=none          ; button remap for the orbit layout: btn_a .. btn_start = jump, shoot,
                      ; special, talk, roll, aim, orbit, menu, select or none
 roll_speed=768       ; roll (X) speed, stock is 512
@@ -187,6 +188,9 @@ for comparisons.
 - `src/apicensus.c` dev tool: counts every DirectDraw/Direct3D call the game makes
 - `src/packets.c` which display-list packet and bucket is being drawn (walker hooks, HUD sprite tags, deferred draws) + the census
 - `src/input.c` controller input through SDL3 (any gamepad SDL knows), fed into the game's own pad poll
+- `src/kbm.c` raw mouse input and keys for the orbit camera
+- `src/intro_video.c` our intro player (pl_mpeg + the D3D11 renderer + SDL3 audio)
+- `src/lockon.c` Z-targeting target choice and reticle
 - `src/controls.c` orbit camera, camera-relative movement, aim, dodge, button remap
 - `src/toast.c` the ORBIT ON/OFF indicator, drawn into the game's own HUD list
 - `src/hook.c` mid-function hooks (jump to a stub that saves registers, calls C, replays the stolen bytes)
