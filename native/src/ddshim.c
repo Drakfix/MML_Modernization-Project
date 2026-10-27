@@ -543,6 +543,14 @@ static HRESULT WINAPI s_blt(void **i, LPRECT dr, void **srci, LPRECT sr, DWORD f
         rec_clear(dr, 0, 0, 1, 1.0f);
         return DD_OK;
     }
+    if (s->kind == K_PRIMARY && src && src->kind == K_BACK) {
+        /* the fades present this way instead of Flip: each frame dims the
+         * last one without clearing it, so it must reach the screen. No
+         * in-between frame: its target doesn't hold the picture being dimmed */
+        ensure_gfx(s->dd);
+        rec_present(1);
+        return DD_OK;
+    }
     if (src)
         copy_rect(s, dr, src, sr);
     return DD_OK;
