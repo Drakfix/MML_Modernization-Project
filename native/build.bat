@@ -24,14 +24,17 @@ rem recompiled game code (tools/recomp/recomp.py output, never committed): compi
 rem warnings off; without it the harness builds empty
 set "GENOBJ="
 set "GENDEF=/DRECOMP_NONE"
+rem RECOMP_DIFF=1: the recompiled code logs its memory writes, for [debug] recomp=diff (slower)
+set "DIFFDEF="
+if "%RECOMP_DIFF%"=="1" set "DIFFDEF=/DRECOMP_DIFF"
 if exist "%OUT%\gen\recomp_*.c" (
   del /q "%OUT%\gen\*.obj" 2>nul
-  cl /nologo /c /MP4 /O2 /MT /W0 /GS- /I"%ROOT%src" /Fo"%OUT%\gen\\" "%OUT%\gen\recomp_*.c" >nul || exit /b 1
+  cl /nologo /c /MP4 /O2 /MT /W0 /GS- %DIFFDEF% /I"%ROOT%src" /Fo"%OUT%\gen\\" "%OUT%\gen\recomp_*.c" >nul || exit /b 1
   set "GENOBJ=%OUT%\gen\*.obj"
   set "GENDEF="
 )
 rem C4201: the SDK's own D3D11 headers use nameless unions
-cl /nologo /O2 /MT /LD /W4 /WX /wd4201 /GS- %GENDEF% /I"%OUT%" /Fo"%OUT%\\" "%ROOT%src\*.c" %GENOBJ% ^
+cl /nologo /O2 /MT /LD /W4 /WX /wd4201 /GS- %GENDEF% %DIFFDEF% /I"%OUT%" /Fo"%OUT%\\" "%ROOT%src\*.c" %GENOBJ% ^
    /Fe"%OUT%\mml.dll" /link /DEF:"%ROOT%mml.def" /INCREMENTAL:NO /MAP:"%OUT%\mml.map" user32.lib kernel32.lib gdi32.lib d3d11.lib dxgi.lib ole32.lib windowscodecs.lib || exit /b 1
 echo built %OUT%\mml.dll
 exit /b 0

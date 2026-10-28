@@ -165,6 +165,21 @@ static __declspec(naked) void clip_detour(void)
     }
 }
 
+/* the recompiled game runs the clipper as C, not through clip_detour (recomp.h) */
+static void clip_pre_c(const uint32_t regs[8])
+{
+    g_a_verts = regs[0];
+    g_a_uvs = regs[2];
+    g_a_out = regs[3];
+    g_a_site = *(const uint32_t *)(uintptr_t)regs[4];         /* our caller: which drawer this is */
+    g_a_count = *(const uint32_t *)(uintptr_t)(regs[4] + 4);  /* the count, above the return address */
+}
+
+static void clip_post_c(uint32_t eax)
+{
+    clip_post((int)eax);
+}
+
 int clipfix_install(void)
 {
     static const uint8_t prologue[8] = { 0x56, 0x57, 0x55, 0x89, 0xE5, 0x83, 0xEC, 0x74 };
@@ -185,6 +200,7 @@ int clipfix_install(void)
     rel = (int32_t)((uintptr_t)clip_detour - (G_FN_NEAR_CLIP + 5));
     memcpy(jmp + 1, &rel, 4);
     mem_write(G_FN_NEAR_CLIP, jmp, sizeof jmp);
+    recomp_register_wrap((void *)clip_detour, G_FN_NEAR_CLIP, clip_pre_c, clip_post_c);
     log_printf("clipfix: exact texture coordinates where the near plane cuts models");
     return 1;
 }

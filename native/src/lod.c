@@ -34,12 +34,14 @@
  * unconditional sends every chunk past the near range down the +0x18 path,
  * the same one the closest chunks already take. */
 #include <windows.h>
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
 #include "hook.h"
 #include "log.h"
 #include "lod.h"
+#include "recomp.h"
 
 /* address of each CMP reg,imm32 instruction; the immediate sits at +2 */
 static const struct { uintptr_t at; uint8_t modrm; uint32_t imm; } g_sites[] = {
@@ -95,6 +97,19 @@ static __declspec(naked) void nclip_round(void)
     }
 }
 
+/* the same for the recompiled game, on ST0 as a value; 0x4F915C truncates (FRNDINT with the
+   rounding control set to "toward zero") */
+static double nclip_round_c(double x)
+{
+    double t;
+    if (isnan(x))
+        return x;
+    t = x < 0 ? ceil(x) : floor(x);
+    if (t != 0.0 || x == 0.0)   /* truncated to something nonzero, or exactly 0: as before */
+        return t;
+    return x > 0 ? 1.0 : -1.0;
+}
+
 static int full_terrain(void)
 {
     size_t i, n = sizeof g_terrain / sizeof g_terrain[0];
@@ -145,6 +160,7 @@ static int keep_small_triangles(void)
     rel = (int32_t)((uintptr_t)nclip_round - (G_NCLIP_TRUNC_CALL + 5));
     memcpy(call + 1, &rel, 4);
     mem_write(G_NCLIP_TRUNC_CALL, call, sizeof call);
+    recomp_register_st0((void *)nclip_round, nclip_round_c);
     log_printf("lod: sub-pixel triangles kept (NCLIP rounds away from 0)");
     return 1;
 }

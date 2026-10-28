@@ -1,8 +1,10 @@
 /* Dev tool: sampling profiler for the game thread ([debug] sampler=1).
  * Every millisecond it stops the game thread, notes where it is, and every
- * 5000 samples logs the hottest 256-byte code regions with their module
+ * 5000 samples logs the hottest 16-byte code regions with their module
  * (look the offsets up in build\mml.map for mml.dll). It starts 46 s in, so
- * the samples come from play rather than loading. */
+ * the samples come from play rather than loading. The whole histogram also goes to
+ * sampler.txt in the game folder ("base" lines give each module's load address, then one
+ * "address count" line per 16-byte region), for summing it up per function or module. */
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -11,22 +13,45 @@
 #include "sampler.h"
 
 #define BUCKETS 65536
+#define SHIFT 4   /* 16-byte regions */
 static HANDLE g_target;
 static struct { uint32_t addr; unsigned n; } g_hist[BUCKETS];
 static unsigned g_total;
 
 static void count(uint32_t eip)
 {
-    uint32_t key = eip >> 8, i = (key * 2654435761u) & (BUCKETS - 1);
+    uint32_t key = eip >> SHIFT, i = (key * 2654435761u) & (BUCKETS - 1);
     while (g_hist[i].n && g_hist[i].addr != key)
         i = (i + 1) & (BUCKETS - 1);
     g_hist[i].addr = key;
     g_hist[i].n++;
 }
 
+static void dump_file(void)
+{
+    FILE *f = NULL;
+    int i;
+    if (fopen_s(&f, "sampler.txt", "a") || !f)
+        return;
+    fprintf(f, "samples %u\n", g_total);
+    fprintf(f, "base mml.dll %08X\n", (unsigned)(uintptr_t)GetModuleHandleA("mml.dll"));
+    for (i = 0; i < BUCKETS; i++)
+        if (g_hist[i].n) {
+            char name[MAX_PATH] = "?";
+            HMODULE m = NULL;
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   (LPCSTR)(uintptr_t)(g_hist[i].addr << SHIFT), &m) && m)
+                GetModuleFileNameA(m, name, sizeof name);
+            fprintf(f, "%08X %u %s\n", g_hist[i].addr << SHIFT, g_hist[i].n,
+                    strrchr(name, '\\') ? strrchr(name, '\\') + 1 : name);
+        }
+    fclose(f);
+}
+
 static void dump(void)
 {
     int top, i;
+    dump_file();
     log_printf("sampler: %u samples", g_total);
     for (top = 0; top < 25; top++) {
         int best = -1;
@@ -38,13 +63,13 @@ static void dump(void)
         if (best < 0)
             break;
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                               (LPCSTR)(uintptr_t)(g_hist[best].addr << 8), &m) && m) {
+                               (LPCSTR)(uintptr_t)(g_hist[best].addr << SHIFT), &m) && m) {
             GetModuleFileNameA(m, name, sizeof name);
             log_printf("sampler: %5.1f%%  %08X  %s+%X", 100.0 * g_hist[best].n / g_total,
-                       g_hist[best].addr << 8, strrchr(name, '\\') ? strrchr(name, '\\') + 1 : name,
-                       (g_hist[best].addr << 8) - (uint32_t)(uintptr_t)m);
+                       g_hist[best].addr << SHIFT, strrchr(name, '\\') ? strrchr(name, '\\') + 1 : name,
+                       (g_hist[best].addr << SHIFT) - (uint32_t)(uintptr_t)m);
         } else {
-            log_printf("sampler: %5.1f%%  %08X", 100.0 * g_hist[best].n / g_total, g_hist[best].addr << 8);
+            log_printf("sampler: %5.1f%%  %08X", 100.0 * g_hist[best].n / g_total, g_hist[best].addr << SHIFT);
         }
         g_hist[best].n = 0;
     }

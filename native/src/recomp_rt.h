@@ -73,8 +73,19 @@ static __inline void RF_SET(RCtx *c, unsigned off, double v)
 #define REG_FPUCW 0x10A0
 #define REG_FS_BASE 0x110   /* Ghidra's FS_OFFSET: FS:[x] reads FS_BASE + x (the thread block) */
 
-/* guest memory */
+/* guest memory. Diff mode (recomp.c) logs every write so it can undo it; that check on every
+   store costs the normal build a lot (the possible call blocks optimisation around each store),
+   so it is only compiled in with RECOMP_DIFF (native\build.bat with RECOMP_DIFF=1 set). */
 void rt_store_log(RCtx *c, uint32_t a, unsigned n);   /* recomp.c: called before a logged write */
+#ifdef RECOMP_DIFF
+#define RT_STORE_LOG(c, a, n)                                                              \
+    do {                                                                                   \
+        if ((c)->log)                                                                      \
+            rt_store_log(c, a, n);                                                         \
+    } while (0)
+#else
+#define RT_STORE_LOG(c, a, n) ((void)(c))
+#endif
 #define LDDEF(bits)                                                                        \
     static __inline uint##bits##_t LD##bits(uint32_t a)                                    \
     {                                                                                      \
@@ -84,8 +95,7 @@ void rt_store_log(RCtx *c, uint32_t a, unsigned n);   /* recomp.c: called before
     }                                                                                      \
     static __inline void ST##bits(RCtx *c, uint32_t a, uint##bits##_t v)                   \
     {                                                                                      \
-        if (c->log)                                                                        \
-            rt_store_log(c, a, sizeof v);                                                  \
+        RT_STORE_LOG(c, a, sizeof v);                                                      \
         memcpy(HPTR(a), &v, sizeof v);                                                     \
     }
 LDDEF(8)
@@ -102,8 +112,7 @@ static __inline uint64_t LDN(uint32_t a, unsigned n)
 }
 static __inline void STN(RCtx *c, uint32_t a, uint64_t v, unsigned n)
 {
-    if (c->log)
-        rt_store_log(c, a, n);
+    RT_STORE_LOG(c, a, n);
     memcpy(HPTR(a), &v, n);
 }
 
@@ -142,9 +151,13 @@ SHDEF(16, 16)
 SHDEF(32, 32)
 SHDEF(64, 64)
 
+/* x86 P-code only counts bits for the parity flag, of the result's low byte: a table */
+extern const uint8_t g_popcnt8[256];
 static __inline uint8_t POPCNT(uint64_t v)
 {
     uint8_t n = 0;
+    if (v < 256)
+        return g_popcnt8[v];
     while (v) {
         v &= v - 1;
         n++;
@@ -179,23 +192,26 @@ static __inline uint64_t FBITS64(double f)
 }
 
 /* FNSTSW: Ghidra keeps only the condition codes in the status word; add the stack top
-   (tracked through fdelta) and the sticky exception flags the FPU had at entry */
-static __inline uint16_t FSW(const RCtx *c)
+   (tracked through fdelta, the net pushes since the machine code handed over) and the sticky
+   exception flags the FPU had then. The generated code keeps fdelta and the status word
+   (sw, with the condition codes) in locals. */
+static __inline uint16_t FSWD(const RCtx *c, int fdelta, uint16_t sw)
 {
-    unsigned top = ((unsigned)(c->fsw0 >> 11) - (unsigned)c->fdelta) & 7;
-    return (uint16_t)((R16(c, 0x10A2) & 0x4700) | (top << 11) | (c->fsw0 & 0xFF));
+    unsigned top = ((unsigned)(c->fsw0 >> 11) - (unsigned)fdelta) & 7;
+    return (uint16_t)((sw & 0x4700) | (top << 11) | (c->fsw0 & 0xFF));
 }
 
-/* x87 precision control (CW bits 8-9): 0 = single, 2 = double, 3 = extended (as double) */
-static __inline double FPC(const RCtx *c, double v)
+/* x87 precision control (control word bits 8-9): 0 = single, 2 = double, 3 = extended (as
+   double). The generated code passes the control word, which it keeps in a local. */
+static __inline double FPCW(uint16_t cw, double v)
 {
-    return ((R16(c, REG_FPUCW) >> 8) & 3) == 0 ? (double)(float)v : v;
+    return ((cw >> 8) & 3) == 0 ? (double)(float)v : v;
 }
 
-/* x87 round to integer by the rounding control (CW bits 10-11) */
-static __inline double FROUND(const RCtx *c, double v)
+/* x87 round to integer by the rounding control (control word bits 10-11) */
+static __inline double FROUNDW(uint16_t cw, double v)
 {
-    switch ((R16(c, REG_FPUCW) >> 10) & 3) {
+    switch ((cw >> 10) & 3) {
     case 0: {   /* nearest, ties to even */
         double f = floor(v), d = v - f;
         if (d > 0.5 || (d == 0.5 && fmod(f, 2.0) != 0))
@@ -284,6 +300,17 @@ uint32_t rt_dispatch(RCtx *c, uint32_t target);
 void rt_unsupported(RCtx *c, uint32_t at, const char *what);
 
 typedef uint32_t (*rfunc)(RCtx *c);   /* returns a tail-jump target or 0 */
+
+/* A JMP that mml.dll put at a function's entry sends the function to our routine; when the
+   runtime runs that routine's C version, which calls the original, the entry is passed once. */
+extern uint32_t g_rt_bypass;
+static __inline int rt_bypass_take(uint32_t a)
+{
+    if (g_rt_bypass != a)
+        return 0;
+    g_rt_bypass = 0;
+    return 1;
+}
 typedef struct {
     uint32_t addr;
     rfunc fn;

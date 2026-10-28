@@ -45,6 +45,14 @@ extern const int g_recomp_nfuncs;
 extern const int g_recomp_patch_aware;   /* the code calls our hooks and reads patched bytes itself */
 #endif
 
+#define B2(n) n, n + 1, n + 1, n + 2
+#define B4(n) B2(n), B2(n + 1), B2(n + 1), B2(n + 2)
+#define B6(n) B4(n), B4(n + 1), B4(n + 1), B4(n + 2)
+const uint8_t g_popcnt8[256] = { B6(0), B6(1), B6(1), B6(2) };   /* bits set in each byte value */
+#undef B2
+#undef B4
+#undef B6
+
 /* FNSAVE image: CW at 0, SW at 4, tag word at 8, ST0..ST7 (80-bit) from 28 */
 #define FS_SW 4
 #define FS_TW 8
@@ -144,7 +152,12 @@ void rt_st80(RCtx *c, uint32_t a, double v)
     memcpy(HPTR(a), buf, 10);
 }
 
-static int find_func(uint32_t a)
+/* entry address -> function index + 1 (0: none), over the generated code's address range: a
+   jump between functions looks its target up on every iteration of the dispatcher */
+static uint16_t *g_func_at;
+static uint32_t g_func_lo, g_func_hi;
+
+static int find_func_slow(uint32_t a)
 {
     int lo = 0, hi = g_recomp_nfuncs - 1;
     while (lo <= hi) {
@@ -159,7 +172,93 @@ static int find_func(uint32_t a)
     return -1;
 }
 
+static int find_func(uint32_t a)
+{
+    if (g_func_at)
+        return a >= g_func_lo && a < g_func_hi ? (int)g_func_at[a - g_func_lo] - 1 : -1;
+    return find_func_slow(a);
+}
+
+static void build_func_index(void)
+{
+    int i;
+    if (!g_recomp_nfuncs || g_recomp_nfuncs >= 0xFFFF)
+        return;
+    g_func_lo = g_recomp_funcs[0].addr;
+    g_func_hi = g_recomp_funcs[g_recomp_nfuncs - 1].addr + 1;
+    g_func_at = (uint16_t *)calloc(g_func_hi - g_func_lo, sizeof *g_func_at);
+    if (!g_func_at)
+        return;
+    for (i = 0; i < g_recomp_nfuncs; i++)
+        g_func_at[g_recomp_funcs[i].addr - g_func_lo] = (uint16_t)(i + 1);
+}
+
 static int g_rt_errors;
+static int host_callable(uint32_t target);
+static void rt_host_call(RCtx *c, uint32_t target);
+
+/* ---- C versions of our assembly routines (recomp.h) ---- */
+uint32_t g_rt_bypass;
+static struct {
+    uint32_t routine, original;
+    double (*st0)(double);
+    void (*pre)(const uint32_t regs[8]);
+    void (*post)(uint32_t eax);
+} g_impl[8];
+static int g_nimpl;
+
+void recomp_register_st0(void *routine, double (*fn)(double))
+{
+    if (g_nimpl < 8) {
+        g_impl[g_nimpl].routine = (uint32_t)(uintptr_t)routine;
+        g_impl[g_nimpl].st0 = fn;
+        g_nimpl++;
+    }
+}
+
+void recomp_register_wrap(void *routine, uint32_t original, void (*pre)(const uint32_t regs[8]),
+                          void (*post)(uint32_t eax))
+{
+    if (g_nimpl < 8) {
+        g_impl[g_nimpl].routine = (uint32_t)(uintptr_t)routine;
+        g_impl[g_nimpl].original = original;
+        g_impl[g_nimpl].pre = pre;
+        g_impl[g_nimpl].post = post;
+        g_nimpl++;
+    }
+}
+
+/* returns 1 if target is one of them (and has been run) */
+static int rt_impl(RCtx *c, uint32_t target)
+{
+    int k;
+    for (k = 0; k < g_nimpl; k++) {
+        uint32_t esp;
+        if (g_impl[k].routine != target)
+            continue;
+        esp = R32(c, REG_ESP);
+        if (g_impl[k].st0) {
+            RF_SET(c, 0x1100, g_impl[k].st0(RF(c, 0x1100)));
+            c->ret = LD32(esp);
+            R32_SET(c, REG_ESP, esp + 4);
+            return 1;
+        }
+        {
+            static const unsigned off[8] = { REG_EAX, REG_ECX, REG_EDX, REG_EBX, REG_ESP, REG_EBP, REG_ESI, REG_EDI };
+            uint32_t regs[8];
+            int i;
+            for (i = 0; i < 8; i++)
+                regs[i] = R32(c, off[i]);
+            g_impl[k].pre(regs);
+            g_rt_bypass = g_impl[k].original;
+            rt_dispatch(c, g_impl[k].original);   /* it returns to our caller, as the routine would */
+            g_rt_bypass = 0;
+            g_impl[k].post(R32(c, REG_EAX));
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static void rt_dispatch_from(RCtx *c, uint32_t target)
 {
@@ -189,7 +288,12 @@ uint32_t rt_dispatch(RCtx *c, uint32_t target)
         if (i < 0 && target >= g_recomp_funcs[0].lo && target < g_recomp_funcs[g_recomp_nfuncs - 1].hi &&
             g_rt_errors++ < 20)
             log_printf("recomp: jump to %08X, outside every recompiled function", target);
-        rt_call_native(c, target);
+        if (rt_impl(c, target))
+            ;
+        else if (host_callable(target))
+            rt_host_call(c, target);
+        else
+            rt_call_native(c, target);
         target = 0;
     }
     return 0;
@@ -289,9 +393,117 @@ static __declspec(naked) void bridge_go(void)
 
 static uint32_t g_bridge_ret;   /* the game's return address of the innermost open bridge */
 
+static uint32_t g_hc_after;   /* the return address our direct calls leave (host_call_asm) */
+
 uint32_t __cdecl recomp_return_address(uint32_t seen)
 {
-    return seen == (uint32_t)(uintptr_t)bridge_back && g_bridge_ret ? g_bridge_ret : seen;
+    if ((seen == (uint32_t)(uintptr_t)bridge_back || (g_hc_after && seen == g_hc_after)) && g_bridge_ret)
+        return g_bridge_ret;
+    return seen;
+}
+
+/* ---- direct calls into mml.dll ----
+   The game calls our C functions: the Direct3D device methods (ddshim and the hooks on its
+   vtable), replaced imports (GetTickCount, XInputGetState). Through the bridge each call saved
+   and converted the whole x87 state, reloaded segments and switched stacks; those functions are
+   plain stdcall/cdecl C and need none of it. They are called straight from C with the game's
+   arguments copied over (16 dwords is more than any of them takes), and the bytes the function
+   popped (stdcall) are popped from the game's stack too. The exceptions are the targets of our
+   code patches (a CALL or JMP pointed at an assembly routine that works on the game's registers
+   or x87 stack): those keep the bridge. */
+static uint32_t g_mml_lo, g_mml_hi;          /* mml.dll's image */
+static uint32_t g_asm_targets[64];
+static int g_nasm_targets;
+static uint32_t hc_fn, hc_args, hc_ecx, hc_edx, hc_eax_out, hc_edx_out, hc_popped;
+
+static __declspec(naked) void host_call_asm(void)
+{
+    __asm {
+        push ebx
+        push esi
+        push edi
+        push ebp
+        mov ebp, esp                    ; (callee-saved: survives a nested direct call)
+        mov g_hc_after, offset after_call
+        sub esp, 64
+        mov esi, hc_args
+        mov edi, esp
+        mov ecx, 16
+        cld
+        rep movsd
+        mov ebx, esp                    ; the stack as the callee gets it
+        mov ecx, hc_ecx
+        mov edx, hc_edx
+        call dword ptr [hc_fn]
+    after_call:
+        mov hc_eax_out, eax
+        mov hc_edx_out, edx
+        mov eax, esp
+        sub eax, ebx                    ; what the callee popped
+        mov hc_popped, eax
+        mov esp, ebp
+        pop ebp
+        pop edi
+        pop esi
+        pop ebx
+        ret
+    }
+}
+
+static int host_callable(uint32_t target)
+{
+    int k;
+    if (target < g_mml_lo || target >= g_mml_hi)
+        return 0;
+    for (k = 0; k < g_nasm_targets; k++)
+        if (g_asm_targets[k] == target)
+            return 0;
+    return 1;
+}
+
+static void host_call_setup(void)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    const IMAGE_DOS_HEADER *dos;
+    const IMAGE_NT_HEADERS *nt;
+    size_t k;
+    if (!VirtualQuery((LPCVOID)host_call_setup, &mi, sizeof mi))
+        return;
+    dos = (const IMAGE_DOS_HEADER *)mi.AllocationBase;
+    nt = (const IMAGE_NT_HEADERS *)((const uint8_t *)dos + dos->e_lfanew);
+    g_mml_lo = (uint32_t)(uintptr_t)dos;
+    g_mml_hi = g_mml_lo + nt->OptionalHeader.SizeOfImage;
+    for (k = 0; k < mem_patch_count(); k++) {   /* our CALL / JMP patches: where they point */
+        uintptr_t a;
+        size_t len;
+        const uint8_t *b;
+        mem_patch_get(k, &a, &len);
+        b = (const uint8_t *)a;
+        if (len >= 5 && (b[0] == 0xE8 || b[0] == 0xE9) && g_nasm_targets < 64) {
+            uint32_t t = (uint32_t)a + 5 + *(const uint32_t *)(b + 1);
+            if (t >= g_mml_lo && t < g_mml_hi)
+                g_asm_targets[g_nasm_targets++] = t;
+        }
+    }
+    log_printf("recomp: direct calls into mml.dll (%08X-%08X), %d assembly routines keep the bridge", g_mml_lo,
+               g_mml_hi, g_nasm_targets);
+}
+
+static void rt_host_call(RCtx *c, uint32_t target)
+{
+    uint32_t esp = R32(c, REG_ESP), ret = LD32(esp), outer_ret = g_bridge_ret, eax, edx, popped;
+    hc_fn = target;
+    hc_args = (uint32_t)(uintptr_t)HPTR(esp + 4);
+    hc_ecx = R32(c, REG_ECX);
+    hc_edx = R32(c, REG_EDX);
+    g_bridge_ret = ret;
+    host_call_asm();
+    eax = hc_eax_out, edx = hc_edx_out, popped = hc_popped;
+    g_bridge_ret = outer_ret;
+    R32_SET(c, REG_EAX, eax);
+    R32_SET(c, REG_EDX, edx);
+    R32_SET(c, REG_ESP, esp + 4 + popped);   /* the return address, then what the callee popped */
+    c->ret = ret;
 }
 
 void rt_call_native(RCtx *c, uint32_t target)
@@ -431,10 +643,10 @@ static int x87_depth(const uint8_t *img)
 
 static void x87_to_ctx(RCtx *c, const uint8_t *img)
 {
-    int i;
+    int i, depth = x87_depth(img);   /* usually 0 or 1 at a call: only those need converting */
     R16_SET(c, REG_FPUCW, *(const uint16_t *)img);
     for (i = 0; i < 8; i++)
-        RF_SET(c, 0x1100 + 0x10 * i, f80_to_d(img + FS_ST + 10 * i));
+        RF_SET(c, 0x1100 + 0x10 * i, i < depth ? f80_to_d(img + FS_ST + 10 * i) : 0.0);
 }
 
 /* the recompiled code's x87 stack into an FNSAVE image */
@@ -452,15 +664,27 @@ static void x87_from_ctx(const RCtx *c, uint8_t *img)
         if ((int)((ph - ntop) & 7) >= depth)
             tw |= 3u << (2 * ph);
     *(uint16_t *)(img + FS_TW) = (uint16_t)tw;
-    for (i = 0; i < 8; i++)
+    for (i = 0; i < depth; i++)   /* the empty slots' contents don't matter */
         d_to_f80(RF(c, 0x1100 + 0x10 * i), img + FS_ST + 10 * i);
 }
 
 /* ---- the C side of the stubs (runs on our own stack) ---- */
 
+/* the parts of the register space the generated code uses (general registers, segments and
+   FS base, flags and temporaries, x87 control/status, x87 stack): clearing just these on
+   every entry from machine code instead of the whole context (8.7 KB) */
+static const struct { uint16_t lo, hi; } g_ctx_used[] = {
+    { 0x0, 0x20 }, { 0x100, 0x118 }, { 0x200, 0x218 }, { 0x280, 0x288 }, { 0x1090, 0x10B0 }, { 0x1100, 0x1180 },
+};
+
 static void ctx_from_cpu(RCtx *c)
 {
-    memset(c, 0, sizeof *c);
+    size_t k;
+    for (k = 0; k < sizeof g_ctx_used / sizeof g_ctx_used[0]; k++)
+        memset(c->R + g_ctx_used[k].lo, 0, g_ctx_used[k].hi - g_ctx_used[k].lo);
+    c->log = 0;
+    c->ret = 0;
+    c->fdelta = 0;
     c->fsw0 = *(const uint16_t *)(t_fsave + FS_SW);
     c->fdepth0 = x87_depth(t_fsave);
     R32_SET(c, REG_FS_BASE, (uint32_t)(uintptr_t)NtCurrentTeb());
@@ -472,7 +696,7 @@ static void ctx_from_cpu(RCtx *c)
     R32_SET(c, REG_EBP, t_ebp);
     R32_SET(c, REG_ESI, t_esi);
     R32_SET(c, REG_EDI, t_edi);
-    R8_SET(c, REG_DF, (uint8_t)((t_efl >> 10) & 1));
+    flags_to_ctx(c, t_efl);
     x87_to_ctx(c, t_fsave);
 }
 
@@ -1062,10 +1286,18 @@ void recomp_install(const char *ini)
     g_mode = _stricmp(mode, "diff") == 0 ? MODE_DIFF : _stricmp(mode, "replace") == 0 ? MODE_REPLACE : MODE_OFF;
     if (g_mode == MODE_OFF)
         return;
+#ifndef RECOMP_DIFF
+    if (g_mode == MODE_DIFF) {
+        log_printf("recomp: diff mode needs a build with RECOMP_DIFF=1 (memory writes aren't logged otherwise)");
+        return;
+    }
+#endif
     if (!g_recomp_nfuncs) {
         log_printf("recomp: this build has no recompiled code");
         return;
     }
+    build_func_index();
+    host_call_setup();
     g_rc_native = (uint8_t *)calloc((size_t)g_recomp_nfuncs, 1);
     if (!g_rc_native) {
         log_printf("recomp: no memory for the function table");

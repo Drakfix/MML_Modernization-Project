@@ -222,6 +222,46 @@ void mml_sleep_ms(double ms)
 static unsigned g_frames;
 static int g_interp_on, g_bglayer_on, g_player_log;
 
+/* [debug] perf_log=1: how long the game thread works per iteration of its frame loop (the
+   iteration minus the frame limiter's sleep), averaged over 300 iterations, and how many
+   draws it skipped meanwhile. The yardstick for the recompiled code's speed. */
+static int g_perf_log = -1;
+static double g_perf_slept, g_perf_busy, g_perf_max;
+static unsigned g_perf_n, g_perf_skips;
+/* the two halves of an iteration: drawing (from the draw check to the first wait) and the logic
+   step (from the last wait to the next draw check) */
+static double g_perf_draw, g_perf_logic, g_perf_first_wait, g_perf_last_wait;
+
+static void perf_iteration(double now_ms)
+{
+    static double last;
+    double busy;
+    if (g_perf_log < 0)
+        g_perf_log = (int)GetPrivateProfileIntA("debug", "perf_log", 0, g_ini);
+    if (!g_perf_log)
+        return;
+    if (last > 0.0) {
+        if (g_perf_first_wait > last)
+            g_perf_draw += g_perf_first_wait - last;
+        if (g_perf_last_wait > last)
+            g_perf_logic += now_ms - g_perf_last_wait;
+        busy = now_ms - last - g_perf_slept;
+        g_perf_busy += busy;
+        if (busy > g_perf_max)
+            g_perf_max = busy;
+        if (++g_perf_n == 300) {
+            log_printf("perf: game thread busy %.2f ms per iteration (max %.2f; drawing %.2f, logic %.2f), "
+                       "%u draws skipped (300 iterations)", g_perf_busy / g_perf_n, g_perf_max,
+                       g_perf_draw / g_perf_n, g_perf_logic / g_perf_n, g_perf_skips);
+            g_perf_busy = g_perf_max = g_perf_draw = g_perf_logic = 0.0;
+            g_perf_n = g_perf_skips = 0;
+        }
+    }
+    last = now_ms;
+    g_perf_slept = 0.0;
+    g_perf_first_wait = 0.0;
+}
+
 /* game_frame is a fixed-step loop: draw the scene the last logic step built (the walk) and flip
    G_FRAME_PARITY, wait for the deadline (GetTickCount at G_SPIN_RET), advance it, run one logic
    step (which clears its parity's draw lists and builds the next scene into them). It skips the
@@ -261,6 +301,7 @@ static void frame_drop_check(void)
         *parity ^= 1;
     last_parity = *parity;
     if (g_frames == walks_seen) {   /* either skip: that step's scene was never drawn */
+        g_perf_skips++;
         *(volatile uint32_t *)G_DEFERRED_COUNT = 0;
         if (g_bglayer_on)
             bglayer_frame_dropped();
@@ -281,6 +322,7 @@ static DWORD WINAPI rebased_gettickcount(void)
     ms = (double)(now.QuadPart - g_qpc_base.QuadPart) * 1000.0 / (double)g_qpc_freq.QuadPart;
     if (recomp_return_address((uint32_t)(uintptr_t)_ReturnAddress()) == G_DRAW_RET) {
         static int skipped;
+        perf_iteration(ms);
         double deadline = *(float *)G_FRAME_LIMITER_TH;
         if (g_max_skipped < 0)
             g_max_skipped = (int)GetPrivateProfileIntA("debug", "max_skipped_draws", 2, g_ini);
@@ -296,13 +338,18 @@ static DWORD WINAPI rebased_gettickcount(void)
     /* the game waits for its next frame by spinning on this call: sleep instead */
     if (recomp_return_address((uint32_t)(uintptr_t)_ReturnAddress()) == G_SPIN_RET) {
         double left;
+        if (g_perf_first_wait == 0.0)
+            g_perf_first_wait = ms;
         frame_drop_check();
         left = *(float *)G_FRAME_LIMITER_TH - ms;
         if (left > 1.5 && left < 200.0) {
+            double before = ms;
             mml_sleep_ms(left - 1.0);
             QueryPerformanceCounter(&now);
             ms = (double)(now.QuadPart - g_qpc_base.QuadPart) * 1000.0 / (double)g_qpc_freq.QuadPart;
+            g_perf_slept += ms - before;
         }
+        g_perf_last_wait = ms;
     }
     return (DWORD)ms;
 }

@@ -23,6 +23,7 @@ The output is derived from the game's code, so it is written to the build
 folder and never committed.
 """
 import os
+import re
 
 RECOMP_FILE = globals().get("RECOMP_FILE", "tools/recomp/recomp.py")   # set by the caller (exec)
 
@@ -117,6 +118,113 @@ def orig_bytes(a, n):
     return [mem.getByte(af.getAddress(hex(a + i))) & 0xFF for i in range(n)]
 
 
+# Registers in C locals. Generated code reads and writes registers through markers; once a
+# function is complete, each register it touches becomes a local variable, which the C compiler
+# can keep in a real register: no memory traffic for every access, flag computations that
+# nothing reads disappear, and the x87 stack shuffle (Ghidra's model moves ST0..ST7 on every
+# push and pop) turns into renames. The locals are written back to the context ("spill") where
+# anything outside the function can see the registers: calls, hooks, the runtime, returns and
+# jumps out; and read back ("fill") at entry and after calls. The general registers are cached
+# as 32-bit locals with AL/AH/AX as views; another register is cached if every access has the
+# same size and nothing else overlaps it (MMX over the x87 stack stays in the context).
+RX_READ = re.compile(r"\x01R([0-9a-f]+),(\d+)\x02")
+RX_WRITE = re.compile(r"\x01W([0-9a-f]+),(\d+)\x02(.*?)\x03", re.S)
+# statements that hand the registers to someone else (their effects come back through the context)
+RX_SYNC_CALL = re.compile(r"\b(RC_CALL|rt_call|rt_dispatch|rt_hook|rt_co_\w+|rt_call_native|rt_unsupported)\(")
+RX_RETURN = re.compile(r"\breturn ([^;]*);")
+GPR_END = 0x20
+
+
+class RegCache:
+    def __init__(self, regs, written, fdelta):
+        self.fdelta = fdelta
+        self.gpr = set()        # cached general registers: dword offsets
+        self.other = {}         # cached other registers: offset -> size
+        bad_gpr = set(o & ~3 for o, n in regs if o < GPR_END and ((o & 3) + n > 4 or n == 10))
+        for o, n in regs:
+            if o < GPR_END:
+                if (o & ~3) not in bad_gpr:
+                    self.gpr.add(o & ~3)
+                continue
+            if any(p != (o, n) and p[0] < o + n and o < p[0] + p[1] for p in regs):
+                continue        # overlapped by another access: left in the context
+            self.other[o] = n
+        self.wgpr = set(o & ~3 for o, n in written if (o & ~3) in self.gpr and o < GPR_END)
+        self.wother = set(o for o, n in written if o in self.other)
+
+    @staticmethod
+    def gname(o):
+        return "g%x_" % o
+
+    @staticmethod
+    def oname(o):
+        return "r%x_" % o
+
+    def decls(self):
+        d = ["uint32_t %s = 0;" % self.gname(o) for o in sorted(self.gpr)]
+        for o in sorted(self.other):
+            n = self.other[o]
+            d.append("%s %s = 0;" % ("double" if n == 10 else ctype(n), self.oname(o)))
+        if self.fdelta:
+            d.append("int fd_ = 0;")
+        return d
+
+    def fill(self):
+        s = ["%s = R32(c,0x%x);" % (self.gname(o), o) for o in sorted(self.gpr)]
+        for o in sorted(self.other):
+            n = self.other[o]
+            s.append("%s = %s;" % (self.oname(o), "RF(c,0x%x)" % o if n == 10 else "R%d(c,0x%x)" % (n * 8, o)))
+        if self.fdelta:
+            s.append("fd_ = c->fdelta;")
+        return " ".join(s)
+
+    def spill(self):
+        s = ["R32_SET(c,0x%x,%s);" % (o, self.gname(o)) for o in sorted(self.wgpr)]
+        for o in sorted(self.wother):
+            n = self.other[o]
+            s.append("RF_SET(c,0x%x,%s);" % (o, self.oname(o)) if n == 10
+                     else "R%d_SET(c,0x%x,%s);" % (n * 8, o, self.oname(o)))
+        if self.fdelta:
+            s.append("c->fdelta = fd_;")
+        return " ".join(s)
+
+    def read(self, o, n):
+        if o < GPR_END and (o & ~3) in self.gpr:
+            g, sh = self.gname(o & ~3), 8 * (o & 3)
+            if n == 4:
+                return g
+            return "((%s)(%s >> %d))" % (ctype(n), g, sh) if sh else "((%s)%s)" % (ctype(n), g)
+        if o in self.other:
+            return self.oname(o)
+        return "RF(c,0x%x)" % o if n == 10 else "R%d(c,0x%x)" % (n * 8, o)
+
+    def write(self, o, n, expr):
+        if o < GPR_END and (o & ~3) in self.gpr:
+            g, sh = self.gname(o & ~3), 8 * (o & 3)
+            if n == 4:
+                return "%s = (uint32_t)(%s)" % (g, expr)
+            mask = ((1 << (8 * n)) - 1) << sh
+            return "%s = (%s & 0x%xu) | ((uint32_t)(%s)(%s) << %d)" % (g, g, ~mask & 0xFFFFFFFF, ctype(n), expr, sh)
+        if o in self.other:
+            return "%s = %s" % (self.oname(o), expr)
+        return "RF_SET(c,0x%x,%s)" % (o, expr) if n == 10 else "R%d_SET(c,0x%x,%s)" % (n * 8, o, expr)
+
+    def resolve(self, text):
+        spill = self.spill()
+        lines = []
+        for line in text.split("\n"):
+            if RX_SYNC_CALL.search(line):
+                ind = line[:len(line) - len(line.lstrip())]
+                line = "%s%s %s %s" % (ind, spill, line.strip(), self.fill()) if spill or self.gpr or self.other or self.fdelta \
+                    else line
+            if spill and "return" in line:
+                line = RX_RETURN.sub(lambda m: "{ %s return %s; }" % (spill, m.group(1)), line)
+            lines.append(line)
+        text = "\n".join(lines)
+        text = RX_WRITE.sub(lambda m: self.write(int(m.group(1), 16), int(m.group(2)), m.group(3)), text)
+        return RX_READ.sub(lambda m: self.read(int(m.group(1), 16), int(m.group(2))), text)
+
+
 class FuncGen:
     INDEX = {}   # entry address -> table index (set by main)
 
@@ -132,6 +240,8 @@ class FuncGen:
         self.consts = {}              # (value, size) -> expression, for the instruction being emitted
         self.dyn_call = None          # address of a CALL whose target mml.dll redirects
         self.impure = False           # reaches something outside the recompiled code
+        self.regs = set()             # (offset, size) of every register read or written
+        self.written = set()          # ... and of those written
         self.insns = list(program.getListing().getInstructions(func.getBody(), True))
         self.addrs = set(i.getAddress().getOffset() for i in self.insns)
 
@@ -153,13 +263,11 @@ class FuncGen:
             mask = (1 << (8 * size)) - 1
             return "((%s)0x%xull)" % (ctype(size), off & mask)
         if sp == "register":
-            if size == 10:
-                return "RF(c,0x%x)" % off
-            if off == 0x10A2 and size == 2:
-                return "FSW(c)"
-            if size not in INT_T:
+            if off == 0x10A2 and size == 2:   # the status word as FNSTSW gives it
+                return "FSWD(c,fd_,%s)" % self.reg_rd(off, size)
+            if size not in INT_T and size != 10:
                 raise Unsupported("register size %d" % size)
-            return "R%d(c,0x%x)" % (size * 8, off)
+            return self.reg_rd(off, size)
         if sp == "unique":
             ctype(size)
             return self.local(off, size)
@@ -183,11 +291,11 @@ class FuncGen:
         if size in (3, 5, 6, 7):
             expr = "((%s) & 0x%xull)" % (expr, (1 << (8 * size)) - 1)
         if sp == "register":
-            if size == 10:
-                return "RF_SET(c,0x%x,%s);" % (off, expr)
-            if size not in INT_T:
+            if size not in INT_T and size != 10:
                 raise Unsupported("register size %d" % size)
-            return "R%d_SET(c,0x%x,%s);" % (size * 8, off, expr)
+            self.regs.add((off, size))
+            self.written.add((off, size))
+            return "\x01W%x,%d\x02%s\x03;" % (off, size, expr)
         if sp == "unique":
             ctype(size)
             return "%s = %s;" % (self.local(off, size), expr)
@@ -200,6 +308,14 @@ class FuncGen:
             return "ST%d(c,%s,%s);" % (size * 8, at, expr)
         raise Unsupported("write to space " + sp)
 
+    def reg_rd(self, off, size):
+        self.regs.add((off, size))
+        return "\x01R%x,%d\x02" % (off, size)
+
+    def cw(self):
+        """the x87 control word (precision and rounding)"""
+        return self.reg_rd(0x10A0, 2)
+
     def fval(self, v):
         """a float operand as a C double/float expression"""
         s = v.getSize()
@@ -211,14 +327,13 @@ class FuncGen:
             return self.rd(v)
         raise Unsupported("float size %d" % s)
 
-    @staticmethod
-    def fout(size, expr, arith=True):
+    def fout(self, size, expr, arith=True):
         if size == 4:
             return "FBITS32((float)(%s))" % expr
         if size == 8:
             return "FBITS64((double)(%s))" % expr
         if size == 10:
-            return "FPC(c,%s)" % expr if arith else "(double)(%s)" % expr
+            return "FPCW(%s,%s)" % (self.cw(), expr) if arith else "(double)(%s)" % expr
         raise Unsupported("float size %d" % size)
 
     # ---- control flow ----
@@ -302,7 +417,7 @@ class FuncGen:
             if name == "swi":                # INT3 padding between functions
                 return ""
             if name == "fpatan":             # ST1 = atan(ST1 / ST0), the pop follows in the P-code
-                return self.wr(out, "FPC(c,atan2(%s,%s))" % (self.fval(args[0]), self.fval(args[1])))
+                return self.wr(out, "FPCW(%s,atan2(%s,%s))" % (self.cw(), self.fval(args[0]), self.fval(args[1])))
             if name in ("paddusb", "psubusb", "paddusw", "psubusw", "paddsb", "psubsb", "paddsw", "psubsw"):
                 return self.wr(out, "MMX_%s(%s,%s)" % (name.upper(), rd(args[0]), rd(args[1])))
             if name.startswith("cpuid"):     # returns the address of EAX, EBX, EDX, ECX results
@@ -402,7 +517,7 @@ class FuncGen:
                 raise Unsupported("TRUNC to %d" % s)
             return self.wr(out, "%s(%s)" % (fn, self.fval(ins_[0])))
         if o == PcodeOp.FLOAT_ROUND:
-            return self.wr(out, self.fout(s, "FROUND(c,%s)" % self.fval(ins_[0]), arith=False))
+            return self.wr(out, self.fout(s, "FROUNDW(%s,%s)" % (self.cw(), self.fval(ins_[0])), arith=False))
         if o == PcodeOp.FLOAT_CEIL:
             return self.wr(out, self.fout(s, "ceil(%s)" % self.fval(ins_[0]), arith=False))
         if o == PcodeOp.FLOAT_FLOOR:
@@ -455,7 +570,9 @@ class FuncGen:
             elif b0 == 0xE8 and first == 0xE8:           # a call pointed elsewhere
                 self.dyn_call = a
             elif b0 == 0xE9:                              # the code here replaced by a jump to ours
-                out.append("if (LD8(0x%xu) == 0xE9) return 0x%xu + LD32(0x%xu);" % (a, a + 5, a + 1))
+                # (unless the runtime is running the original on that routine's behalf, once)
+                out.append("if (LD8(0x%xu) == 0xE9 && !rt_bypass_take(0x%xu)) return 0x%xu + LD32(0x%xu);" % (
+                    a, a, a + 5, a + 1))
             else:
                 print("  patch %08x: opcode %02x over %02x not handled" % (site, b0, first))
         return out
@@ -500,7 +617,7 @@ class FuncGen:
             pc = list(ins.getPcode())
             d = x87_delta(pc)
             if d:
-                body.append(("P", (a, -1), "c->fdelta += %d;" % d, None))
+                body.append(("P", (a, -1), "fd_ += %d;" % d, None))
             for i, p in enumerate(pc):
                 body.append(("P", (a, i), self.op(p, ins, i), p))
             body.append(("P", (a, len(pc)), "", None))   # target for branches past the last op
@@ -514,6 +631,10 @@ class FuncGen:
         out = ["uint32_t %s(RCtx *c)" % fname(self.entry), "{"]
         for (off, size), name in sorted(self.locals.items()):
             out.append("    %s %s = 0;" % (ctype(size), name))
+        cache = RegCache(self.regs, self.written,
+                         any("fd_" in t for _, _, t, _ in body))
+        out += ["    " + x for x in cache.decls()]
+        out.append("    " + cache.fill())
         if insns and insns[0].getAddress().getOffset() != self.entry:
             self.labels.add(self.entry)
             out.append("    goto L_%08x;" % self.entry)
@@ -532,7 +653,7 @@ class FuncGen:
                 out.append("    " + text)
         out.append("    return 0;")
         out.append("}")
-        return "\n".join(out)
+        return cache.resolve("\n".join(out))
 
 
 def stack_switch(g):
