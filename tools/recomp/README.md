@@ -44,19 +44,28 @@ in `mml.ini`:
 [debug]
 recomp=diff          ; or replace
 recomp_roots=all     ; or a list of function addresses: 4EF638,4F915C
+recomp_native=       ; address ranges to keep as machine code: 401000-44FFFF (bisecting)
 ```
 
 | Mode | Behaviour |
 |------|-----------|
 | `diff` | Each hooked function runs as recompiled C first, with every memory write logged. The writes are undone, the original runs, and registers, memory and the x87 stack are compared. Results go to `mml.log`. |
-| `replace` | The recompiled function runs instead of the original. |
+| `replace` | The recompiled function runs instead of the original. The game's threads (its scheduler at `0x4EED08` and the create, yield, exec and exit primitives) run on host fibers. Calls from recompiled code to Windows, to `mml.dll` and to functions our mods patch go through a native bridge. |
 
 Only functions that callers reach with a `CALL` can be hooked. Shared code that other
 functions enter by jumping is tested through the functions that use it.
 
 ## Status
 
-The camera and matrix math (18 functions) matched the original on all 10.7 million calls of
-a test session (boot, title, Downtown), and the game plays normally with them replaced.
-Next: the whole executable, including indirect calls, the game's cooperative threads and
-calls into Windows.
+- The whole executable translates: 11,050 entry points, including 3,125 functions found
+  through the relocation table (code only reached through pointer tables) and code that
+  Ghidra had cut off after calls it wrongly took for non-returning (`discover()` fixes both).
+- Diff mode: every pure function that our mods don't touch (980) matched the original on
+  27.9 million calls.
+- Replace mode: the game's cooperative threads run on host fibers as recompiled code, and
+  every hookable function is replaced. The game plays from the intro through the title,
+  the load menu and into Downtown. Functions that `mml.dll` patches still run as machine
+  code, through the native bridge.
+
+Next: our mods inside recompiled code (so nothing needs the original machine code), then a
+portable runtime without Windows (M3).

@@ -26,6 +26,7 @@ typedef struct RCtx {
     int log;             /* differential mode: record memory writes (see recomp.c) */
     int fdelta;          /* net x87 pushes since entry (Ghidra's model has no TOP) */
     uint16_t fsw0;       /* x87 status word at entry: TOP and the sticky exception flags */
+    int fdepth0;         /* x87 stack depth at entry (absolute depth = fdepth0 + fdelta) */
 } RCtx;
 
 #ifndef G_MEMBASE
@@ -70,6 +71,7 @@ static __inline void RF_SET(RCtx *c, unsigned off, double v)
 #define REG_EDI 0x1C
 #define REG_DF  0x20A
 #define REG_FPUCW 0x10A0
+#define REG_FS_BASE 0x110   /* Ghidra's FS_OFFSET: FS:[x] reads FS_BASE + x (the thread block) */
 
 /* guest memory */
 void rt_store_log(RCtx *c, uint32_t a, unsigned n);   /* recomp.c: called before a logged write */
@@ -90,6 +92,20 @@ LDDEF(8)
 LDDEF(16)
 LDDEF(32)
 LDDEF(64)
+
+/* odd-sized memory operands (LES/LFS far pointers are 6 bytes) */
+static __inline uint64_t LDN(uint32_t a, unsigned n)
+{
+    uint64_t v = 0;
+    memcpy(&v, HPTR(a), n);
+    return v;
+}
+static __inline void STN(RCtx *c, uint32_t a, uint64_t v, unsigned n)
+{
+    if (c->log)
+        rt_store_log(c, a, n);
+    memcpy(HPTR(a), &v, n);
+}
 
 /* integer helpers with P-code semantics (shift counts >= width give 0 / sign) */
 #define SHDEF(bits, sbits)                                                                 \
@@ -212,6 +228,22 @@ static __inline uint64_t FTOI64(double v)
     return (uint64_t)(int64_t)v;
 }
 
+/* MMX saturating arithmetic on 8-byte registers (they alias the x87 registers' low bytes) */
+#define MMX_LANES(name, bits, T, lo, hi, op)                                                           static __inline uint64_t name(uint64_t a, uint64_t b)                                              {                                                                                                      uint64_t r = 0, mask = (1ull << bits) - 1;                                                         int sh;                                                                                            for (sh = 0; sh < 64; sh += bits) {                                                                    int v = (int)(T)(a >> sh) op (int)(T)(b >> sh);                                                    if (v < lo)                                                                                            v = lo;                                                                                        if (v > hi)                                                                                            v = hi;                                                                                        r |= ((uint64_t)(uint32_t)v & mask) << sh;                                                     }                                                                                                  return r;                                                                                      }
+MMX_LANES(MMX_PADDUSB, 8, uint8_t, 0, 255, +)
+MMX_LANES(MMX_PSUBUSB, 8, uint8_t, 0, 255, -)
+MMX_LANES(MMX_PADDSB, 8, int8_t, -128, 127, +)
+MMX_LANES(MMX_PSUBSB, 8, int8_t, -128, 127, -)
+MMX_LANES(MMX_PADDUSW, 16, uint16_t, 0, 65535, +)
+MMX_LANES(MMX_PSUBUSW, 16, uint16_t, 0, 65535, -)
+MMX_LANES(MMX_PADDSW, 16, int16_t, -32768, 32767, +)
+MMX_LANES(MMX_PSUBSW, 16, int16_t, -32768, 32767, -)
+
+/* CPUID: the guest address of four dwords EAX, EBX, EDX, ECX (Ghidra's layout) */
+uint32_t rt_cpuid(uint32_t leaf);
+uint32_t rt_port_in(RCtx *c, uint32_t port);
+void rt_port_out(RCtx *c, uint32_t port);
+
 /* 80-bit memory operands (FLD/FSTP tbyte) */
 double rt_ld80(uint32_t a);
 void rt_st80(RCtx *c, uint32_t a, double v);
@@ -219,6 +251,33 @@ void rt_st80(RCtx *c, uint32_t a, double v);
 /* calls and jumps the recompiler couldn't resolve statically */
 void rt_call(RCtx *c, uint32_t target);
 void rt_jump(RCtx *c, uint32_t target);
+
+/* the game's cooperative threads (recomp.c): called where the game calls its own
+   scheduler 0x4EED08, create 0x4EED79, yield 0x4EEDA4, exec 0x4EEDCA and exit 0x4EEDFD */
+void rt_co_schedule(RCtx *c);
+void rt_co_create(RCtx *c);
+void rt_co_yield(RCtx *c);
+void rt_co_exec(RCtx *c);
+void rt_co_exit(RCtx *c);
+
+/* calls to recompiled functions: per function, the runtime can choose to run the original
+   machine code instead (code that mml.dll patches, so its changes keep working) */
+extern uint8_t g_rc_native[];
+void rt_call_native(RCtx *c, uint32_t target);
+#define RC_CALL(c, i, a, f)                                                                        \
+    do {                                                                                           \
+        if (g_rc_native[i])                                                                        \
+            rt_call_native(c, a);                                                                  \
+        else                                                                                       \
+            f(c);                                                                                  \
+    } while (0)
+#define RC_TAIL(c, i, a, f)                                                                        \
+    do {                                                                                           \
+        if (g_rc_native[i])                                                                        \
+            rt_jump(c, a);                                                                         \
+        else                                                                                       \
+            f(c);                                                                                  \
+    } while (0)
 void rt_unsupported(RCtx *c, uint32_t at, const char *what);
 
 typedef void (*rfunc)(RCtx *c);

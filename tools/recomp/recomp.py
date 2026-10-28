@@ -5,6 +5,11 @@ program open:
 
     python tools/ghidra/gq.py py "exec(open(r'tools/recomp/recomp.py').read()); main(roots=[0x42961B], out=r'native/build/gen/recomp_gen.c')"
 
+The whole executable (after a one-time discover(), which creates the functions Ghidra's
+analysis missed because they are only reached through pointer tables):
+
+    ... discover(); main(roots=all_roots(), out=r'native/build/gen/recomp_gen.c', shards=64)
+
 For each root it follows direct calls and tail jumps to collect a closed set of
 functions, then emits one C function per x86 function. Every P-code op becomes
 one C statement over the guest state (see native/src/recomp_rt.h): registers by
@@ -33,6 +38,14 @@ class Unsupported(Exception):
 
 def fname(a):
     return "f_%08x" % a
+
+
+# The game's cooperative threads (two slots, each with its own stack) switch stacks by
+# loading ESP, which C can't follow. Calls to these become runtime functions that run each
+# thread on a host fiber instead (native/src/recomp.c). exec and exit never return.
+INTRINSICS = {0x4EED08: ("rt_co_schedule", False), 0x4EED79: ("rt_co_create", False),
+              0x4EEDA4: ("rt_co_yield", False), 0x4EEDCA: ("rt_co_exec", True),
+              0x4EEDFD: ("rt_co_exit", True)}
 
 
 def ctype(size):
@@ -79,6 +92,8 @@ def x87_delta(pcode):
 
 
 class FuncGen:
+    INDEX = {}   # entry address -> table index (set by main)
+
     def __init__(self, func, known, entry=None):
         self.f = func
         self.entry = entry if entry is not None else func.getEntryPoint().getOffset()
@@ -122,7 +137,7 @@ class FuncGen:
             if size == 10:
                 return "rt_ld80(0x%xu)" % off
             if size not in INT_T:
-                raise Unsupported("memory operand size %d" % size)
+                return "LDN(0x%xu,%d)" % (off, size)
             return "LD%d(0x%xu)" % (size * 8, off)
         raise Unsupported("space " + sp)
 
@@ -143,6 +158,8 @@ class FuncGen:
         if sp == "ram":
             if size == 10:
                 return "rt_st80(c,0x%xu,%s);" % (off, expr)
+            if size not in INT_T:
+                return "STN(c,0x%xu,%s,%d);" % (off, expr, size)
             return "ST%d(c,0x%xu,%s);" % (size * 8, off, expr)
         raise Unsupported("write to space " + sp)
 
@@ -169,12 +186,15 @@ class FuncGen:
 
     # ---- control flow ----
     def goto_ram(self, target, ins):
+        if target in INTRINSICS:
+            self.impure = True
+            return "{ %s(c); return; }" % INTRINSICS[target][0]
         if target in self.addrs:
             self.labels.add(target)
             return "goto L_%08x;" % target
         if target in self.known:
             self.callees.add(target)
-            return "{ %s(c); return; }" % fname(target)   # tail jump into another function
+            return "{ RC_TAIL(c,%d,0x%xu,%s); return; }" % (self.INDEX[target], target, fname(target))
         self.impure = True
         return "{ rt_jump(c,0x%xu); return; }" % target
 
@@ -198,14 +218,14 @@ class FuncGen:
         if o == PcodeOp.LOAD:
             s = out.getSize()
             if s not in INT_T and s != 10:
-                raise Unsupported("load size %d" % s)
+                return self.wr(out, "LDN(%s,%d)" % (rd(ins_[1]), s))
             if s == 10:
                 return self.wr(out, "rt_ld80(%s)" % rd(ins_[1]))
             return self.wr(out, "LD%d(%s)" % (s * 8, rd(ins_[1])))
         if o == PcodeOp.STORE:
             v = ins_[2]
             if v.getSize() not in INT_T and v.getSize() != 10:
-                raise Unsupported("store size %d" % v.getSize())
+                return "STN(c,%s,%s,%d);" % (rd(ins_[1]), rd(v), v.getSize())
             if v.getSize() == 10:
                 return "rt_st80(c,%s,%s);" % (rd(ins_[1]), rd(v))
             return "ST%d(c,%s,%s);" % (v.getSize() * 8, rd(ins_[1]), rd(v))
@@ -217,9 +237,13 @@ class FuncGen:
             return self.branchind(rd(ins_[0]), ins)
         if o == PcodeOp.CALL:
             t = ins_[0].getOffset()
+            if t in INTRINSICS:
+                self.impure = True
+                name, noreturn = INTRINSICS[t]
+                return "%s(c);%s" % (name, " return;" if noreturn else "")
             if t in self.known:
                 self.callees.add(t)
-                return "%s(c);" % fname(t)
+                return "RC_CALL(c,%d,0x%xu,%s);" % (self.INDEX[t], t, fname(t))
             self.impure = True
             return "rt_call(c,0x%xu);" % t
         if o == PcodeOp.CALLIND:
@@ -228,8 +252,27 @@ class FuncGen:
         if o == PcodeOp.RETURN:
             return "c->ret = %s; return;" % rd(ins_[0])
         if o == PcodeOp.CALLOTHER:
-            self.impure = True
             name = program.getLanguage().getUserDefinedOpName(int(ins_[0].getOffset()))
+            args = ins_[1:]
+            if name in ("LOCK", "UNLOCK"):   # the LOCK prefix: the game logic never runs in parallel with itself
+                return ""
+            if name == "swi":                # INT3 padding between functions
+                return ""
+            if name == "fpatan":             # ST1 = atan(ST1 / ST0), the pop follows in the P-code
+                return self.wr(out, "FPC(c,atan2(%s,%s))" % (self.fval(args[0]), self.fval(args[1])))
+            if name in ("paddusb", "psubusb", "paddusw", "psubusw", "paddsb", "psubsb", "paddsw", "psubsw"):
+                return self.wr(out, "MMX_%s(%s,%s)" % (name.upper(), rd(args[0]), rd(args[1])))
+            if name.startswith("cpuid"):     # returns the address of EAX, EBX, EDX, ECX results
+                return self.wr(out, "rt_cpuid(%s)" % rd(args[0]))
+            if name == "segment":            # flat memory: the offset
+                return self.wr(out, "(%s)%s" % (ctype(out.getSize()), rd(args[1])))
+            if name == "LocalDescriptorTableRegister":
+                return self.wr(out, "(%s)0" % ctype(out.getSize()))
+            if name == "in":                 # port I/O faults in user mode: dead code in this port
+                return self.wr(out, "(%s)rt_port_in(c,%s)" % (ctype(out.getSize()), rd(args[0])))
+            if name == "out":
+                return "rt_port_out(c,%s);" % rd(args[0])
+            self.impure = True
             return 'rt_unsupported(c,0x%xu,"%s");' % (ins.getAddress().getOffset(), name)
 
         s = out.getSize() if out else 0
@@ -417,6 +460,81 @@ def stack_switch(g):
     return False
 
 
+def reloc_code_targets():
+    """every absolute address of code in the image, from the relocation table: function pointers
+    in data (the game's task and object handlers live in tables) and in instructions"""
+    mem, lst = program.getMemory(), program.getListing()
+    text = [b for b in mem.getBlocks() if b.isExecute()]
+    lo = min(b.getStart().getOffset() for b in text)
+    hi = max(b.getEnd().getOffset() for b in text)
+    af = program.getAddressFactory()
+    out = set()
+    for r in program.getRelocationTable().getRelocations():
+        try:
+            v = mem.getInt(r.getAddress()) & 0xFFFFFFFF
+        except Exception:
+            continue
+        if lo <= v <= hi and lst.getInstructionAt(af.getAddress(hex(v))) is not None:
+            out.add(v)
+    return out
+
+
+def fix_noreturn():
+    """Ghidra marks some functions as never returning that do return (they end in RET), and then
+    cuts every caller's body after the call: the code that runs afterwards is lost (the title
+    screen's state change, for one). Clear the flag and the CALL_RETURN overrides, re-flow."""
+    from ghidra.app.cmd.function import CreateFunctionCmd
+    from ghidra.app.cmd.disassemble import DisassembleCommand
+    from ghidra.program.model.listing import FlowOverride
+    fm, lst = program.getFunctionManager(), program.getListing()
+    fixed = 0
+    for f in fm.getFunctions(True):
+        if f.hasNoReturn() and any(i.getMnemonicString() == "RET" for i in lst.getInstructions(f.getBody(), True)):
+            f.setNoReturn(False)
+            fixed += 1
+    callers, n = set(), 0
+    for ins in lst.getInstructions(True):
+        if ins.getFlowOverride() != FlowOverride.CALL_RETURN or not ins.getFlowType().isCall():
+            continue
+        tgt = [fm.getFunctionAt(x) for x in ins.getFlows()]
+        if tgt and tgt[0] is not None and not tgt[0].hasNoReturn():
+            ins.setFlowOverride(FlowOverride.NONE)
+            n += 1
+            nxt = ins.getMaxAddress().next()
+            if lst.getInstructionAt(nxt) is None:
+                DisassembleCommand(nxt, None, True).applyTo(program, MON)
+            c = fm.getFunctionContaining(ins.getAddress())
+            if c is not None:
+                callers.add(c)
+    for c in callers:
+        CreateFunctionCmd.fixupFunctionBody(program, c, MON)
+    print("fix_noreturn: %d functions return after all, %d calls fixed, %d functions re-flowed" % (fixed, n, len(callers)))
+
+
+def discover():
+    """make functions where code is only reached through pointers (Ghidra's analysis misses them);
+    returns every pointed-to code address, for use as extra roots"""
+    fix_noreturn()
+    fm, af = program.getFunctionManager(), program.getAddressFactory()
+    targets = reloc_code_targets()
+    made = 0
+    for v in sorted(targets):
+        ad = af.getAddress(hex(v))
+        if fm.getFunctionContaining(ad) is None:
+            if flat.createFunction(ad, None) is not None:
+                made += 1
+    print("discover: %d code addresses in the relocation table, %d new functions" % (len(targets), made))
+    return targets
+
+
+def all_roots(with_pointers=True):
+    roots = [f.getEntryPoint().getOffset() for f in program.getFunctionManager().getFunctions(True)
+             if not f.isExternal() and not f.isThunk()]
+    if with_pointers:
+        roots += sorted(reloc_code_targets())
+    return roots
+
+
 def closure(roots):
     fm = program.getFunctionManager()
     af = program.getAddressFactory()
@@ -471,6 +589,7 @@ def main(roots, out, shards=1):
     known = set(funcs)
     parts, table, failed = [], [], []
     gens, impure = {}, set()
+    FuncGen.INDEX = dict((x, i) for i, x in enumerate(sorted(funcs)))
     for a in sorted(funcs):
         f = funcs[a]
         try:
