@@ -1,10 +1,18 @@
-# Mega Man Legends Modernization Project
+# Mega Man Legends Modernization Project (legacy 0.1)
 
-For years I wanted to play this game with a more "modern" feel, so using IDA Pro and a
-bunch of Python and Frida patches I hacked some systems of the 2001 PC port to build this.
-It adds real widescreen, a modern third person camera, a modern controller layout, an
-audio fix and a few other things, on top of the original game. No emulator, no recompile,
-no source port. It's the original engine with its arm twisted until it behaves.
+> **This version is no longer maintained.**
+> The 0.1 series patched the game from a separate Python/Frida process on top of the
+> DDrawCompat and Xidi wrappers. It was replaced by version 0.5, a native runtime with its
+> own Direct3D 11 renderer, 60 fps, SDL3 controller support, mouse and keyboard controls and
+> an in-game settings menu. Use the current version from the
+> [main branch](../../tree/main) and its [releases](../../releases).
+>
+> This branch is kept for reference. It receives no fixes or support.
+
+Version 0.1 modernized the 2001 PC port of Mega Man Legends through runtime patches written
+in Python and Frida, based on reverse engineering of the game executable. It adds
+widescreen, a third person camera, a modern controller layout, an audio timing fix and a few
+other changes on top of the original game.
 
 The project patches your own copy of the game. It doesn't contain any Capcom code or
 assets, and it will never give you the game.
