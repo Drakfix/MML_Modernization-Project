@@ -115,7 +115,7 @@ DEFAULTS = {"renderer": "mml", "window": "fullscreen",
             "lod": "full", "fps": "60", "reticle": "FFD840",
             "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
             "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display",
-            "mouse": "100", "shader": "", "shader_res": "game"}
+            "mouse": "100", "shader": "", "shader_res": "game", "texpack": "on", "texdump": "off"}
 
 # button remapping (orbit-camera layout): physical input -> action, mml.ini [controls] btn_*
 BUTTONS = [("btn_a", "A", "Cross"), ("btn_b", "B", "Circle"), ("btn_x", "X", "Square"),
@@ -385,6 +385,8 @@ def write_mml_ini(s, width):
             "shader_scale": 1 if s.get("shader_res", "game") == "game" else 0,
         },
         "controls": controls_ini(s),
+        "textures": {"replace": 1 if s.get("texpack", "on") == "on" else 0,
+                     "dump": 1 if s.get("texdump", "off") == "on" else 0},
         "general": {"intro": s["intro"]},
     }, header="; Mega Man Legends Modernization - settings, read by mml.dll when the game starts.\n"
               "; The launcher updates the keys it manages and leaves everything else alone.\n")
@@ -561,6 +563,7 @@ class App:
         option("Model detail", "lod",
                [("Full detail", "full"), ("Original", "original")], row=r, side="right")
         self.shader_card(self.pages["graphics"])
+        self.texture_card(self.pages["graphics"])
 
         # ---- Controls ----
         page[0] = self.pages["controls"]
@@ -877,6 +880,33 @@ class App:
                  bg=CARD, fg=DIM, font=("Segoe UI", 8), wraplength=440, justify="left").pack(
             anchor="w", padx=10, pady=(0, 6))
         self.refresh_shader()
+
+    def texture_card(self, parent):
+        """HD texture packs (Modernization/textures) and dumping the originals for pack makers."""
+        card = tk.Frame(parent, bg=CARD)
+        card.pack(fill="x", pady=2)
+        top = tk.Frame(card, bg=CARD)
+        top.pack(fill="x", padx=10, pady=(5, 0))
+        tk.Label(top, text="Textures", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(top, text="  HD packs: PNGs in Modernization\\textures", bg=CARD, fg=DIM,
+                 font=("Segoe UI", 9)).pack(side="left")
+        row = tk.Frame(card, bg=CARD)
+        row.pack(fill="x", padx=10, pady=(3, 7))
+        tk.Label(row, text="HD pack", bg=CARD, fg=DIM, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        Segmented(row, self.settings, "texpack", [("On", "on"), ("Off", "off")],
+                  on_change=lambda: save_settings(self.settings)).pack(side="left")
+        tk.Label(row, text="   Dump originals", bg=CARD, fg=DIM, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        Segmented(row, self.settings, "texdump", [("Off", "off"), ("On", "on")],
+                  on_change=lambda: save_settings(self.settings)).pack(side="left")
+        b = tk.Label(row, text="Open folder", bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9), padx=9, pady=3,
+                     cursor="hand2")
+        b.pack(side="right")
+        b.bind("<Button-1>", lambda e: os.startfile(self.texture_dir()))
+
+    def texture_dir(self):
+        d = os.path.join(GAME_DIR or BASE, "Modernization", "textures")
+        os.makedirs(d, exist_ok=True)
+        return d
 
     def shader_dir(self):
         d = os.path.join(GAME_DIR or BASE, "Modernization", "shaders")

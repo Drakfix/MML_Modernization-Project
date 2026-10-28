@@ -29,6 +29,7 @@
 #include "interp.h"
 #include "frame_rec.h"
 #include "clipfix.h"
+#include "texreplace.h"
 #include "bglayer.h"
 #include "mml.h"
 #include "gfx.h"
@@ -266,11 +267,9 @@ static void upload(surface *s)
     int x, y, bpp = s->pf.dwRGBBitCount / 8;
     DWORD rm = s->pf.dwRBitMask, gm = s->pf.dwGBitMask, bm = s->pf.dwBBitMask, am = s->pf.dwRGBAlphaBitMask;
     int has_alpha = (s->pf.dwFlags & DDPF_ALPHAPIXELS) && am;
+    const uint32_t *rep;
+    int up_w, up_h, tw, th;
     if (!s->mem || bpp < 2)
-        return;
-    if (!s->tex)
-        s->tex = gfx_tex_create(s->w, s->h);
-    if (!s->tex)
         return;
     rgba = (uint32_t *)malloc((size_t)s->w * s->h * 4);
     if (!rgba)
@@ -285,7 +284,22 @@ static void upload(surface *s)
             rgba[(size_t)y * s->w + x] = expand(v, rm) | (expand(v, gm) << 8) | (expand(v, bm) << 16) | (a << 24);
         }
     }
-    gfx_tex_upload(s->tex, rgba, s->w, s->h);
+    /* an HD replacement (any size) for this exact texture, if there is one */
+    rep = texreplace_filter(rgba, s->w, s->h, &up_w, &up_h);
+    if (!rep) {
+        rep = rgba;
+        up_w = s->w;
+        up_h = s->h;
+    }
+    gfx_tex_size(s->tex, &tw, &th);
+    if (s->tex && (tw != up_w || th != up_h)) {
+        rec_tex_destroy(s->tex);   /* a recorded frame may still draw with it */
+        s->tex = NULL;
+    }
+    if (!s->tex)
+        s->tex = gfx_tex_create(up_w, up_h);
+    if (s->tex)
+        gfx_tex_upload(s->tex, rep, up_w, up_h);
     free(rgba);
     s->dirty = 0;
     if (s->used_frame == g_frame_no)

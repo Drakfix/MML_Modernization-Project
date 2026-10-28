@@ -515,6 +515,12 @@ void gfx_tex_upload(gfx_tex *t, const uint32_t *rgba, int w, int h)
     ID3D11DeviceContext_UpdateSubresource(g.ctx, (ID3D11Resource *)t->tex, 0, NULL, rgba, (UINT)w * 4, 0);
 }
 
+void gfx_tex_size(const gfx_tex *t, int *w, int *h)
+{
+    *w = t ? t->w : 0;
+    *h = t ? t->h : 0;
+}
+
 void gfx_tex_destroy(gfx_tex *t)
 {
     if (!t)

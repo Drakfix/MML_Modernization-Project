@@ -62,6 +62,7 @@ void gfx_set_mode(int app_w, int app_h);   /* the game's display mode (coordinat
 gfx_tex *gfx_tex_create(int w, int h);
 void gfx_tex_upload(gfx_tex *t, const uint32_t *rgba, int w, int h);   /* RGBA8, tightly packed */
 void gfx_tex_destroy(gfx_tex *t);
+void gfx_tex_size(const gfx_tex *t, int *w, int *h);
 
 void gfx_set_texture(gfx_tex *t);           /* NULL = untextured */
 void gfx_set_state(const gfx_state *s);

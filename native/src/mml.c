@@ -38,6 +38,7 @@
 #include "quicksave.h"
 #include "clipfix.h"
 #include "sampler.h"
+#include "texreplace.h"
 #include "gte_capture.h"
 #include "frame_rec.h"
 #include "bglayer.h"
@@ -474,6 +475,8 @@ static void init(void)
                 lod_no_subdiv();
         }
     }
+    texreplace_init(g_game_dir, GetPrivateProfileIntA("textures", "replace", 1, g_ini),
+                    GetPrivateProfileIntA("textures", "dump", 0, g_ini));
     if (GetPrivateProfileIntA("debug", "clip_uv", 1, g_ini))
         clipfix_install();
     if (GetPrivateProfileIntA("debug", "quick_save", 0, g_ini)) {
