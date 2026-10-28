@@ -64,19 +64,32 @@ included, without emulation.
 
 ## Next up, before the big ports
 
-Things on the list after the controls work, roughly in no order yet:
+Things on the list after the controls work:
 
-- Screen transitions and fades that went missing with the new renderer
-- The flicker some walls and props show next to moving characters at 60 fps
-- Distant floors and walls using low detail textures until you get close
-- Optional post effects (CRT and friends) and checking ReShade works with the new renderer
+- Screen transitions and fades that went missing with the new renderer (done)
+- The flicker some walls and props show next to moving characters at 60 fps (done, plus
+  steadier frame pacing in busy places like City Hall)
+- Distant floors and walls using low detail textures until you get close (done), and walls
+  that swam when the camera got really close (done)
+- Smaller screens like the Steam Deck: the launcher shrinks to fit (done, not tried on a
+  real Deck yet)
+- Z-targeting picks enemies you can actually see, not ones behind you (done)
+- ReShade works with the new renderer, depth effects included (done)
+- RetroArch shader presets (CRT, scanlines, NTSC...) through librashader, picked in the
+  launcher. No shaders are bundled, you bring your own (done)
+- HD texture packs: dump the game's textures, drop in your own PNGs at any size (done).
+  Packs made for the PlayStation version don't line up with the PC textures, a converter
+  might come later
+- A quick save on F6 for testing (done, debug option for now)
+- An in-game options menu, so the game can be set up without the launcher (needed for
+  Android anyway)
 - Moving some HUD pieces to make better use of the wide screen
 - Title screen and pause menu touches
-- Mod support: HD textures, extra geometry precision, plus playing nice with the
-  Unfinished Business audio mod
-- Seeing what else the new renderer can realistically do (lighting, bloom, shadows, upscaling)
+- More mod support: extra geometry precision, playing nice with the Unfinished Business
+  audio mod
+- Bloom and ambient occlusion as optional effects (shadows, ray tracing and DLSS aren't
+  realistic for this game)
 - A debug room for testing (items, enemies, movement and camera test spots)
-- Smaller screens like the Steam Deck (the launcher doesn't fit there yet)
 - Looking into the Japanese PC release (Rockman DASH), maybe an undub option someday
 
 After that come the big ones: Android and Linux.
