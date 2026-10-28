@@ -46,7 +46,7 @@
 #include "bglayer.h"
 #include "watch.h"
 
-#define MML_NATIVE_BUILD "0.2.0-dev (native widescreen)"
+#define MML_NATIVE_BUILD "0.5.0-beta"
 
 static char g_game_dir[MAX_PATH];
 static char g_ini[MAX_PATH];

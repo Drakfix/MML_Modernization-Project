@@ -1,13 +1,11 @@
 # mml.dll (native runtime)
 
-This is the Frida-free version of the mod runtime. `MEGAMAN.EXE` gets one extra
-import (`mml.dll`), so Windows loads the DLL before the game starts and it
-patches the game in place. No Python, no Frida, no launcher process, and it
-should run under Wine/Proton too.
+The project's runtime. `MEGAMAN.EXE` gets one extra import (`mml.dll`), so
+Windows loads the DLL with the game and it patches the game in memory. There is
+no injector and no separate process, so it should also run under Wine/Proton.
 
-Ported so far: widescreen, the GetTickCount/frame-limiter timing fix, intro
-skip (keyboard, gamepad or bypass) and all the modern controls with the orbit
-indicator.
+In the code, the modern controls toggle is called "the orbit" (ini keys
+`orbit_start`, `key_orbit`, the `orbit` button action).
 
 Widescreen has two modes:
 
@@ -47,14 +45,14 @@ closer_factor=0.859375
 [controls]
 mode=modern          ; or vanilla
 input=sdl            ; controller through SDL3.dll, or legacy (Xidi)
-orbit_start=0        ; 1 = orbit camera on from the start
-camera_speed_x=100   ; orbit camera speed in % (y = pitch)
+orbit_start=0        ; 1 = modern controls on from the start
+camera_speed_x=100   ; camera speed in % (y = pitch)
 invert_x=0           ; 1 = inverted (invert_y likewise)
 deadzone=24          ; stick deadzone, % of full tilt
 reticle_color=FFD840 ; lock-on reticle colour (RRGGBB)
-mouse_keyboard=1     ; WASD + mouse look with the orbit camera (mouse_speed %, mouse_invert_y)
+mouse_keyboard=1     ; WASD + mouse look with modern controls (mouse_speed %, mouse_invert_y)
 key_jump=SPACE       ; keyboard remap: key_up .. key_orbit, two keys each ("W,UP")
-btn_rb=none          ; button remap for the orbit layout: btn_a .. btn_start = jump, shoot,
+btn_rb=none          ; button remap for modern controls: btn_a .. btn_start = jump, shoot,
                      ; special, talk, roll, aim, orbit, menu, select or none
 roll_speed=768       ; roll (X) speed, stock is 512
 roll_anim=50         ; roll animation plays this % faster
@@ -166,9 +164,8 @@ as triangles. Vertices that didn't need clipping keep the game's own screen
 position, so clipped polygons meet their neighbours exactly. `[video]
 terrain_clip=0` turns it off.
 
-Dev settings (`[debug]`): `remote_pad=1` lets tools press pad buttons through
-shared memory (`tools\dev\drive.ps1` uses it to play the game for screenshot
-tests), `census=1` logs what every frame draws, per ordering-table bucket,
+Dev settings (`[debug]`): `remote_pad=1` lets external test tools press pad
+buttons through shared memory (used to play the game for screenshot tests), `census=1` logs what every frame draws, per ordering-table bucket,
 `clip_census=1` logs the terrain clipper's numbers (including how far its
 rebuilt vertices land from the game's own, which should be 0), and
 `clip_near_scale=N` pushes the terrain clip plane N times further out so you can
@@ -189,11 +186,19 @@ for comparisons.
 - `src/apicensus.c` dev tool: counts every DirectDraw/Direct3D call the game makes
 - `src/packets.c` which display-list packet and bucket is being drawn (walker hooks, HUD sprite tags, deferred draws) + the census
 - `src/input.c` controller input through SDL3 (any gamepad SDL knows), fed into the game's own pad poll
-- `src/kbm.c` raw mouse input and keys for the orbit camera
+- `src/kbm.c` raw mouse input and keys for modern controls
 - `src/intro_video.c` our intro player (pl_mpeg + the D3D11 renderer + SDL3 audio)
 - `src/lockon.c` Z-targeting target choice and reticle
-- `src/controls.c` orbit camera, camera-relative movement, aim, dodge, button remap
-- `src/toast.c` the ORBIT ON/OFF indicator, drawn into the game's own HUD list
+- `src/controls.c` modern controls: free camera, camera-relative movement, aim, dodge, button remap
+- `src/toast.c` notices (modern controls on/off, quick save): gfx_ui panels, or the game's own HUD list with DDrawCompat
+- `src/gfx_ui.c`, `src/ui_style.c` our UI layer (font atlas, shapes) and its shared look
+- `src/menu.c` in-game settings menu (F1 / Back + Start) and the Back pad chords
+- `src/hints.c` shortcut banner on the title screen
+- `src/quicksave.c` quick save to slot 10 (F6 / Back + RB)
+- `src/rshader.c` RetroArch shader presets through librashader.dll
+- `src/texreplace.c` HD texture replacement and dumping
+- `src/clipfix.c` exact texture coordinates where the near plane cuts models
+- `src/sampler.c`, `src/watch.c` dev tools: sampling profiler, hardware write watchpoints
 - `src/hook.c` mid-function hooks (jump to a stub that saves registers, calls C, replays the stolen bytes)
 - `src/iat.c` import table patching (used to catch Xidi's XInput lookup)
 - `src/game.h` every game address we touch, named like `tools/ghidra/symbols.csv`
