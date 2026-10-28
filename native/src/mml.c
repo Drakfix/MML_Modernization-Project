@@ -37,6 +37,7 @@
 #include "fog.h"
 #include "lod.h"
 #include "quicksave.h"
+#include "recomp.h"
 #include "clipfix.h"
 #include "sampler.h"
 #include "texreplace.h"
@@ -459,6 +460,7 @@ static void init(void)
         if (w[0])
             watch_configure(w);
     }
+    recomp_install(g_ini);   /* [debug] recomp: recompiled game code (diff / replace) */
     g_player_log = GetPrivateProfileIntA("debug", "player_log", 0, g_ini);
     if (GetPrivateProfileIntA("debug", "census", 0, g_ini))
         census_enable();
