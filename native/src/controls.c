@@ -1320,7 +1320,7 @@ void controls_install(int modern, int intro_pad_skip)
         hook_mid(G_SITE_PLAYER_TURN_RET, sizeof player_turn_ret_bytes, player_turn_ret_bytes, on_player_turn_ret) &&
         hook_mid(G_FN_PLAYER_UPDATE, sizeof player_update_bytes, player_update_bytes, on_player_update) &&
         hook_mid(G_FN_PLAYER_APPLY_VEL, sizeof apply_velocity_bytes, apply_velocity_bytes, on_apply_velocity))
-        log_printf("controls: %s (F5 / L3 / R3 toggles the orbit camera)", modern ? "modern" : "vanilla");
+        log_printf("controls: %s (F5 / L3 / R3 toggles modern controls)", modern ? "modern" : "vanilla");
     else
         log_printf("controls: game hooks failed");
 

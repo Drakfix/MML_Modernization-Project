@@ -23,6 +23,7 @@
 #include "controls.h"
 #include "kbm.h"
 #include "log.h"
+#include "menu.h"
 #include "quicksave.h"
 #include "toast.h"
 
@@ -101,7 +102,8 @@ static void quick_save(void)
 
     if (!slot_is_ours()) {
         log_printf("quicksave: %s holds a save made elsewhere, not overwriting it", g_file);
-        toast_message("SLOT IN USE", 224, 0, 0);
+        toast_post(TOAST_ICON_WARN, TOAST_BAD, "SLOT IN USE", NULL,
+                   "Slot 10 holds a save made elsewhere, so it's left alone");
         return;
     }
     old_slot = *slot;
@@ -113,7 +115,7 @@ static void quick_save(void)
         if (f)
             fclose(f);
         log_printf("quicksave: could not write %s", g_file);
-        toast_message("SAVE FAILED", 224, 0, 0);
+        toast_post(TOAST_ICON_WARN, TOAST_BAD, "SAVE FAILED", NULL, "Couldn't write the save file (see mml.log)");
         return;
     }
     fclose(f);
@@ -123,7 +125,7 @@ static void quick_save(void)
         fclose(f);
     }
     log_printf("quicksave: saved to %s", g_file);
-    toast_message("QUICK SAVED", 0, 224, 0);
+    toast_post(TOAST_ICON_SAVE, TOAST_GOOD, "QUICK SAVED", NULL, "Slot 10 on the load screen");
 }
 
 void quicksave_install(const char *game_dir)
@@ -131,7 +133,7 @@ void quicksave_install(const char *game_dir)
     _snprintf_s(g_file, sizeof g_file, _TRUNCATE, "%s\\DASH_%d%d.MCD", game_dir, QUICK_SLOT / 5, QUICK_SLOT % 5);
     _snprintf_s(g_mark, sizeof g_mark, _TRUNCATE, "%s.quicksave", g_file);
     g_on = 1;
-    log_printf("quicksave: F6 saves to %s (the 10th slot)", g_file);
+    log_printf("quicksave: F6 or Back + RB saves to %s (the 10th slot)", g_file);
 }
 
 /* "Quick save" instead of "No data!" on a slot that does hold a save */
@@ -153,11 +155,12 @@ void quicksave_frame(void)
     label_slot();
     g_stable = controls_in_gameplay() ? g_stable + 1 : 0;
     key = kbm_key(QUICK_KEY) != 0;
-    if (key && !g_key_was) {
+    if ((key && !g_key_was) | menu_take_quicksave()) {   /* F6, or Back + RB on the pad */
         if (g_stable >= STABLE_FRAMES)
             quick_save();
         else
-            toast_message("CANT SAVE NOW", 224, 0, 0);
+            toast_post(TOAST_ICON_WARN, TOAST_BAD, "CAN'T SAVE NOW", NULL,
+                       "Only while you're in control of Mega Man");
     }
     g_key_was = key;
 }

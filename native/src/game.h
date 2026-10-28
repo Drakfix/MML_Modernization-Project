@@ -14,6 +14,7 @@
 /* camera */
 #define G_CAM_PITCH             0x77EA08u   /* u16, 12-bit angle (4096 = 360 deg) */
 #define G_CAM_YAW               0x77EA0Au
+#define G_GAME_STATE            0x6DD9BCu   /* byte: game coroutine state (2 title, 4 title menu, 5 game); +1 sub-state */
 #define G_CAM_RIG               0x77E950u   /* camera rig: +4 active (1), +5 mode (0 follow), +6 scripted */
 #define G_FN_WORLD_COLLISION    0x42CE61u   /* world_line_collision: point vs level cells, 0 = free */
 #define G_CAM_COLLISION_PARAMS  0x5110B0u   /* p3 the follow camera passes to it */

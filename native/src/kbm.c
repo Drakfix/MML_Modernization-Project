@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "kbm.h"
+#include "menu.h"
 #include "log.h"
 
 #ifndef HID_USAGE_PAGE_GENERIC
@@ -108,7 +109,7 @@ int kbm_foreground(void)
 
 int kbm_key(int vk)
 {
-    return kbm_foreground() && (GetAsyncKeyState(vk) & 0x8000) != 0;
+    return kbm_foreground() && !menu_blocks_input() && (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 
 void kbm_take_mouse(int *dx, int *dy, int *wheel_steps)
@@ -120,7 +121,7 @@ void kbm_take_mouse(int *dx, int *dy, int *wheel_steps)
     w = (int)InterlockedExchange(&g_wheel, 0) + wheel_rest;
     *wheel_steps = w / WHEEL_DELTA;
     wheel_rest = w % WHEEL_DELTA;
-    if (!kbm_foreground()) {
+    if (!kbm_foreground() || menu_blocks_input()) {
         *dx = *dy = *wheel_steps = 0;
         wheel_rest = 0;
     } else if (*dx || *dy || *wheel_steps) {

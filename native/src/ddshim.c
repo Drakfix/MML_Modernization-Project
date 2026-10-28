@@ -185,7 +185,9 @@ struct surface {
     unsigned used_frame;   /* interp census: last frame this texture was drawn with */
     DDCOLORKEY ck;
     int has_ck;
+    surface *next, *prev;   /* every live surface (ddshim_reupload_textures) */
 };
+static surface *g_surfaces;
 
 static unsigned g_frame_no = 1, g_midframe_uploads;
 int g_interp_census;
@@ -383,6 +385,12 @@ static ULONG surf_release_obj(surface *s)
         if (s->kind == K_PRIMARY && s->attached)
             surf_release_obj(s->attached);
         rec_tex_destroy(s->tex);
+        if (s->prev)
+            s->prev->next = s->next;
+        else
+            g_surfaces = s->next;
+        if (s->next)
+            s->next->prev = s->prev;
         free(s->mem);
         free(s);
     }
@@ -715,6 +723,10 @@ static surface *surf_new(ddraw *dd, int kind, int w, int h, const DDPIXELFORMAT 
     surface *s = (surface *)calloc(1, sizeof *s);
     if (!s)
         return NULL;
+    s->next = g_surfaces;
+    if (g_surfaces)
+        g_surfaces->prev = s;
+    g_surfaces = s;
     s->vt4 = vt_surf4;
     s->vt1 = vt_surf1;
     s->vtex = vt_tex2;
@@ -1985,4 +1997,13 @@ int ddshim_install(const gfx_options *opt)
     g_installed = 1;
     log_printf("ddshim: DirectDraw replaced by the Direct3D 11 renderer");
     return 1;
+}
+
+/* in-game menu: textures go through the upload (and HD replacement) again */
+void ddshim_reupload_textures(void)
+{
+    surface *s;
+    for (s = g_surfaces; s; s = s->next)
+        if (s->kind == K_TEXTURE && s->mem)
+            s->dirty = 1;
 }

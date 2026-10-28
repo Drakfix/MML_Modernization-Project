@@ -38,7 +38,7 @@ The goal is to catch anything that only works on the dev machine.
       without input.
 - [ ] Widescreen fills the monitor with no stretching (HUD proportions look right).
 - [ ] HP and special-weapon bars sit out toward the screen edges.
-- [ ] Orbit camera: F5 and L3/R3 toggle it, right stick orbits and holds position.
+- [ ] Modern controls (the orbit camera): F5 and L3/R3 toggle them, right stick orbits and holds position.
 - [ ] Movement is camera-relative, dodge roll goes in the movement direction (X).
 - [ ] LT aims, RT shoots, aim and camera stay together.
 - [ ] D-pad navigates menus.
@@ -49,7 +49,8 @@ The goal is to catch anything that only works on the dev machine.
 ## In game, alternates
 
 - [ ] 4:3 Classic mode: pillarboxed, original framing, no widescreen artifacts.
-- [ ] Vanilla controls mode: plays like the stock game, orbit toggle still available.
+- [ ] Quick save: F6 and Back + RB save to slot 10, with a notice; not in menus or scenes.
+- [ ] Vanilla controls mode: plays like the stock game, modern controls toggle still available.
 - [ ] A couple of resolution options (x1 and Display at least) and Nearest upscaling.
 - [ ] Keyboard-only play works for the vanilla layout if no controller is around.
 

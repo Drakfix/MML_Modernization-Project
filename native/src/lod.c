@@ -170,3 +170,30 @@ int lod_install(int small_tris)
         keep_small_triangles();
     return 1;
 }
+
+/* in-game menu: full detail on/off while running. Only after lod_install
+ * succeeded once (it checked every site); "off" puts the game's own
+ * thresholds and branches back. */
+static int g_lod_ok = -1;   /* -1 unknown, 0 sites unexpected, 1 fine */
+
+void lod_set(int full, int near_whole)
+{
+    static const uint32_t never = 0x7FFFFFFF;
+    static const uint8_t jle = 0x7E, jg = 0x7F, jmp = 0xEB;
+    size_t i, n = sizeof g_sites / sizeof g_sites[0];
+    if (g_lod_ok < 0) {
+        g_lod_ok = 1;
+        for (i = 0; i < n && g_lod_ok; i++) {
+            uint8_t a[2] = { 0x81, g_sites[i].modrm };
+            g_lod_ok = mem_expect(g_sites[i].at, a, 2);
+        }
+    }
+    if (!g_lod_ok)
+        return;
+    for (i = 0; i < n; i++)
+        mem_write(g_sites[i].at + 2, full ? &never : &g_sites[i].imm, 4);
+    for (i = 0; i < sizeof g_terrain / sizeof g_terrain[0]; i++)
+        mem_write(g_terrain[i].at, full ? &jmp : &jle, 1);
+    mem_write(0x434660, (full && near_whole) ? &jmp : &jg, 1);
+    log_printf("lod: %s", full ? "full detail" : "the game's own detail swaps");
+}

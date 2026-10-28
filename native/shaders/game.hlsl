@@ -136,3 +136,43 @@ float4 ps_show_depth(BlitOut i) : SV_Target
     d = d / (1000.0 - d * 999.0);
     return float4(saturate(d * 4.0).xxx, 1.0);
 }
+
+// ---- our own UI (in-game menu) over the final picture, in window pixels ----
+
+cbuffer UI : register(b0)
+{
+    float2 ui_inv_size;   // 1 / window size
+    float2 ui_pad;
+};
+
+Texture2D ui_font : register(t0);
+SamplerState ui_smp : register(s0);
+
+struct UIIn
+{
+    float2 pos : POSITION;
+    float2 uv : TEXCOORD0;
+    float4 color : COLOR0;
+};
+
+struct UIOut
+{
+    float4 pos : SV_Position;
+    float2 uv : TEXCOORD0;
+    float4 color : COLOR0;
+};
+
+UIOut vs_ui(UIIn i)
+{
+    UIOut o;
+    o.pos = float4(i.pos.x * ui_inv_size.x * 2.0 - 1.0, 1.0 - i.pos.y * ui_inv_size.y * 2.0, 0.0, 1.0);
+    o.uv = i.uv;
+    o.color = i.color;
+    return o;
+}
+
+// the font atlas holds coverage in red; texel (0,0) is solid for plain rectangles
+float4 ps_ui(UIOut i) : SV_Target
+{
+    return float4(i.color.rgb, i.color.a * ui_font.Sample(ui_smp, i.uv).r);
+}

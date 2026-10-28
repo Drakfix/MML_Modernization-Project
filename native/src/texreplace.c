@@ -35,6 +35,7 @@ typedef struct {
 static entry *g_entries;
 static int g_count, g_cap;
 static int g_replace, g_dump;
+static char g_game_dir[MAX_PATH];
 static char g_dump_dir[MAX_PATH];
 static uint32_t *g_dumped;   /* hashes dumped this session (sorted insert) */
 static int g_ndumped, g_cap_dumped;
@@ -262,6 +263,7 @@ void texreplace_init(const char *game_dir, int replace, int dump)
 {
     char dir[MAX_PATH];
     crc_init();
+    strcpy_s(g_game_dir, sizeof g_game_dir, game_dir);
     _snprintf_s(dir, sizeof dir, _TRUNCATE, "%s\\Modernization\\textures", game_dir);
     g_replace = replace;
     g_dump = dump;
@@ -277,6 +279,26 @@ void texreplace_init(const char *game_dir, int replace, int dump)
         CreateDirectoryA(g_dump_dir, NULL);
         log_printf("textures: dumping new textures to %s", g_dump_dir);
     }
+}
+
+/* in-game menu: HD pack on/off (rescans the folder when turned on) */
+void texreplace_set_replace(int on)
+{
+    int i;
+    char dir[MAX_PATH];
+    g_replace = on;
+    for (i = 0; i < g_count; i++) {
+        free(g_entries[i].path);
+        free(g_entries[i].pixels);
+    }
+    g_count = 0;
+    if (on && g_game_dir[0]) {
+        _snprintf_s(dir, sizeof dir, _TRUNCATE, "%s\\Modernization\\textures", g_game_dir);
+        scan(dir, 0);
+        if (g_count)
+            qsort(g_entries, (size_t)g_count, sizeof *g_entries, by_hash);
+    }
+    log_printf("textures: HD pack %s (%d replacements)", on ? "on" : "off", g_count);
 }
 
 int texreplace_active(void)

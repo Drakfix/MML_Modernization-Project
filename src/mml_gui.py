@@ -9,6 +9,7 @@ screen: running MEGAMAN.EXE on its own uses the last saved settings.
 It can also create a Desktop shortcut that starts the game with the saved settings
 without showing this window.
 """
+import configparser
 import ctypes
 import ctypes.wintypes
 import hashlib
@@ -69,17 +70,80 @@ import tkinter as tk  # noqa: E402
 import tkinter.font as tkfont  # noqa: E402
 
 # ---------- theme ----------
-BG = "#0c141d"
-CARD = "#16202dcc"[:7]      # solid card color (tk has no alpha)
-CARD_HI = "#1b2836"
-SEG_OFF = "#22303f"
-SEG_HOVER = "#2b3d50"
-ACCENT = "#3b96ff"
-TEXT = "#e8eef5"
-DIM = "#93a5b7"
-GREEN = "#4ad073"
-AMBER = "#e0af45"
-RED = "#e06555"
+# The in-game settings menu's look (native/src/ui_style.c): the game's HUD navy and
+# Mega Man blue, the lock-on yellow for whatever is selected, cyan edges.
+BG = "#0b1628"              # the options panel (tk frames can't be see-through, so it's solid)
+CARD = "#112139"
+CARD_EDGE = "#22456c"
+CARD_HI = "#16294a"
+SEG_OFF = "#183052"
+SEG_HOVER = "#22406a"
+ACCENT = "#5cc8ff"          # cyan: edges, the subtitle
+BLUE = "#1f66da"
+BLUE_DARK = "#0c2a6a"
+YELLOW = "#ffd23a"
+YELLOW_LO = "#ffa81c"
+NAVY = "#0a1830"
+TEXT = "#e6f0fa"
+DIM = "#8ea4bc"
+GREEN = "#62f06e"
+AMBER = "#ffb347"
+RED = "#ff6a5a"
+SHADOW = "#03070d"
+HEAD = "Segoe UI"           # display font, set to Bahnschrift in App() when Windows has it
+
+
+def mix(a, b, t):
+    """Blend two #rrggbb colours."""
+    pa = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    pb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(pa, pb))
+
+
+def chamfer(x0, y0, x1, y1, big, small):
+    """Outline points of a box with the top-right and bottom-left corners cut by `big`
+    and the other two bevelled by `small` (the in-game panels' shape)."""
+    return [x0 + small, y0, x1 - big, y0, x1, y0 + big, x1, y1 - small,
+            x1 - small, y1, x0 + big, y1, x0, y1 - big, x0, y0 + small]
+
+
+def gradient(c, y0, y1, left, right, top, bottom, tags=(), steps=24):
+    """A vertical gradient as horizontal slices; left(y)/right(y) give the shape's edges.
+    Returns [(item, t)] so the colours can be changed later (hover)."""
+    out = []
+    for i in range(steps):
+        ya, yb = y0 + (y1 - y0) * i / steps, y0 + (y1 - y0) * (i + 1) / steps
+        t = i / max(1, steps - 1)
+        item = c.create_polygon(left(ya), ya, right(ya), ya, right(yb), yb, left(yb), yb,
+                                fill=mix(top, bottom, t), outline="", tags=tags)
+        out.append((item, t))
+    return out
+
+
+def outlined_text(c, x, y, text, font, fill="white", outline=NAVY, o=2, tags=(), anchor="nw"):
+    """Text with a dark outline and drop shadow, like the game's title lettering."""
+    c.create_text(x + o + 1, y + o + 1, text=text, font=font, fill=SHADOW, anchor=anchor, tags=tags)
+    for dx, dy in ((-o, 0), (o, 0), (0, -o), (0, o), (-o, -o), (o, -o), (-o, o), (o, o)):
+        c.create_text(x + dx, y + dy, text=text, font=font, fill=outline, anchor=anchor, tags=tags)
+    return c.create_text(x, y, text=text, font=font, fill=fill, anchor=anchor, tags=tags)
+
+
+def brackets(c, x0, y0, x1, y1, size=26, width=3):
+    """Yellow corner brackets on the top-left and bottom-right."""
+    g = 4
+    c.create_line(x0 - g, y0 + size, x0 - g, y0 - g, x0 + size, y0 - g, fill=YELLOW, width=width)
+    c.create_line(x1 + g, y1 - size, x1 + g, y1 + g, x1 - size, y1 + g, fill=YELLOW, width=width)
+
+
+def panel_frame(c, x0, y0, x1, y1, big, small, fill=None):
+    """An in-game style panel: drop shadow, optional fill, cyan double edge, brackets."""
+    c.create_polygon(chamfer(x0 + 6, y0 + 8, x1 + 6, y1 + 8, big, small), fill=SHADOW, outline="")
+    if fill:
+        c.create_polygon(chamfer(x0, y0, x1, y1, big, small), fill=fill, outline="")
+    c.create_polygon(chamfer(x0, y0, x1, y1, big, small), fill="", outline=ACCENT, width=2)
+    c.create_polygon(chamfer(x0 + 5, y0 + 5, x1 - 5, y1 - 5, big - 2, max(0, small - 2)), fill="",
+                     outline="#1f4a72", width=1)
+    brackets(c, x0, y0, x1, y1)
 
 W, H = 1010, 930
 ART_X, ART_Y = 28, 86
@@ -117,25 +181,25 @@ DEFAULTS = {"renderer": "mml", "window": "fullscreen",
             "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display",
             "mouse": "100", "shader": "", "shader_res": "game", "texpack": "on", "texdump": "off"}
 
-# button remapping (orbit-camera layout): physical input -> action, mml.ini [controls] btn_*
+# button remapping (modern controls): physical input -> action, mml.ini [controls] btn_*
 BUTTONS = [("btn_a", "A", "Cross"), ("btn_b", "B", "Circle"), ("btn_x", "X", "Square"),
            ("btn_y", "Y", "Triangle"), ("btn_lb", "LB", "L1"), ("btn_rb", "RB", "R1"),
            ("btn_lt", "LT", "L2"), ("btn_rt", "RT", "R2"), ("btn_l3", "L3", "stick"),
            ("btn_r3", "R3", "stick"), ("btn_back", "Back", "Share / −"),
            ("btn_start", "Start", "Options / +")]
 ACTIONS = [("jump", "Jump"), ("shoot", "Shoot"), ("special", "Special"), ("talk", "Talk / check"),
-           ("roll", "Roll"), ("aim", "Aim / lock-on"), ("orbit", "Orbit camera"),
+           ("roll", "Roll"), ("aim", "Aim / lock-on"), ("orbit", "Modern on/off"),
            ("menu", "Menu"), ("select", "Select"), ("none", "Nothing")]
 BUTTON_DEFAULTS = {"btn_a": "jump", "btn_b": "special", "btn_x": "roll", "btn_y": "talk", "btn_lb": "aim",
                    "btn_rb": "none", "btn_lt": "aim", "btn_rt": "shoot", "btn_l3": "orbit", "btn_r3": "orbit",
                    "btn_back": "select", "btn_start": "menu"}
 DEFAULTS.update(BUTTON_DEFAULTS)
 
-# keyboard + mouse bindings (orbit layout): slot -> "KEY" or "KEY,KEY", mml.ini [controls] key_*
+# keyboard + mouse bindings (modern controls): slot -> "KEY" or "KEY,KEY", mml.ini [controls] key_*
 KEY_SLOTS = [("key_up", "Forward"), ("key_down", "Back"), ("key_left", "Left"), ("key_right", "Right"),
              ("key_walk", "Walk (hold)"), ("key_jump", "Jump"), ("key_shoot", "Shoot"), ("key_aim", "Aim / lock"),
              ("key_roll", "Roll"), ("key_talk", "Talk / check"), ("key_special", "Special"), ("key_menu", "Menu"),
-             ("key_select", "Select"), ("key_orbit", "Orbit camera")]
+             ("key_select", "Select"), ("key_orbit", "Modern on/off")]
 KEY_DEFAULTS = {"key_up": "W,UP", "key_down": "S,DOWN", "key_left": "A,LEFT", "key_right": "D,RIGHT",
                 "key_walk": "LCTRL", "key_jump": "SPACE", "key_shoot": "MOUSE1", "key_aim": "MOUSE2",
                 "key_roll": "LSHIFT", "key_talk": "E", "key_special": "Q", "key_menu": "TAB",
@@ -190,7 +254,80 @@ def load_settings():
     except Exception:
         pass
     s["res"] = LEGACY_RES.get(s["res"], s["res"])
+    import_mml_ini(s)
     return s
+
+
+def import_mml_ini(s):
+    """Pick up what the in-game settings menu (F1) saved to mml.ini, so the next PLAY
+    doesn't put the launcher's older values back."""
+    if not GAME_DIR:
+        return
+    ini = configparser.ConfigParser(strict=False, interpolation=None)
+    try:
+        ini.read(os.path.join(GAME_DIR, "mml.ini"), encoding="utf-8")
+    except (configparser.Error, OSError):
+        return
+
+    def get(sec, key):
+        try:
+            return ini.get(sec, key).strip()
+        except (configparser.Error, ValueError):
+            return None
+
+    def num(sec, key):
+        v = get(sec, key)
+        return int(v) if v and v.lstrip("-").isdigit() else None
+
+    v = num("video", "interp")
+    if v is not None:
+        s["fps"] = "60" if v else "30"
+    v = num("video", "render_scale")
+    if v is not None:
+        s["res"] = "display" if v <= 0 else f"app({v})"
+    v = num("video", "msaa")
+    if v is not None:
+        s["aa"] = {4: "msaa4x", 8: "msaa8x"}.get(v, "off")
+    v = num("video", "anisotropy")
+    if v is not None:
+        if v >= 16:
+            s["texfilter"] = "af16x"
+        elif s["texfilter"] == "af16x":
+            s["texfilter"] = "trilinear"
+    v = num("video", "nearest_upscale")
+    if v is not None:
+        s["scalefilter"] = "nearest" if v else "bilinear"
+    v = get("video", "fog")
+    if v in ("original", "light", "off"):
+        s["fog"] = v
+    v = get("video", "lod")
+    if v in ("full", "original"):
+        s["lod"] = v
+    v = get("video", "shader")
+    if v is not None:
+        s["shader"] = v
+    v = num("video", "shader_scale")
+    if v is not None:
+        s["shader_res"] = "game" if v else "display"
+    v = num("textures", "replace")
+    if v is not None:
+        s["texpack"] = "on" if v else "off"
+    v = num("controls", "camera_speed_x")
+    if v is not None:
+        s["cam_speed"] = str(v)
+    for key in ("invert_x", "invert_y"):
+        v = num("controls", key)
+        if v is not None:
+            s[key] = "on" if v else "off"
+    v = num("controls", "mouse_keyboard")
+    if v == 0:
+        s["mouse"] = "off"
+    elif v is not None:
+        sp = num("controls", "mouse_speed")
+        s["mouse"] = str(sp) if sp else "100"
+    v = get("controls", "reticle_color")
+    if v:
+        s["reticle"] = v.lstrip("#").upper()
 
 
 def save_settings(s):
@@ -433,7 +570,7 @@ class Segmented(tk.Frame):
         cur = self.store[self.key]
         for value, b in self.buttons.items():
             if value == cur:
-                b.configure(bg=ACCENT, fg="white", font=("Segoe UI", 10, "bold"))
+                b.configure(bg=YELLOW, fg=NAVY, font=("Segoe UI", 10, "bold"))
             else:
                 b.configure(bg=SEG_OFF, fg=DIM, font=("Segoe UI", 10))
 
@@ -465,52 +602,79 @@ class App:
         except Exception:
             pass
 
+        global HEAD
+        if "Bahnschrift" in tkfont.families(root):
+            HEAD = "Bahnschrift"
         c = self.canvas = tk.Canvas(root, width=W, height=self.h, highlightthickness=0, bd=0, bg=BG)
         c.pack()
         self.img_bg = tk.PhotoImage(file=self.res_path("gui_bg.png"))
-        self.img_art = tk.PhotoImage(file=self.res_path("gui_art_round.png"))
-        self.img_play = tk.PhotoImage(file=self.res_path("gui_play.png"))
-        self.img_play_hot = tk.PhotoImage(file=self.res_path("gui_play_hot.png"))
         c.create_image(0, 0, image=self.img_bg, anchor="nw")
-        if art_bottom - ART_Y < self.img_art.height():   # keep the top of the art (faces, the Flutter)
-            art = tk.PhotoImage(width=self.img_art.width(), height=art_bottom - ART_Y)
-            art.tk.call(art, "copy", self.img_art, "-from", 0, 0, self.img_art.width(), art_bottom - ART_Y)
-            self.img_art = art
-        c.create_image(ART_X, ART_Y, image=self.img_art, anchor="nw")
 
-        # title block (drawn on the blur, with soft shadow), stacked by real line heights
-        # so it doesn't overlap at higher Windows scaling (at 100% it lands on 62/94/114/140)
-        ls_title = tkfont.Font(family="Segoe UI", size=23, weight="bold").metrics("linespace")
+        # the cover art in an in-game style frame: its old border cropped off, the corners cut
+        # (on short screens only the top is kept: faces, the Flutter)
+        src = tk.PhotoImage(file=self.res_path("gui_art_round.png"))
+        aw, ah = src.width() - 6, min(src.height() - 6, art_bottom - ART_Y - 6)
+        self.img_art = tk.PhotoImage(width=aw, height=ah)
+        self.img_art.tk.call(self.img_art, "copy", src, "-from", 3, 3, 3 + aw, 3 + ah)
+        big, small = 40, 20
+        for y in range(big):
+            for x in range(big - y):
+                for px, py in ((aw - 1 - x, y), (x, ah - 1 - y)):   # top right, bottom left
+                    self.img_art.tk.call(self.img_art, "transparency", "set", px, py, 1)
+                if x < small - y and y < small:   # top left, bottom right
+                    self.img_art.tk.call(self.img_art, "transparency", "set", x, y, 1)
+                    self.img_art.tk.call(self.img_art, "transparency", "set", aw - 1 - x, ah - 1 - y, 1)
+        panel_frame(c, ART_X, ART_Y, ART_X + aw + 6, ART_Y + ah + 6, big + 2, small + 2, fill=NAVY)
+        c.create_image(ART_X + 3, ART_Y + 3, image=self.img_art, anchor="nw")
+
+        # title block: a Mega Man blue band with the name, hazard stripes, the subtitle;
+        # stacked by real line heights so it doesn't overlap at higher Windows scaling
+        f_title = (HEAD, 24, "bold italic")
+        ls_title = tkfont.Font(family=HEAD, size=24, weight="bold", slant="italic").metrics("linespace")
         ls_small = tkfont.Font(family="Segoe UI", size=10, weight="bold").metrics("linespace")
-        sub_y = 24 + ls_title - 3
-        status_y = sub_y + ls_small + 14
-        col_y = status_y + 2 * ls_small + 10
-        c.create_text(COL_X + 2, 24 + 2, text="MEGA MAN LEGENDS", anchor="nw",
-                      font=("Segoe UI", 23, "bold"), fill="#04080d")
-        c.create_text(COL_X, 24, text="MEGA MAN LEGENDS", anchor="nw",
-                      font=("Segoe UI", 23, "bold"), fill=TEXT)
-        c.create_text(COL_X + 2, sub_y, text=f"M O D E R N I Z A T I O N   P R O J E C T    v{VERSION}",
-                      anchor="nw", font=("Segoe UI", 10, "bold"), fill=ACCENT)
+        band_y, band_h = 16, ls_title + 8
+        band_x0 = COL_X - 12
+        band_x1 = band_x0 + tkfont.Font(family=HEAD, size=24, weight="bold", slant="italic").measure(
+            "MEGA MAN LEGENDS") + 60
+        lean = band_h * 0.5
+        gradient(c, band_y, band_y + band_h, lambda y: band_x0,
+                 lambda y: band_x1 - lean * (y - band_y) / band_h, BLUE, BLUE_DARK)
+        c.create_rectangle(band_x0, band_y + band_h - 3, band_x1 - lean, band_y + band_h, fill=YELLOW, width=0)
+        outlined_text(c, COL_X + 2, band_y + 4, "MEGA MAN LEGENDS", f_title, fill="white", outline="#061226")
+        sx, sy, sh = band_x1 + 6, band_y + band_h - 12, 12   # hazard stripes after the band
+        while sx + 22 <= COL_X + COL_W + 12:
+            c.create_polygon(sx + sh, sy, sx + sh + 11, sy, sx + 11, sy + sh, sx, sy + sh, fill=YELLOW, outline="")
+            sx += 20
+        c.create_text(COL_X + COL_W + 12, band_y + 2, anchor="ne", fill=DIM, font=("Segoe UI", 9),
+                      text=f"v{VERSION}")
+        sub_y = band_y + band_h + 8
+        c.create_text(COL_X, sub_y, text="M O D E R N I Z A T I O N    P R O J E C T", anchor="nw",
+                      font=(HEAD, 11, "bold italic"), fill=ACCENT)
+        status_y = sub_y + ls_small + 12
+        col_y = status_y + 2 * ls_small + 26
         c.create_text(ART_X + 4, 30, anchor="nw", fill=DIM, font=("Segoe UI", 10),
-                      text="1997 Capcom PC port · widescreen · twin-stick · fixed audio")
+                      text="1997 Capcom PC port · widescreen · modern controls · fixed audio")
 
         # status lines (canvas texts, colored dynamically)
         self.exe_item = c.create_text(COL_X, status_y, anchor="nw", font=("Segoe UI", 10), fill=DIM, text="…")
         self.pad_item = c.create_text(COL_X, status_y + ls_small + 2, anchor="nw", font=("Segoe UI", 10),
                                       fill=DIM, text="…")
 
-        # options column (frame hosted on the canvas): a tab bar over three pages
+        # options column (frame hosted on the canvas) on an in-game style panel: a tab bar
+        # over four pages
+        panel_bottom = self.h - 8 if compact else play_y - 16 - (46 if FROZEN else 0) - 4
+        panel_frame(c, COL_X - 14, col_y - 14, COL_X + COL_W + 14, panel_bottom, 26, 12, fill=BG)
         col = tk.Frame(root, bg=BG)
         c.create_window(COL_X, col_y, window=col, anchor="nw", width=COL_W)
         tabs = tk.Frame(col, bg=BG)
-        tabs.pack(fill="x", pady=(0, 4))
+        tabs.pack(fill="x", pady=(0, 6))
         self.pages = {}
         for key in ("display", "graphics", "controls", "buttons"):
             self.pages[key] = tk.Frame(col, bg=BG)
         page = [self.pages["display"]]
 
         def option(label, key, choices, hint=None, row=None, side=None):
-            card = tk.Frame(row or page[0], bg=CARD)
+            card = tk.Frame(row or page[0], bg=CARD, highlightthickness=1, highlightbackground=CARD_EDGE)
             if row:   # half-width card sharing a row with another
                 card.pack(side="left", fill="both", expand=True,
                           padx=(0, 2) if side == "left" else (2, 0))
@@ -519,7 +683,7 @@ class App:
             top = tk.Frame(card, bg=CARD)
             top.pack(fill="x", padx=10, pady=(5, 0))
             tk.Label(top, text=label, bg=CARD, fg=TEXT,
-                     font=("Segoe UI", 10, "bold")).pack(side="left")
+                     font=(HEAD, 11, "bold")).pack(side="left")
             if hint:
                 tk.Label(top, text="  " + hint, bg=CARD, fg=DIM,
                          font=("Segoe UI", 9)).pack(side="left")
@@ -568,10 +732,10 @@ class App:
         # ---- Controls ----
         page[0] = self.pages["controls"]
         option("Controls", "controls",
-               [("Modern twin-stick", "modern"), ("Vanilla (1997)", "vanilla")],
-               "LT aim/lock-on · RT shoot · X roll · L3/R3 orbit")
+               [("Modern", "modern"), ("Vanilla (1997)", "vanilla")],
+               "LT lock-on · RT shoot · X roll · L3/R3 modern on/off")
         r = pair()
-        option("Orbit camera at start", "orbit_start", [("Off", "off"), ("On", "on")], row=r, side="left")
+        option("Modern controls at start", "orbit_start", [("Off", "off"), ("On", "on")], row=r, side="left")
         option("Controller", "input", [("Any (SDL)", "sdl"), ("Legacy", "legacy")], row=r, side="right")
         option("Camera speed", "cam_speed",
                [("50%", "50"), ("75%", "75"), ("100%", "100"), ("125%", "125"), ("150%", "150"), ("200%", "200")])
@@ -592,25 +756,50 @@ class App:
         # ---- Buttons ----
         self.buttons_page(self.pages["buttons"])
 
-        # tab bar
-        self.tab_buttons = {}
-        for i, (label, key) in enumerate((("Display", "display"), ("Graphics", "graphics"),
-                                          ("Controls", "controls"), ("Buttons", "buttons"))):
-            b = tk.Label(tabs, text=label, padx=18, pady=6, cursor="hand2", bd=0,
-                         font=("Segoe UI", 11, "bold"))
-            b.pack(side="left", padx=(0 if i == 0 else 4, 0))
-            b.bind("<Button-1>", lambda e, k=key: self.show_tab(k))
-            self.tab_buttons[key] = b
+        # tab bar: slanted tabs like the in-game menu's, the open one in yellow
+        f_tab = (HEAD, 11, "bold italic")
+        th = tkfont.Font(family=HEAD, size=11, weight="bold").metrics("linespace") + 14
+        tc = tk.Canvas(tabs, width=COL_W, height=th, bg=BG, highlightthickness=0, bd=0)
+        tc.pack(fill="x")
+        names = (("Display", "display"), ("Graphics", "graphics"), ("Controls", "controls"), ("Buttons", "buttons"))
+        slant, gap = th * 0.4, 6
+        tw = (COL_W - slant - gap * (len(names) - 1)) / len(names)
+        self.tab_canvas, self.tab_items = tc, {}
+        for i, (label, key) in enumerate(names):
+            x = i * (tw + gap)
+            poly = tc.create_polygon(x + slant, 0, x + tw + slant, 0, x + tw, th, x, th, outline="", tags=key)
+            txt = tc.create_text(x + (tw + slant) / 2, th / 2, text=label.upper(), font=f_tab, tags=key)
+            tc.tag_bind(key, "<Button-1>", lambda e, k=key: self.show_tab(k))
+            tc.tag_bind(key, "<Enter>", lambda e, k=key: self.hover_tab(k, True))
+            tc.tag_bind(key, "<Leave>", lambda e, k=key: self.hover_tab(k, False))
+            self.tab_items[key] = (poly, txt)
+        tc.configure(cursor="hand2")
         self.show_tab(self.settings.get("tab", "display"))
 
-        # PLAY pill (canvas image + text, hover swap)
-        self.play_img = c.create_image(play_x, play_y, image=self.img_play, anchor="nw")
-        self.play_txt = c.create_text(play_x + 234, play_y + 30, text="▶   P L A Y",
-                                      font=("Segoe UI", 15, "bold"), fill="white")
-        for item in (self.play_img, self.play_txt):
-            c.tag_bind(item, "<Button-1>", lambda e: self.launch())
-            c.tag_bind(item, "<Enter>", lambda e: c.itemconfigure(self.play_img, image=self.img_play_hot))
-            c.tag_bind(item, "<Leave>", lambda e: c.itemconfigure(self.play_img, image=self.img_play))
+        # PLAY: a slanted Mega Man blue plate with a yellow arrow, brighter on hover
+        pw, ph, pl = 468, 62, 22
+        self.play_slices = gradient(c, play_y, play_y + ph, lambda y: play_x + pl * (1 - (y - play_y) / ph),
+                                    lambda y: play_x + pw - pl * ((y - play_y) / ph), BLUE, BLUE_DARK, tags="play")
+        self.play_edge = c.create_polygon(play_x + pl, play_y, play_x + pw, play_y, play_x + pw - pl, play_y + ph,
+                                          play_x, play_y + ph, fill="", outline=ACCENT, width=2, tags="play")
+        cx, cy = play_x + pw / 2, play_y + ph / 2
+        f_play = (HEAD, 20, "bold italic")
+        label_w = tkfont.Font(family=HEAD, size=20, weight="bold", slant="italic").measure("P L A Y")
+        ax = cx - label_w / 2 - 22
+        c.create_polygon(ax - 9, cy - 12, ax + 11, cy, ax - 9, cy + 12, fill=YELLOW, outline=NAVY, width=2,
+                         tags="play")
+        outlined_text(c, cx + 12, cy, "P L A Y", f_play, fill="white", outline="#061226", tags="play",
+                      anchor="center")
+        brackets(c, play_x + pl, play_y, play_x + pw - pl, play_y + ph, size=18)
+
+        def play_hover(on):
+            top, bottom = ("#3a86f0", "#1546a8") if on else (BLUE, BLUE_DARK)
+            for item, t in self.play_slices:
+                c.itemconfigure(item, fill=mix(top, bottom, t))
+            c.itemconfigure(self.play_edge, outline=YELLOW if on else ACCENT)
+        c.tag_bind("play", "<Button-1>", lambda e: self.launch())
+        c.tag_bind("play", "<Enter>", lambda e: play_hover(True))
+        c.tag_bind("play", "<Leave>", lambda e: play_hover(False))
         # one-click direct-play shortcut, as a proper secondary button (frozen exe only -
         # a shortcut to python.exe --play wouldn't work in the dev tree).
         if FROZEN:
@@ -645,14 +834,24 @@ class App:
         for p in self.pages.values():
             p.pack_forget()
         self.pages[key].pack(fill="x")
-        for k, b in self.tab_buttons.items():
-            b.configure(bg=CARD if k == key else BG, fg="white" if k == key else DIM)
+        self.tab = key
+        for k in self.tab_items:
+            self.hover_tab(k, False)
         if self.settings.get("tab") != key:
             self.settings["tab"] = key
             save_settings(self.settings)
 
+    def hover_tab(self, key, on):
+        poly, txt = self.tab_items[key]
+        if key == getattr(self, "tab", None):
+            fill, fg = YELLOW, NAVY
+        else:
+            fill, fg = (SEG_HOVER, TEXT) if on else (SEG_OFF, DIM)
+        self.tab_canvas.itemconfigure(poly, fill=fill)
+        self.tab_canvas.itemconfigure(txt, fill=fg)
+
     def buttons_page(self, parent):
-        """Controller and keyboard remapping (orbit-camera layout), one view at a time."""
+        """Controller and keyboard remapping (modern controls), one view at a time."""
         switch = tk.Frame(parent, bg=BG)
         switch.pack(fill="x", pady=(0, 2))
         self.btn_views = {"pad": tk.Frame(parent, bg=BG), "keys": tk.Frame(parent, bg=BG)}
@@ -670,16 +869,16 @@ class App:
         save_settings(self.settings)
 
     def pad_buttons(self, parent):
-        head = tk.Frame(parent, bg=CARD)
+        head = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=CARD_EDGE)
         head.pack(fill="x", pady=2)
         top = tk.Frame(head, bg=CARD)
         top.pack(fill="x", padx=10, pady=(6, 0))
-        tk.Label(top, text="Buttons", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(top, text="Buttons", bg=CARD, fg=TEXT, font=(HEAD, 11, "bold")).pack(side="left")
         reset = tk.Label(top, text="Reset to default", bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9), padx=10,
                          pady=2, cursor="hand2")
         reset.pack(side="right")
-        tk.Label(head, text="Used while the orbit camera is on. Menus and the classic camera keep the "
-                            "original buttons.", bg=CARD, fg=DIM, font=("Segoe UI", 9), wraplength=440,
+        tk.Label(head, text="Used while modern controls are on. Menus and classic controls keep the "
+                            "original buttons. Back + Start opens the settings, Back + RB quick saves.", bg=CARD, fg=DIM, font=("Segoe UI", 9), wraplength=440,
                  justify="left").pack(anchor="w", padx=10, pady=(2, 7))
         reset.bind("<Button-1>", lambda e: self.reset_buttons())
         reset.bind("<Enter>", lambda e: reset.configure(bg=SEG_HOVER))
@@ -690,7 +889,7 @@ class App:
         grid = tk.Frame(parent, bg=BG)
         grid.pack(fill="x")
         for i, (key, pad, ps) in enumerate(BUTTONS):
-            card = tk.Frame(grid, bg=CARD)
+            card = tk.Frame(grid, bg=CARD, highlightthickness=1, highlightbackground=CARD_EDGE)
             card.grid(row=i // 2, column=i % 2, sticky="nsew", padx=(0, 2) if i % 2 == 0 else (2, 0), pady=2)
             name = tk.Frame(card, bg=CARD)
             name.pack(side="left", padx=(10, 6), pady=4)
@@ -708,11 +907,11 @@ class App:
 
     def key_buttons(self, parent):
         """Keyboard + mouse bindings: two keys per action, click one and press the new key."""
-        head = tk.Frame(parent, bg=CARD)
+        head = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=CARD_EDGE)
         head.pack(fill="x", pady=2)
         top = tk.Frame(head, bg=CARD)
         top.pack(fill="x", padx=10, pady=(6, 0))
-        tk.Label(top, text="Keyboard & mouse", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(top, text="Keyboard & mouse", bg=CARD, fg=TEXT, font=(HEAD, 11, "bold")).pack(side="left")
         reset = tk.Label(top, text="Reset to default", bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9), padx=10,
                          pady=2, cursor="hand2")
         reset.pack(side="right")
@@ -721,16 +920,16 @@ class App:
         reset.bind("<Leave>", lambda e: reset.configure(bg=SEG_OFF))
         tk.Label(head, text="Click a key, then press the new key or mouse button (Esc cancels, Delete clears). "
                             "Mouse look and the wheel (next target) are fixed. While these are used the "
-                            "game's own keyboard keys rest; menus keep them.",
+                            "game's own keyboard keys rest; menus keep them. F1 opens the settings, F6 quick saves.",
                  bg=CARD, fg=DIM, font=("Segoe UI", 9), wraplength=440, justify="left").pack(
             anchor="w", padx=10, pady=(2, 7))
         grid = tk.Frame(parent, bg=BG)
         grid.pack(fill="x")
         self.key_btns = {}
         for i, (key, label) in enumerate(KEY_SLOTS):
-            card = tk.Frame(grid, bg=CARD)
+            card = tk.Frame(grid, bg=CARD, highlightthickness=1, highlightbackground=CARD_EDGE)
             card.grid(row=i // 2, column=i % 2, sticky="nsew", padx=(0, 2) if i % 2 == 0 else (2, 0), pady=2)
-            tk.Label(card, text=label, bg=CARD, fg=TEXT, font=("Segoe UI", 9, "bold"), width=10,
+            tk.Label(card, text=label, bg=CARD, fg=TEXT, font=("Segoe UI", 9, "bold"), width=12,
                      anchor="w").pack(side="left", padx=(10, 2), pady=7)
             for slot in (0, 1):
                 b = tk.Label(card, text="", bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 9), width=7 if slot == 0 else 6,
@@ -760,7 +959,7 @@ class App:
 
     def capture_key(self, key, slot):
         b = self.key_btns[(key, slot)]
-        b.configure(text="press…", bg=ACCENT, fg="white")
+        b.configure(text="press…", bg=YELLOW, fg=NAVY)
         root = self.root
 
         def done():
@@ -802,7 +1001,7 @@ class App:
         text = tk.Label(box, textvariable=var, bg=SEG_OFF, fg=TEXT, font=("Segoe UI", 10), anchor="w",
                         padx=9, pady=4, cursor="hand2", width=12)
         text.pack(side="left", fill="x", expand=True)
-        menu = tk.Menu(box, tearoff=0, bg=CARD_HI, fg=TEXT, activebackground=ACCENT, activeforeground="white",
+        menu = tk.Menu(box, tearoff=0, bg=CARD_HI, fg=TEXT, activebackground=BLUE, activeforeground="white",
                        bd=0, font=("Segoe UI", 10))
         for c in choices:
             menu.add_command(label=c, command=lambda c=c: (var.set(c), on_pick(c)))
@@ -832,11 +1031,11 @@ class App:
 
     def reticle_card(self, parent):
         """Lock-on reticle colour: preset swatches plus the Windows colour dialog."""
-        card = tk.Frame(parent, bg=CARD)
+        card = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=CARD_EDGE)
         card.pack(fill="x", pady=2)
         top = tk.Frame(card, bg=CARD)
         top.pack(fill="x", padx=10, pady=(5, 0))
-        tk.Label(top, text="Lock-on reticle", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(top, text="Lock-on reticle", bg=CARD, fg=TEXT, font=(HEAD, 11, "bold")).pack(side="left")
         tk.Label(top, text="  marker on the locked enemy", bg=CARD, fg=DIM,
                  font=("Segoe UI", 9)).pack(side="left")
         row = tk.Frame(card, bg=CARD)
@@ -855,11 +1054,11 @@ class App:
 
     def shader_card(self, parent):
         """RetroArch shader preset (.slangp) for the final picture: CRT, scanlines, NTSC..."""
-        card = tk.Frame(parent, bg=CARD)
+        card = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=CARD_EDGE)
         card.pack(fill="x", pady=2)
         top = tk.Frame(card, bg=CARD)
         top.pack(fill="x", padx=10, pady=(5, 0))
-        tk.Label(top, text="Shader", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(top, text="Shader", bg=CARD, fg=TEXT, font=(HEAD, 11, "bold")).pack(side="left")
         tk.Label(top, text="  RetroArch presets (.slangp): CRT, scanlines, NTSC...", bg=CARD, fg=DIM,
                  font=("Segoe UI", 9)).pack(side="left")
         row = tk.Frame(card, bg=CARD)
@@ -883,11 +1082,11 @@ class App:
 
     def texture_card(self, parent):
         """HD texture packs (Modernization/textures) and dumping the originals for pack makers."""
-        card = tk.Frame(parent, bg=CARD)
+        card = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=CARD_EDGE)
         card.pack(fill="x", pady=2)
         top = tk.Frame(card, bg=CARD)
         top.pack(fill="x", padx=10, pady=(5, 0))
-        tk.Label(top, text="Textures", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(top, text="Textures", bg=CARD, fg=TEXT, font=(HEAD, 11, "bold")).pack(side="left")
         tk.Label(top, text="  HD packs: PNGs in Modernization\\textures", bg=CARD, fg=DIM,
                  font=("Segoe UI", 9)).pack(side="left")
         row = tk.Frame(card, bg=CARD)
@@ -915,11 +1114,11 @@ class App:
 
     def refresh_shader(self):
         cur = self.settings.get("shader", "")
-        self.shader_off.configure(bg=ACCENT if not cur else SEG_OFF, fg="white" if not cur else TEXT)
+        self.shader_off.configure(bg=YELLOW if not cur else SEG_OFF, fg=NAVY if not cur else TEXT)
         name = os.path.splitext(os.path.basename(cur))[0] if cur else ""
         if len(name) > 30:
             name = name[:29] + "…"
-        self.shader_pick.configure(text=name or "Choose preset…", bg=ACCENT if cur else SEG_OFF,
+        self.shader_pick.configure(text=name or "Choose preset…", bg=YELLOW if cur else SEG_OFF,
                                    fg="white" if cur else TEXT)
 
     def set_shader(self, path):
@@ -948,9 +1147,9 @@ class App:
     def refresh_reticle(self):
         cur = reticle_hex(self.settings)
         for hexcol, sw in self.ret_swatches.items():
-            sw.configure(highlightbackground=ACCENT if hexcol == cur else CARD)
+            sw.configure(highlightbackground=YELLOW if hexcol == cur else CARD)
         custom = cur not in self.ret_swatches
-        self.ret_custom.configure(highlightbackground=ACCENT if custom else CARD,
+        self.ret_custom.configure(highlightbackground=YELLOW if custom else CARD,
                                   bg=("#" + cur) if custom else SEG_OFF,
                                   fg="black" if custom else TEXT)
 
@@ -1019,7 +1218,7 @@ class App:
         self.proc = start_game(self.settings)
         self.canvas.itemconfigure(
             self.foot_item,
-            text="Launched!  F5 or L3/R3 = orbit camera · any button skips the intro")
+            text="Launched!  F5 or L3/R3 = modern controls on/off · any button skips the intro")
         # the game runs on its own now (mml.dll loads with it); nothing left to do here
         self.root.after(1500, self.root.destroy)
 

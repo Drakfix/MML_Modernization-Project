@@ -27,6 +27,7 @@
 #include "game.h"
 #include "hook.h"
 #include "input.h"
+#include "menu.h"
 #include "log.h"
 
 typedef unsigned char sdl_bool;   /* C99 bool, returned in AL */
@@ -312,6 +313,11 @@ static void on_poll_entry(regs_t *r)
     read_gamepad();
     p = g_raw;
     conn = controls_debug_overlay(&p, g_connected);
+    menu_filter_buttons(&p.wButtons);
+    if (menu_blocks_input()) {   /* the in-game menu has the controls */
+        memset(&p, 0, sizeof p);
+        memset(&g_raw, 0, sizeof g_raw);
+    }
     if (!conn && controls_kbm_active()) {   /* no controller: keyboard/mouse still drive the modern layout */
         memset(&p, 0, sizeof p);
         conn = 1;
@@ -329,7 +335,7 @@ static void on_poll_keyboard(regs_t *r)
     /* orbit gameplay with keyboard+mouse: the game's own keyboard bindings stand
      * down (remapped keys can't double up); its binding loop stops at the first
      * empty slot, so blank slot 0 for this poll and put it back right after */
-    if (controls_mute_game_keys()) {
+    if (controls_mute_game_keys() || menu_blocks_input()) {
         g_kb_saved = *(volatile uint8_t *)G_KB_BINDINGS;
         if (g_kb_saved) {
             *(volatile uint8_t *)G_KB_BINDINGS = 0;
@@ -381,6 +387,20 @@ static void on_poll_done(regs_t *r)
 int input_sdl_active(void)
 {
     return g_active && g_ready;
+}
+
+int input_sdl_snapshot(pad_t *out)
+{
+    int c;
+    if (!input_sdl_active()) {
+        memset(out, 0, sizeof *out);
+        return 0;
+    }
+    EnterCriticalSection(&g_cs);
+    *out = g_snap;
+    c = g_snap_connected;
+    LeaveCriticalSection(&g_cs);
+    return c;
 }
 
 int input_sdl_pad(pad_t *out)

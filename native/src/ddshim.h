@@ -13,3 +13,4 @@ extern int g_drop_clamped;
 
 /* Bring the renderer up early for our intro player (see intro_video.c). */
 int ddshim_video_begin(HWND w);
+void ddshim_reupload_textures(void);   /* in-game menu: re-run every texture through the upload */

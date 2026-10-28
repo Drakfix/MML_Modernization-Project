@@ -131,6 +131,31 @@ static int build_chain(ID3D11Device *dev, const char *preset_path)
     return 1;
 }
 
+int rshader_reload(ID3D11Device *dev, const char *game_dir, const char *preset_path)
+{
+    if (g_chain) {
+        L.chain_free(&g_chain);
+        g_chain = NULL;
+    }
+    g_failed_frames = 0;
+    g_frame_count = 0;
+    if (!preset_path || !preset_path[0])
+        return 1;
+    if (!L.chain_create && !load_library(game_dir))
+        return 0;
+    g_job.dev = dev;
+    g_job.path = preset_path;
+    g_job.ok = 0;
+    {
+        HANDLE t = CreateThread(NULL, 16u << 20, build_thread, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+        if (!t)
+            return 0;
+        WaitForSingleObject(t, INFINITE);
+        CloseHandle(t);
+    }
+    return g_job.ok;
+}
+
 int rshader_active(void)
 {
     return g_chain != NULL;

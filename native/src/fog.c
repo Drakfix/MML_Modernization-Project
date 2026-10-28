@@ -26,16 +26,36 @@ typedef HRESULT(WINAPI *set_rs_t)(void *dev, DWORD state, DWORD value);
 static int g_mode = FOG_ORIGINAL;
 static float g_scale = 2.0f;
 static set_rs_t g_next_set_rs;
+/* the game's own last values, so a mode change can re-send them */
+static void *g_dev;
+static DWORD g_start, g_end;
+static int g_have_range;
+
+static DWORD scaled(DWORD value)
+{
+    float f;
+    if (g_mode != FOG_LIGHT)
+        return value;
+    memcpy(&f, &value, 4);
+    f *= g_scale;
+    memcpy(&value, &f, 4);
+    return value;
+}
 
 static HRESULT WINAPI fog_set_rs(void *dev, DWORD state, DWORD value)
 {
+    g_dev = dev;
+    if (state == RS_FOGTABLESTART) {
+        g_start = value;
+        g_have_range |= 1;
+    } else if (state == RS_FOGTABLEEND) {
+        g_end = value;
+        g_have_range |= 2;
+    }
     if (state == RS_FOGENABLE && g_mode == FOG_OFF) {
         value = FALSE;
-    } else if ((state == RS_FOGTABLESTART || state == RS_FOGTABLEEND) && g_mode == FOG_LIGHT) {
-        float f;
-        memcpy(&f, &value, 4);
-        f *= g_scale;
-        memcpy(&value, &f, 4);
+    } else if (state == RS_FOGTABLESTART || state == RS_FOGTABLEEND) {
+        value = scaled(value);
     }
     return g_next_set_rs(dev, state, value);
 }
@@ -51,10 +71,28 @@ void fog_install(int mode, float distance)
         log_printf("fog: light (%.2fx as far)", (double)g_scale);
 }
 
+/* in-game menu: switch while running (the range is re-sent at once; on/off
+ * follows from the game's next per-draw fog switch) */
+void fog_set_mode(int mode)
+{
+    g_mode = mode;
+    if (g_next_set_rs && g_dev) {
+        if (g_have_range & 1)
+            g_next_set_rs(g_dev, RS_FOGTABLESTART, scaled(g_start));
+        if (g_have_range & 2)
+            g_next_set_rs(g_dev, RS_FOGTABLEEND, scaled(g_end));
+    }
+}
+
+int fog_mode(void)
+{
+    return g_mode;
+}
+
 void fog_frame(void)
 {
     void *dev;
-    if (g_mode == FOG_ORIGINAL || g_next_set_rs)
+    if (g_next_set_rs)   /* hooked even for "original", so it can change in game */
         return;
     dev = *(void **)G_D3D_DEVICE;
     if (dev) {

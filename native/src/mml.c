@@ -22,6 +22,7 @@
 #include "apicensus.h"
 #include "controls.h"
 #include "input.h"
+#include "hints.h"
 #include "intro_video.h"
 #include "lockon.h"
 #include "ddshim.h"
@@ -39,6 +40,7 @@
 #include "clipfix.h"
 #include "sampler.h"
 #include "texreplace.h"
+#include "menu.h"
 #include "gte_capture.h"
 #include "frame_rec.h"
 #include "bglayer.h"
@@ -292,6 +294,8 @@ static void on_frame(regs_t *r)
     ddshim_frame();
     display_frame();
     quicksave_frame();
+    menu_frame();
+    hints_frame();
     clipfix_frame();
     toast_frame();
     lockon_frame();
@@ -461,10 +465,9 @@ static void init(void)
     {
         char f[16];
         ini_string("video", "fog", "original", f, sizeof f);
-        if (_stricmp(f, "off") == 0 || GetPrivateProfileIntA("video", "no_fog", 0, g_ini))
-            fog_install(FOG_OFF, 0.0f);
-        else if (_stricmp(f, "light") == 0)
-            fog_install(FOG_LIGHT, ini_float("video", "fog_distance", 2.0f));
+        fog_install(_stricmp(f, "off") == 0 || GetPrivateProfileIntA("video", "no_fog", 0, g_ini) ? FOG_OFF
+                    : _stricmp(f, "light") == 0 ? FOG_LIGHT : FOG_ORIGINAL,
+                    ini_float("video", "fog_distance", 2.0f));
     }
     {
         char l[16];
@@ -550,8 +553,12 @@ static void init(void)
                            err, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), get_dpi ? get_dpi() : 0);
             }
             g_blend_census = GetPrivateProfileIntA("debug", "blend_census", 0, g_ini);
-            if (ddshim_install(&o))
+            if (ddshim_install(&o)) {
                 intro_video_install(g_game_dir);   /* our intro player, if Modernization\intro.mpg exists */
+                toast_use_ui();                    /* notices in our UI's style, under the menu */
+                hints_install(g_ini);              /* shortcut card on the title screen */
+                menu_install(g_ini, g_game_dir);   /* in-game options (F1 / Back + Start) */
+            }
             /* [video] smooth_sky=1: background layers scroll sub-pixel smooth */
             if (GetPrivateProfileIntA("video", "smooth_sky", 1, g_ini) && bglayer_install()) {
                 extern int g_bglayer_log;
@@ -563,12 +570,13 @@ static void init(void)
                 int want = GetPrivateProfileIntA("video", "interp", 1, g_ini);
                 g_interp_census = GetPrivateProfileIntA("debug", "interp_census", 0, g_ini);
                 g_interp_tint = GetPrivateProfileIntA("debug", "interp_tint", 0, g_ini);
-                if ((want || g_interp_census) && gte_capture_install(g_interp_census)) {
+                /* capture always, so the in-game menu can switch 60 fps on */
+                if (gte_capture_install(g_interp_census)) {
                     g_interp_on = 1;
                     rec_enable(want);
                     rec_debug(GetPrivateProfileIntA("debug", "interp_mid_only", 0, g_ini),
                               GetPrivateProfileIntA("debug", "interp_timing", 0, g_ini));
-                    log_printf("interp: %s", want ? "60 fps interpolation ON" : "census only");
+                    log_printf("interp: %s", want ? "60 fps interpolation ON" : "30 fps (60 available in game)");
                     clipfix_report(1);
                 }
             }

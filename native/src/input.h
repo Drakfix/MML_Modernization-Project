@@ -43,3 +43,5 @@ int input_sdl_any_button(void);
 
 /* An SDL3 export by name (NULL without SDL3.dll), for other modules (intro audio). */
 void *input_sdl_proc(const char *name);
+/* latest controller state straight from the SDL thread (the in-game menu) */
+int input_sdl_snapshot(pad_t *out);

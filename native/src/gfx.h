@@ -80,6 +80,14 @@ void gfx_present_target(int t);
 void gfx_compose_target(int t);
 void gfx_flip_at(double due_ms, void (*on_flip)(void));
 void gfx_wait_flip(void);
+
+/* settings changed while the game runs (in-game menu) */
+const gfx_options *gfx_get_options(void);
+void gfx_set_vsync(int on);
+void gfx_set_nearest_upscale(int on);
+void gfx_set_anisotropy(int n);
+void gfx_set_scene(int render_scale, int msaa);
+int gfx_set_shader(const char *path);   /* full path or "" */
 /* end of frame for target t: every visible world surface's depth goes into its
  * depth buffer, for effects tools (ReShade); done once per frame, on compose
  * at the latest */

@@ -29,9 +29,9 @@ assets, and it will never give you the game.
 
 ### Camera and movement
 
-- **A modern third person camera.** The right stick orbits the camera freely and it stays
-  where you leave it, like any game made this century. Toggle it any time with F5 or by
-  clicking L3/R3, even mid-cutscene (that wasn't planned, but it's fun, so it stays).
+- **A modern third person camera.** The right stick swings the camera freely and it stays
+  where you leave it, like any game made this century. Modern controls go on and off any time
+  with F5 or by clicking L3/R3, even mid-cutscene (that wasn't planned, but it's fun, so it stays).
 - **Camera-relative movement.** With the modern layout the left stick moves Mega Man
   relative to where the camera points, so goodbye tank controls. Push up, he goes where
   you're looking.
@@ -47,7 +47,7 @@ assets, and it will never give you the game.
   and walk with it like the PS1 original.
 - **Vanilla mode.** Pick "Vanilla (1997)" in the launcher and every control hook stays
   off. You get the stock game with just the widescreen and timing fixes, and you can
-  still toggle the orbit camera on top if you want.
+  still turn modern controls on if you want.
 
 ### Display
 
@@ -113,7 +113,7 @@ Run `MML Launcher.exe`. Options are remembered between sessions:
 |--------|---------|-------|
 | Resolution | x1 (640x480) to x5 (3200x2400), Display | Display = your monitor's resolution, recommended |
 | Aspect ratio | 16:9 Widescreen, 4:3 Classic | 4:3 is the original projection, pillarboxed |
-| Controls | Modern twin-stick, Vanilla (1997) | Vanilla leaves the game's controls completely stock |
+| Controls | Modern, Vanilla (1997) | Vanilla leaves the game's controls completely stock |
 | Intro video | Play (any button skips), Skip entirely | |
 | Upscaling | Bilinear, Nearest | Nearest = sharp pixels |
 | Texture filter | Game default, Trilinear, Anisotropic 16x | |
@@ -132,15 +132,17 @@ Modern layout, with an XInput controller:
 | Input | Action |
 |-------|--------|
 | Left stick | Move (camera-relative) |
-| Right stick | Orbit the camera |
+| Right stick | Move the camera |
 | D-pad | Same as the left stick (menus and movement) |
 | LT | Aim (the camera and aim stay together) |
 | RT | Shoot |
 | X | Dodge roll in your movement direction |
 | A | Jump |
-| F5 / L3 / R3 click | Toggle the orbit camera on or off |
+| F5 / L3 / R3 click | Turn modern controls on or off |
+| Back + Start / F1 | In-game settings |
+| Back + RB / F6 | Quick save (slot 10) |
 
-With the orbit camera off (or in Vanilla mode) the game plays exactly like the original
+With modern controls off (or in Vanilla mode) the game plays exactly like the original
 release, weird 1997 control scheme and all.
 
 ## Uninstalling
@@ -160,7 +162,7 @@ There's no automated uninstaller yet, but everything is reversible by hand:
 Things that are broken right now and that I know about:
 
 - **Holes in the ground at certain camera angles.** When the camera gets close to the
-  floor (looking down with the orbit camera, or talking to characters at certain angles),
+  floor (looking down with the modern camera, or talking to characters at certain angles),
   some terrain triangles drop out and you can see through the level. It's a culling bug
   in the extended draw distance and it's the top of the fix list.
 - **Some cutscenes show black or missing textures.** A few in-engine cutscenes have
@@ -169,8 +171,8 @@ Things that are broken right now and that I know about:
   the HUD fix doesn't reach yet, so some bars and grids in there still look wide.
 - **Some dialogue box right borders get cropped** in widescreen.
 - **Camera collision is rough in tight spaces** with the extended widescreen view.
-- **The orbit camera works during menus and cutscenes.** Technically a bug, kept as a
-  feature for now. If a cutscene looks weird, you probably left the orbit on; F5 turns
+- **The modern camera works during menus and cutscenes.** Technically a bug, kept as a
+  feature for now. If a cutscene looks weird, you probably left modern controls on; F5 turns
   it off.
 - **Audio sync isn't frame-perfect** in long cutscenes yet, just much closer than vanilla.
 

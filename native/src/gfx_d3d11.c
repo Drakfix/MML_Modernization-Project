@@ -19,6 +19,7 @@
 #include "gfx.h"
 #include "log.h"
 #include "rshader.h"
+#include "gfx_ui.h"
 
 #include "shaders/game_vs.h"
 #include "shaders/game_ps.h"
@@ -883,6 +884,71 @@ void gfx_present(void)
     gfx_present_target(g.cur);
 }
 
+/* ---- changing settings while the game runs (in-game menu); game thread only,
+ * between frames ---- */
+
+const gfx_options *gfx_get_options(void)
+{
+    return &g.opt;
+}
+
+void gfx_set_vsync(int on)
+{
+    g.opt.vsync = on;
+}
+
+void gfx_set_nearest_upscale(int on)
+{
+    g.opt.nearest_upscale = on;
+}
+
+void gfx_set_anisotropy(int n)
+{
+    if (!g.ready)
+        return;
+    flush_batch();
+    g.opt.anisotropy = n;
+    REL(g.smp_linear);
+    g.smp_linear = n > 1 ? make_sampler(D3D11_FILTER_ANISOTROPIC, D3D11_TEXTURE_ADDRESS_WRAP, (UINT)n)
+                         : make_sampler(D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_TEXTURE_ADDRESS_WRAP, 0);
+    g.state_dirty = 1;
+}
+
+/* resolution of the game's image and antialiasing: the scene targets are rebuilt */
+void gfx_set_scene(int render_scale, int msaa)
+{
+    D3D11_RASTERIZER_DESC rd;
+    if (!g.ready || (render_scale == g.opt.render_scale && msaa == g.opt.msaa))
+        return;
+    flush_batch();
+    gfx_wait_flip();
+    g.opt.render_scale = render_scale;
+    g.opt.msaa = msaa;
+    ID3D11DeviceContext_OMSetRenderTargets(g.ctx, 0, NULL, NULL);
+    release_scene();
+    make_scene();
+    REL(g.raster);
+    memset(&rd, 0, sizeof rd);
+    rd.FillMode = D3D11_FILL_SOLID;
+    rd.CullMode = D3D11_CULL_NONE;
+    rd.DepthClipEnable = TRUE;
+    rd.MultisampleEnable = msaa > 1;
+    ID3D11Device_CreateRasterizerState(g.dev, &rd, &g.raster);
+    g_depth_done[0] = g_depth_done[1] = 0;
+    bind_scene();
+}
+
+/* RetroArch preset ("" = none) */
+int gfx_set_shader(const char *path)
+{
+    if (!g.ready)
+        return 0;
+    flush_batch();
+    gfx_wait_flip();
+    strcpy_s(g.opt.shader, sizeof g.opt.shader, path ? path : "");
+    return rshader_reload(g.dev, g.opt.game_dir, g.opt.shader);
+}
+
 void gfx_use_target(int t)
 {
     if (!g.ready || t < 0 || t > 1)
@@ -1023,6 +1089,7 @@ void gfx_compose_target(int t)
                        (unsigned)vp.Height))
         ID3D11DeviceContext_Draw(g.ctx, 3, 0);   /* plain upscale (or the shader failed this frame) */
     ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &none);
+    gfx_ui_render(g.dev, g.ctx, g.back_rtv, g.back_w, g.back_h);   /* in-game menu, if open */
     bind_scene();
 }
 
