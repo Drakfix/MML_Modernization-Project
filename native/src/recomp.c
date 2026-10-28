@@ -33,13 +33,16 @@
 #include "log.h"
 #include "recomp.h"
 #include "recomp_rt.h"
+#include "watch.h"
 
 #ifdef RECOMP_NONE
 static const RFuncInfo g_recomp_funcs[1] = { { 0 } };
 static const int g_recomp_nfuncs = 0;
+static const int g_recomp_patch_aware = 0;
 #else
 extern const RFuncInfo g_recomp_funcs[];
 extern const int g_recomp_nfuncs;
+extern const int g_recomp_patch_aware;   /* the code calls our hooks and reads patched bytes itself */
 #endif
 
 /* FNSAVE image: CW at 0, SW at 4, tag word at 8, ST0..ST7 (80-bit) from 28 */
@@ -56,7 +59,12 @@ enum { MODE_OFF, MODE_DIFF, MODE_REPLACE };
 static uint32_t t_id, t_eax, t_ecx, t_edx, t_ebx, t_esp, t_ebp, t_esi, t_edi, t_efl;
 static uint32_t t_new_esp, t_target, t_post_addr;
 static uint32_t g_host_free;   /* our private stack is free below this */
-uint8_t g_rc_native[8192];     /* per function: run the machine code instead (RC_CALL) */
+/* Our own stacks: the private one, and the running thread fiber's. A stub entered while ESP is
+   already on one of them (our C code called a game function directly, e.g. from a hook handler)
+   carries on 256 KB below ESP: the game code uses the stack from ESP down as its own (its
+   arguments are there), and jumping to g_host_free would overwrite the frames in between. */
+static uint32_t g_hs_lo, g_hs_hi, g_in_co, g_co_lo, g_co_hi;
+uint8_t *g_rc_native;          /* per function (g_recomp_nfuncs): run the machine code instead (RC_CALL) */
 static uint8_t t_fsave[108];   /* FNSAVE image: CW, SW, TW, pointers, then ST0..ST7 as 80-bit values */
 static uint32_t t_ds, t_es;    /* as the machine code had them (ES is 0 until the Watcom startup code loads
                                   it, and that now runs recompiled): we always hand over flat ones */
@@ -153,23 +161,43 @@ static int find_func(uint32_t a)
 
 static int g_rt_errors;
 
+static void rt_dispatch_from(RCtx *c, uint32_t target)
+{
+    if (target)
+        rt_dispatch(c, target);
+}
+
 static uint32_t g_recent[16];   /* recent indirect / machine-code targets (crash reports) */
 static unsigned g_nrecent;
 
+uint32_t rt_dispatch(RCtx *c, uint32_t target)
+{
+    while (target) {
+        int i = find_func(target);
+        g_recent[g_nrecent++ & 15] = target;
+        if (i >= 0 && !g_rc_native[i]) {
+            target = g_recomp_funcs[i].fn(c);
+            continue;
+        }
+        if (c->log) {   /* diff mode can't undo what machine code does */
+            if (g_rt_errors++ < 20)
+                log_printf("recomp: diff run reached machine code at %08X", target);
+            return 0;
+        }
+        /* a jump into the game's code that no generated function starts at: the machine code there
+           may not return to us (system DLL entries reached through import thunks are fine) */
+        if (i < 0 && target >= g_recomp_funcs[0].lo && target < g_recomp_funcs[g_recomp_nfuncs - 1].hi &&
+            g_rt_errors++ < 20)
+            log_printf("recomp: jump to %08X, outside every recompiled function", target);
+        rt_call_native(c, target);
+        target = 0;
+    }
+    return 0;
+}
+
 void rt_call(RCtx *c, uint32_t target)
 {
-    int i = find_func(target);
-    g_recent[g_nrecent++ & 15] = target;
-    if (i >= 0 && !g_rc_native[i]) {
-        g_recomp_funcs[i].fn(c);
-        return;
-    }
-    if (c->log) {   /* diff mode can't undo what machine code does */
-        if (g_rt_errors++ < 20)
-            log_printf("recomp: diff run reached machine code at %08X", target);
-        return;
-    }
-    rt_call_native(c, target);
+    rt_dispatch(c, target);
 }
 
 /* a jump out of the function: like a call, except the return address on the stack is our
@@ -259,20 +287,21 @@ static __declspec(naked) void bridge_go(void)
     }
 }
 
+static uint32_t g_bridge_ret;   /* the game's return address of the innermost open bridge */
+
+uint32_t __cdecl recomp_return_address(uint32_t seen)
+{
+    return seen == (uint32_t)(uintptr_t)bridge_back && g_bridge_ret ? g_bridge_ret : seen;
+}
+
 void rt_call_native(RCtx *c, uint32_t target)
 {
+    uint32_t outer_ret = g_bridge_ret;
     uint32_t esp = R32(c, REG_ESP), ret = LD32(esp);
     uint8_t img[108];
-    {   /* (diagnostic) segments as we hand over to machine code */
-        static int n;
-        uint16_t ds_, es_, ss_;
-        __asm {
-            mov ds_, ds
-            mov es_, es
-            mov ss_, ss
-        }
-        if ((ds_ != ss_ || es_ != ss_) && n++ < 5)
-            log_printf("recomp: calling %08X with ds %X es %X ss %X", target, ds_, es_, ss_);
+    if (g_bdepth >= (int)(sizeof g_bs_main.sp / sizeof g_bs_main.sp[0]) - 1) {   /* machine code that never returns */
+        log_printf("recomp: native bridges nested %d deep (calling %08X), giving up", g_bdepth, target);
+        TerminateProcess(GetCurrentProcess(), 3);
     }
     *(uint32_t *)HPTR(esp) = (uint32_t)(uintptr_t)bridge_back;   /* it returns to us */
     memset(img, 0, sizeof img);
@@ -282,7 +311,9 @@ void rt_call_native(RCtx *c, uint32_t target)
     b_esp = esp;
     b_eax = R32(c, REG_EAX), b_ecx = R32(c, REG_ECX), b_edx = R32(c, REG_EDX), b_ebx = R32(c, REG_EBX);
     b_ebp = R32(c, REG_EBP), b_esi = R32(c, REG_ESI), b_edi = R32(c, REG_EDI);
+    g_bridge_ret = ret;
     bridge_go();
+    g_bridge_ret = outer_ret;
     R32_SET(c, REG_EAX, b_eax), R32_SET(c, REG_ECX, b_ecx), R32_SET(c, REG_EDX, b_edx);
     R32_SET(c, REG_EBX, b_ebx), R32_SET(c, REG_EBP, b_ebp), R32_SET(c, REG_ESI, b_esi);
     R32_SET(c, REG_EDI, b_edi), R32_SET(c, REG_ESP, b_esp);
@@ -292,6 +323,43 @@ void rt_call_native(RCtx *c, uint32_t target)
     c->fdepth0 = x87_depth(img);
     c->fdelta = 0;
     c->ret = ret;
+}
+
+/* ---- mml.dll's hooks, called from recompiled code ---- */
+
+static uint32_t flags_from_ctx(const RCtx *c)
+{
+    return 0x202u | R8(c, 0x200) | (uint32_t)R8(c, 0x202) << 2 | (uint32_t)R8(c, 0x204) << 4 |
+           (uint32_t)R8(c, 0x206) << 6 | (uint32_t)R8(c, 0x207) << 7 | (uint32_t)R8(c, REG_DF) << 10 |
+           (uint32_t)R8(c, 0x20B) << 11;
+}
+
+static void flags_to_ctx(RCtx *c, uint32_t f)
+{
+    R8_SET(c, 0x200, (uint8_t)(f & 1));
+    R8_SET(c, 0x202, (uint8_t)(f >> 2 & 1));
+    R8_SET(c, 0x204, (uint8_t)(f >> 4 & 1));
+    R8_SET(c, 0x206, (uint8_t)(f >> 6 & 1));
+    R8_SET(c, 0x207, (uint8_t)(f >> 7 & 1));
+    R8_SET(c, REG_DF, (uint8_t)(f >> 10 & 1));
+    R8_SET(c, 0x20B, (uint8_t)(f >> 11 & 1));
+}
+
+void rt_hook(RCtx *c, uint32_t site)
+{
+    hook_fn fn = hook_find(site);
+    regs_t r;
+    if (!fn)
+        return;   /* that setting is off this session */
+    r.eax = R32(c, REG_EAX), r.ecx = R32(c, REG_ECX), r.edx = R32(c, REG_EDX), r.ebx = R32(c, REG_EBX);
+    r.ebp = R32(c, REG_EBP), r.esi = R32(c, REG_ESI), r.edi = R32(c, REG_EDI);
+    r.esp = R32(c, REG_ESP) - 4;   /* as the stub's PUSHAD saw it (handlers use r->esp + 4) */
+    r.eflags = flags_from_ctx(c);
+    fn(&r);
+    R32_SET(c, REG_EAX, r.eax), R32_SET(c, REG_ECX, r.ecx), R32_SET(c, REG_EDX, r.edx);
+    R32_SET(c, REG_EBX, r.ebx), R32_SET(c, REG_EBP, r.ebp), R32_SET(c, REG_ESI, r.esi);
+    R32_SET(c, REG_EDI, r.edi);
+    flags_to_ctx(c, r.eflags);
 }
 
 uint32_t rt_cpuid(uint32_t leaf)
@@ -418,14 +486,6 @@ static void ctx_regs(const RCtx *c, uint32_t r[8])
 
 static void __cdecl on_enter(void)
 {
-    {
-        static int n;
-        uint16_t ss_;
-        __asm mov ss_, ss
-        if (((uint16_t)t_ds != ss_ || (uint16_t)t_es != ss_) && n++ < 5)
-            log_printf("recomp: entered %08X with ds %X es %X ss %X", g_recomp_funcs[g_roots[t_id].info].addr,
-                       (unsigned)(uint16_t)t_ds, (unsigned)(uint16_t)t_es, ss_);
-    }
     int root = (int)t_id, fi = g_roots[root].info;
     const RFuncInfo *info = &g_recomp_funcs[fi];
     t_new_esp = t_esp;
@@ -435,7 +495,7 @@ static void __cdecl on_enter(void)
         RCtx *c = (RCtx *)_alloca(sizeof(RCtx));
         ctx_from_cpu(c);
         g_host_free = (uint32_t)(uintptr_t)c - 256;   /* nested entries go below us */
-        g_roots[root].fn(c);
+        rt_dispatch_from(c, g_roots[root].fn(c));
         g_host_free = saved_free;
         x87_from_ctx(c, t_fsave);   /* (after the call: a nested entry reused the globals) */
         ctx_regs(c, r);
@@ -455,7 +515,7 @@ static void __cdecl on_enter(void)
     g_log_overflow = 0;
     ctx_from_cpu(&g_ctx);
     g_ctx.log = 1;
-    info->fn(&g_ctx);
+    rt_dispatch_from(&g_ctx, info->fn(&g_ctx));
     ctx_regs(&g_ctx, g_exp);
     g_exp_esp = g_exp[4];
     {
@@ -544,6 +604,34 @@ static void __cdecl on_post(void)
 
 /* ---- the stubs ---- */
 
+static __declspec(naked) void pick_stack_asm(void)
+{
+    __asm {
+        pop ecx                     /* our return address */
+        mov eax, esp
+        cmp eax, g_hs_lo
+        jb not_private
+        cmp eax, g_hs_hi
+        jae not_private
+        jmp below_here
+    not_private:
+        cmp g_in_co, 0
+        je use_free
+        cmp eax, g_co_lo
+        jb use_free
+        cmp eax, g_co_hi
+        jae use_free
+    below_here:
+        sub eax, 40000h             /* room for the game code using this stack as its own */
+        and eax, 0FFFFFFF0h
+        mov esp, eax
+        jmp ecx
+    use_free:
+        mov esp, g_host_free
+        jmp ecx
+    }
+}
+
 static __declspec(naked) void stub_enter(void)
 {
     __asm {
@@ -565,7 +653,7 @@ static __declspec(naked) void stub_enter(void)
         mov ax, ss
         mov ds, ax
         mov es, ax
-        mov esp, g_host_free
+        call pick_stack_asm
         call on_enter
         mov esp, t_new_esp
         mov ax, ss
@@ -605,7 +693,7 @@ static __declspec(naked) void stub_post(void)
         mov ax, ss
         mov ds, ax
         mov es, ax
-        mov esp, g_host_free
+        call pick_stack_asm
         call on_post
         mov esp, t_new_esp
         mov ax, ss
@@ -677,7 +765,8 @@ static int install_root_fn(uint32_t addr, rfunc fn)
     if (!mem_write(addr, patch, info->steal))
         return 0;
     g_nroots++;
-    log_printf("recomp: %s (%08X) %s", info->name, addr, g_mode == MODE_DIFF ? "checked against the original" : "replaced");
+    if (g_mode == MODE_DIFF)
+        log_printf("recomp: %s (%08X) checked against the original", info->name, addr);
     return 1;
 }
 
@@ -701,6 +790,7 @@ static uint32_t g_co_entry[CO_SLOTS], g_co_host_free[CO_SLOTS], g_main_host_free
 static uint16_t g_co_fpucw = 0x027F;
 static RCtx g_co_ctx[CO_SLOTS];
 static bridge_stack g_bs_co[CO_SLOTS];
+static uint32_t g_co_range[CO_SLOTS][2];   /* each fiber's own stack */
 
 static uint32_t co_top(int i)
 {
@@ -738,8 +828,13 @@ static void CALLBACK co_fiber(void *param)
 {
     int i = (int)(intptr_t)param, fi = find_func(g_co_entry[i]);
     RCtx *c = &g_co_ctx[i];
-    log_printf("recomp: thread %d starts at %08X (%s)", i, g_co_entry[i],
-               fi >= 0 && !g_rc_native[fi] ? "recompiled" : "machine code");
+    {
+        NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+        g_co_range[i][1] = (uint32_t)(uintptr_t)tib->StackBase;
+        g_co_range[i][0] = g_co_range[i][1] - (4u << 20);
+        g_co_lo = g_co_range[i][0];
+        g_co_hi = g_co_range[i][1];
+    }
     memset(c, 0, sizeof *c);
     R16_SET(c, REG_FPUCW, g_co_fpucw);
     R32_SET(c, REG_FS_BASE, (uint32_t)(uintptr_t)NtCurrentTeb());
@@ -747,7 +842,7 @@ static void CALLBACK co_fiber(void *param)
     c->fdepth0 = 0;
     if (fi >= 0 && !g_rc_native[fi]) {
         R32_SET(c, REG_ESP, co_top(i));   /* where the game's scheduler leaves ESP for a new thread */
-        g_recomp_funcs[fi].fn(c);
+        rt_dispatch_from(c, g_recomp_funcs[fi].fn(c));
     } else {
         R32_SET(c, REG_ESP, co_top(i) - 4);
         rt_call_native(c, g_co_entry[i]);
@@ -797,20 +892,7 @@ void rt_co_yield(RCtx *c)
 
 void rt_co_schedule(RCtx *c)
 {
-    static unsigned calls, resumes;
-    static uint32_t last_state = 0xFFFFFFFF;
     int i;
-    {   /* (diagnostic) the game's state and sub-state (0x6DD9BC) */
-        uint32_t st = *(volatile uint16_t *)HPTR(0x6DD9BCu) | ((uint32_t)*(volatile uint8_t *)HPTR(0x6DD9BFu) << 16);
-        if (st != last_state) {
-            log_printf("recomp: game state %u/%u (+3: %u) at scheduler call %u", st & 0xFF, (st >> 8) & 0xFF, st >> 16,
-                       calls);
-            last_state = st;
-        }
-    }
-    if (++calls % 300 == 0)
-        log_printf("recomp: scheduler %u calls, %u resumes, slots %u/%u", calls, resumes, (unsigned)CO_STATE(0),
-                   (unsigned)CO_STATE(1));
     if (!g_main_fiber) {
         g_main_fiber = IsThreadAFiber() ? GetCurrentFiber() : ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
         if (!g_main_fiber) {
@@ -836,7 +918,9 @@ void rt_co_schedule(RCtx *c)
         if (g_co_fresh[i] || !g_co_fiber[i]) {
             if (g_co_fiber[i])
                 DeleteFiber(g_co_fiber[i]);
-            g_co_fiber[i] = CreateFiberEx(1 << 16, 4 << 20, FIBER_FLAG_FLOAT_SWITCH, co_fiber, (void *)(intptr_t)i);
+            /* fully committed: a stub entered on this stack carries on 256 KB below ESP (pick_stack_asm),
+               past the guard page that grows a stack on demand */
+            g_co_fiber[i] = CreateFiberEx(4 << 20, 4 << 20, FIBER_FLAG_FLOAT_SWITCH, co_fiber, (void *)(intptr_t)i);
             g_co_fresh[i] = 0;
             g_bs_co[i].depth = 0;   /* a new fiber has no open bridges */
             if (!g_co_fiber[i]) {
@@ -850,8 +934,11 @@ void rt_co_schedule(RCtx *c)
             g_bs_co[i].depth = 0;
         g_bsp = g_bs_co[i].sp;
         g_bdepth = g_bs_co[i].depth;
-        resumes++;
+        g_in_co = 1;
+        g_co_lo = g_co_range[i][0];
+        g_co_hi = g_co_range[i][1];
         SwitchToFiber(g_co_fiber[i]);
+        g_in_co = 0;
         g_bs_co[i].depth = g_bdepth;
         g_bsp = g_bs_main.sp;
         g_bdepth = g_bs_main.depth;
@@ -859,6 +946,13 @@ void rt_co_schedule(RCtx *c)
     }
     co_pop_return(c);
 }
+
+/* the same, entered from machine code (hooked entries) */
+static uint32_t co_schedule_root(RCtx *c) { rt_co_schedule(c); return 0; }
+static uint32_t co_create_root(RCtx *c) { rt_co_create(c); return 0; }
+static uint32_t co_yield_root(RCtx *c) { rt_co_yield(c); return 0; }
+static uint32_t co_exec_root(RCtx *c) { rt_co_exec(c); return 0; }
+static uint32_t co_exit_root(RCtx *c) { rt_co_exit(c); return 0; }
 
 /* functions containing a byte mml.dll patched, and everything that calls them: their recompiled
    copy (made from the unpatched exe) is meant to differ from the running original */
@@ -887,6 +981,26 @@ static void mark_modded(void)
     for (i = 0; i < g_recomp_nfuncs; i++)
         n += g_modded[i];
     log_printf("recomp: %d functions reach code patched by mml.dll (%u patches)", n, (unsigned)mem_patch_count());
+    {   /* the list, for the translator (Modernization\recomp_patches.txt: address, length, new bytes) */
+        char path[MAX_PATH], *slash;
+        FILE *f = NULL;
+        GetModuleFileNameA(NULL, path, sizeof path);
+        slash = strrchr(path, '\\');
+        if (slash)
+            strcpy_s(slash + 1, sizeof path - (size_t)(slash + 1 - path), "Modernization\\recomp_patches.txt");
+        if (fopen_s(&f, path, "w") == 0 && f) {
+            for (k = 0; k < mem_patch_count(); k++) {
+                uintptr_t a;
+                size_t len, b;
+                mem_patch_get(k, &a, &len);
+                fprintf(f, "%08X %u %c", (unsigned)a, (unsigned)len, mem_patch_kind(k));
+                for (b = 0; b < len && b < 64; b++)
+                    fprintf(f, " %02X", ((const uint8_t *)a)[b]);
+                fprintf(f, "\n");
+            }
+            fclose(f);
+        }
+    }
 }
 
 /* while recompiled code is being tried, say where the game crashed */
@@ -940,8 +1054,10 @@ static LONG CALLBACK on_crash(EXCEPTION_POINTERS *ep)
 
 void recomp_install(const char *ini)
 {
-    char mode[32], roots[512], *p, *next = NULL;
-    static uint8_t host_stack[1 << 20];
+    static char roots[4096];
+    char mode[32], *p, *next = NULL;
+    uint8_t *host_stack;
+    const size_t host_size = 32u << 20;
     GetPrivateProfileStringA("debug", "recomp", "off", mode, sizeof mode, ini);
     g_mode = _stricmp(mode, "diff") == 0 ? MODE_DIFF : _stricmp(mode, "replace") == 0 ? MODE_REPLACE : MODE_OFF;
     if (g_mode == MODE_OFF)
@@ -950,23 +1066,50 @@ void recomp_install(const char *ini)
         log_printf("recomp: this build has no recompiled code");
         return;
     }
-    g_host_free = ((uint32_t)(uintptr_t)(host_stack + sizeof host_stack) - 64) & ~15u;
+    g_rc_native = (uint8_t *)calloc((size_t)g_recomp_nfuncs, 1);
+    if (!g_rc_native) {
+        log_printf("recomp: no memory for the function table");
+        return;
+    }
+    /* our private stack: 32 MB with a guard page at the bottom, so an overflow stops right there */
+    host_stack = (uint8_t *)VirtualAlloc(NULL, host_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!host_stack) {
+        log_printf("recomp: no memory for the private stack");
+        return;
+    }
+    {
+        DWORD old;
+        VirtualProtect(host_stack, 4096, PAGE_NOACCESS, &old);
+    }
+    g_host_free = ((uint32_t)(uintptr_t)(host_stack + host_size) - 64) & ~15u;
+    g_hs_lo = (uint32_t)(uintptr_t)host_stack;
+    g_hs_hi = (uint32_t)(uintptr_t)(host_stack + host_size);
     AddVectoredExceptionHandler(0, on_crash);
+    if (GetPrivateProfileIntA("debug", "recomp_watch_self", 0, ini)) {   /* who writes our thread table */
+        char w[64];
+        _snprintf_s(w, sizeof w, _TRUNCATE, "%X,4", (unsigned)(uintptr_t)&g_co_entry[0]);
+        watch_configure(w);
+        log_printf("recomp: watching %s", w);
+    }
     t_post_addr = (uint32_t)(uintptr_t)stub_post;
     GetPrivateProfileStringA("debug", "recomp_roots", "", roots, sizeof roots, ini);
     mark_modded();
     if (g_mode == MODE_REPLACE) {   /* the threads run on fibers */
         static const struct { uint32_t a; rfunc fn; } co[] = {
-            { 0x4EED08, rt_co_schedule }, { 0x4EED79, rt_co_create }, { 0x4EEDA4, rt_co_yield },
-            { 0x4EEDCA, rt_co_exec }, { 0x4EEDFD, rt_co_exit },
+            { 0x4EED08, co_schedule_root }, { 0x4EED79, co_create_root }, { 0x4EEDA4, co_yield_root },
+            { 0x4EEDCA, co_exec_root }, { 0x4EEDFD, co_exit_root },
         };
         int k;
         for (k = 0; k < (int)(sizeof co / sizeof co[0]); k++)
             install_root_fn(co[k].a, co[k].fn);
     }
+    if (g_mode == MODE_REPLACE && g_modded && g_recomp_patch_aware) {
+        memset(g_modded, 0, (size_t)g_recomp_nfuncs);   /* the recompiled code applies our patches itself */
+        log_printf("recomp: the generated code applies mml.dll's hooks and patches itself");
+    }
     if (g_mode == MODE_REPLACE && g_modded) {
         int i;
-        for (i = 0; i < g_recomp_nfuncs && i < (int)sizeof g_rc_native; i++)
+        for (i = 0; i < g_recomp_nfuncs; i++)
             g_rc_native[i] = g_modded[i];
     }
     {   /* [debug] recomp_native=lo-hi,...: these run as machine code (for bisecting a bad translation) */
@@ -975,8 +1118,12 @@ void recomp_install(const char *ini)
         GetPrivateProfileStringA("debug", "recomp_native", "", ranges, sizeof ranges, ini);
         for (q = strtok_s(ranges, ", ", &nx); q; q = strtok_s(NULL, ", ", &nx)) {
             uint32_t lo = (uint32_t)strtoul(q, &q, 16), hi = *q == '-' ? (uint32_t)strtoul(q + 1, NULL, 16) : lo;
-            for (i = 0; i < g_recomp_nfuncs && i < (int)sizeof g_rc_native; i++)
-                if (g_recomp_funcs[i].addr >= lo && g_recomp_funcs[i].addr <= hi && !g_rc_native[i]) {
+            for (i = 0; i < g_recomp_nfuncs; i++)
+                /* by the containing function's start: its extra entry points (jump targets inside it)
+                   go with it, or recompiled code would jump into machine code mid-function. Code
+                   that is only jumped to (shared tails) stays recompiled for the same reason. */
+                if (g_recomp_funcs[i].lo >= lo && g_recomp_funcs[i].lo <= hi && !g_rc_native[i] &&
+                    find_func(g_recomp_funcs[i].lo) >= 0 && g_recomp_funcs[find_func(g_recomp_funcs[i].lo)].steal) {
                     g_rc_native[i] = 1;
                     if (g_modded)
                         g_modded[i] = 1;   /* and not hooked */

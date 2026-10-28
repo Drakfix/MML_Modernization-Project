@@ -21,6 +21,10 @@ int mem_write(uintptr_t addr, const void *bytes, size_t n);
 /* every mem_write so far (the recompiler's test harness skips code we patched) */
 size_t mem_patch_count(void);
 void mem_patch_get(size_t i, uintptr_t *addr, size_t *n);
+char mem_patch_kind(size_t i);   /* 'H' a hook_mid jump, 'P' any other patch */
+
+/* the handler hook_mid installed at this site (recompiled code calls it directly) */
+hook_fn hook_find(uintptr_t site);
 
 /* Run fn before the instruction(s) at `site`, then replay them.
  * `steal` must cover whole instructions (>= 5 bytes). The stolen bytes must be

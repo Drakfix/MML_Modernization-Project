@@ -27,8 +27,25 @@ int mem_expect(uintptr_t addr, const void *bytes, size_t n)
     return memcmp((const void *)addr, bytes, n) == 0;
 }
 
-static struct { uintptr_t addr; size_t n; } g_patches[1024];
+static struct { uintptr_t addr; size_t n; char kind; } g_patches[1024];
 static size_t g_npatches;
+static char g_kind = 'P';   /* 'H' while hook_mid writes its jump */
+static struct { uintptr_t site; hook_fn fn; } g_hooks[256];
+static size_t g_nhooks;
+
+hook_fn hook_find(uintptr_t site)
+{
+    size_t i;
+    for (i = 0; i < g_nhooks; i++)
+        if (g_hooks[i].site == site)
+            return g_hooks[i].fn;
+    return NULL;
+}
+
+char mem_patch_kind(size_t i)
+{
+    return g_patches[i].kind;
+}
 
 size_t mem_patch_count(void)
 {
@@ -47,6 +64,7 @@ int mem_write(uintptr_t addr, const void *bytes, size_t n)
     if (g_npatches < sizeof g_patches / sizeof g_patches[0]) {
         g_patches[g_npatches].addr = addr;
         g_patches[g_npatches].n = n;
+        g_patches[g_npatches].kind = g_kind;
         g_npatches++;
     }
     if (!VirtualProtect((void *)addr, n, PAGE_EXECUTE_READWRITE, &old))
@@ -118,5 +136,13 @@ int hook_mid(uintptr_t site, size_t steal, const uint8_t *expect, hook_fn fn)
     put_rel32(jmp + 1, site + 5, (uintptr_t)s);
     for (i = 5; i < steal; i++)
         jmp[i] = 0x90;
-    return mem_write(site, jmp, steal);
+    if (g_nhooks < sizeof g_hooks / sizeof g_hooks[0]) {   /* recompiled code calls fn at the site itself */
+        g_hooks[g_nhooks].site = site;
+        g_hooks[g_nhooks].fn = fn;
+        g_nhooks++;
+    }
+    g_kind = 'H';
+    i = (size_t)mem_write(site, jmp, steal);
+    g_kind = 'P';
+    return (int)i;
 }

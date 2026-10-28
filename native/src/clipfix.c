@@ -27,6 +27,7 @@
 #include "hook.h"
 #include "interp.h"
 #include "log.h"
+#include "recomp.h"
 
 #define G_FN_NEAR_CLIP 0x4F04FBu   /* watcall: EAX SVECTOR* verts, EDX u8[2]* uvs, EBX out records,
                                     * ECX unused here, [esp+4] count (3 or 4); ret 4; returns count out */
@@ -142,15 +143,17 @@ static __declspec(naked) void clip_detour(void)
     __asm {
         mov g_a_verts, eax
         mov g_a_uvs, edx
-        push eax
-        mov eax, [esp + 4]                    ; our caller: which drawer this is
+        push ecx
+        push dword ptr [esp + 4]              ; our caller: which drawer this is
+        call recomp_return_address            ; (the game's own when recompiled code called us)
+        add esp, 4
+        pop ecx
         mov g_a_site, eax
-        pop eax
         mov g_a_out, ebx
-        push eax
-        mov eax, [esp + 8]                    ; the count, above our push and the return address
+        mov eax, [esp + 4]                    ; the count, above the return address
         mov g_a_count, eax
-        pop eax
+        mov eax, g_a_verts
+        mov edx, g_a_uvs
         push dword ptr [g_a_count]
         call dword ptr [g_tramp]              ; the game's clipper (pops its argument)
         pushad
@@ -202,6 +205,13 @@ void clipfix_frame(void)
         log_printf("clipfix: %u cut points made exact, %u vertices corrected (300 frames)", g_fixed, g_applied);
         g_fixed = g_applied = 0;
     }
+}
+
+void clipfix_frame_dropped(void)
+{
+    g_build_gen++;
+    if (g_build_gen < 2)
+        g_build_gen = 2;
 }
 
 const gfx_vertex *clipfix_apply(const gfx_vertex *v, const gfx_vertex *raw, unsigned n)

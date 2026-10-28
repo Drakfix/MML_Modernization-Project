@@ -109,6 +109,13 @@ static void on_layer_link(regs_t *r)
 
 int g_bglayer_log;   /* debug: log each layer's exact scroll every frame */
 
+/* a logic step built its layers and wasn't drawn: forget them, or the next draw's lookup by
+   packet address can find these instead (the packet memory gets reused) */
+void bglayer_frame_dropped(void)
+{
+    g_n[g_build] = 0;
+}
+
 void bglayer_frame_end(void)
 {
     if (g_bglayer_log) {

@@ -39,6 +39,7 @@
 #include "quicksave.h"
 #include "recomp.h"
 #include "clipfix.h"
+#include "interp.h"
 #include "sampler.h"
 #include "texreplace.h"
 #include "menu.h"
@@ -192,6 +193,13 @@ static DWORD g_tick_base;
 static LARGE_INTEGER g_qpc_base, g_qpc_freq;
 
 #define G_SPIN_RET 0x4A7132u   /* game_frame: do { t = GetTickCount(); } while (t < threshold); */
+#define G_DRAW_RET 0x4A7095u   /* game_frame: t = GetTickCount(); if (t < threshold) draw */
+/* game_frame skips drawing whenever a logic step ends past the next deadline, with no limit: a
+   game that stays behind (a slow machine, a heavy scene) never draws again and the image freezes
+   while the game carries on. At most this many draws are skipped in a row; past that, the
+   deadline moves to now, so the game draws and drops the time it lost: an overloaded game slows
+   down instead, and doesn't race to catch up once the load is gone. [debug] max_skipped_draws. */
+static int g_max_skipped = -1;
 static HANDLE g_wait_timer;
 
 /* Sleep for ms with sub-millisecond precision (no busy waiting). */
@@ -211,6 +219,58 @@ void mml_sleep_ms(double ms)
         WaitForSingleObject(g_wait_timer, INFINITE);
 }
 
+static unsigned g_frames;
+static int g_interp_on, g_bglayer_on, g_player_log;
+
+/* game_frame is a fixed-step loop: draw the scene the last logic step built (the walk) and flip
+   G_FRAME_PARITY, wait for the deadline (GetTickCount at G_SPIN_RET), advance it, run one logic
+   step (which clears its parity's draw lists and builds the next scene into them). It skips the
+   drawing two ways. On purpose ([0x77E738] set) it still flips the parity. When it is behind
+   schedule (the deadline passed already) it jumps past the flip as well, and the next step builds
+   into the same buffer set again: code that keeps the previous step's data in the other set then
+   reads data from two or more steps back (whole models drawn in stale places). So this does that
+   flip for it. Skipping either way also skips the walk's reset of the deferred list
+   (G_DEFERRED_COUNT): the step's shadows and translucent planes stayed queued, pointing into packet
+   memory the following steps reuse, and the next draw showed them too (detached shadows, stray
+   planes). So that is reset here as well.
+   Called on every wait; the first one of an iteration sees a new deadline. */
+static void frame_drop_check(void)
+{
+    static uint32_t last_deadline;
+    static unsigned walks_seen;
+    static uint8_t last_parity;
+    uint32_t d = *(volatile uint32_t *)G_FRAME_LIMITER_TH;
+    volatile uint8_t *parity = (volatile uint8_t *)G_FRAME_PARITY;
+    if (d == last_deadline)
+        return;
+    last_deadline = d;
+    {   /* [debug] slow_logic_ms: the same as slow_ms, but in every logic step instead of every draw */
+        static int slow = -1;
+        if (slow < 0)
+            slow = (int)GetPrivateProfileIntA("debug", "slow_logic_ms", 0, g_ini);
+        if (slow > 0 && *(volatile uint8_t *)0x6DD9BCu == 5) {
+            LARGE_INTEGER a, b, f;
+            QueryPerformanceFrequency(&f);
+            QueryPerformanceCounter(&a);
+            do
+                QueryPerformanceCounter(&b);
+            while ((b.QuadPart - a.QuadPart) * 1000 < (LONGLONG)slow * f.QuadPart);
+        }
+    }
+    if (*parity == last_parity)   /* the late skip: no flip since the last step */
+        *parity ^= 1;
+    last_parity = *parity;
+    if (g_frames == walks_seen) {   /* either skip: that step's scene was never drawn */
+        *(volatile uint32_t *)G_DEFERRED_COUNT = 0;
+        if (g_bglayer_on)
+            bglayer_frame_dropped();
+        if (g_interp_on)
+            interp_frame_dropped();
+        clipfix_frame_dropped();
+    }
+    walks_seen = g_frames;
+}
+
 static DWORD WINAPI rebased_gettickcount(void)
 {
     LARGE_INTEGER now;
@@ -219,9 +279,25 @@ static DWORD WINAPI rebased_gettickcount(void)
         return g_real_gettickcount() - g_tick_base;
     QueryPerformanceCounter(&now);
     ms = (double)(now.QuadPart - g_qpc_base.QuadPart) * 1000.0 / (double)g_qpc_freq.QuadPart;
+    if (recomp_return_address((uint32_t)(uintptr_t)_ReturnAddress()) == G_DRAW_RET) {
+        static int skipped;
+        double deadline = *(float *)G_FRAME_LIMITER_TH;
+        if (g_max_skipped < 0)
+            g_max_skipped = (int)GetPrivateProfileIntA("debug", "max_skipped_draws", 2, g_ini);
+        if (ms < deadline)
+            skipped = 0;
+        else if (skipped < g_max_skipped)
+            skipped++;
+        else {
+            skipped = 0;
+            *(float *)G_FRAME_LIMITER_TH = (float)(ms + 1.0);
+        }
+    }
     /* the game waits for its next frame by spinning on this call: sleep instead */
-    if ((uintptr_t)_ReturnAddress() == G_SPIN_RET) {
-        double left = *(float *)G_FRAME_LIMITER_TH - ms;
+    if (recomp_return_address((uint32_t)(uintptr_t)_ReturnAddress()) == G_SPIN_RET) {
+        double left;
+        frame_drop_check();
+        left = *(float *)G_FRAME_LIMITER_TH - ms;
         if (left > 1.5 && left < 200.0) {
             mml_sleep_ms(left - 1.0);
             QueryPerformanceCounter(&now);
@@ -234,8 +310,6 @@ static DWORD WINAPI rebased_gettickcount(void)
 static double g_limiter_acc;
 static int g_limiter_init;
 
-static unsigned g_frames;
-static int g_interp_on, g_bglayer_on, g_player_log;
 extern int g_interp_census, g_interp_tint, g_smooth_bg, g_blend_census;
 
 static void limiter_frame(void);
@@ -270,6 +344,20 @@ static void on_frame(regs_t *r)
                     strcat_s(line, sizeof line, " ");
                 }
             log_printf("loaded: %s", line);
+        }
+    }
+    {   /* [debug] slow_ms: keep the game thread busy this long every drawn frame, to see how the
+           game behaves when it falls behind (it then skips drawing; see frame_drop_check) */
+        static int slow = -1;
+        if (slow < 0)
+            slow = (int)GetPrivateProfileIntA("debug", "slow_ms", 0, g_ini);
+        if (slow > 0 && *(volatile uint8_t *)0x6DD9BCu == 5) {   /* in gameplay (menus would drop presses) */
+            LARGE_INTEGER a, b, f;
+            QueryPerformanceFrequency(&f);
+            QueryPerformanceCounter(&a);
+            do
+                QueryPerformanceCounter(&b);
+            while ((b.QuadPart - a.QuadPart) * 1000 < (LONGLONG)slow * f.QuadPart);
         }
     }
     if (g_interp_on)

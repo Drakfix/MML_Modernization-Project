@@ -5,6 +5,9 @@
 #define G_IAT_GETTICKCOUNT      0x508328u   /* import slot for kernel32!GetTickCount */
 #define G_GTE_H_FLOAT           0x77EBDCu   /* float: projection plane distance */
 #define G_FRAME_LIMITER_TH      0x55BDB4u   /* float: next-frame threshold in ms */
+#define G_FRAME_PARITY          0x77EAC6u   /* u8: which of the two buffer sets a logic step builds into */
+#define G_DEFERRED_COUNT        0x88777Cu   /* packets queued at 0x77EBE4 to draw after the walk (shadows,
+                                             * translucent planes); the walk draws them and resets this */
 #define G_FRAME_STEP            0x77EAC1u   /* byte: 2 = 30 fps */
 #define G_FRAME_MS              0x50A398u   /* double: 16.667 */
 #define G_GFX_CUR_CTX           0x77EA74u   /* gfx_ctx*: +0x78 = HUD bucket */

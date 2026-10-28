@@ -2,7 +2,8 @@
 
 /* Smooth background layers (the sky): sub-pixel scrolling + interpolation. */
 int bglayer_install(void);
-void bglayer_frame_end(void);   /* call once per frame, right before the display list is walked */
+void bglayer_frame_end(void);
+void bglayer_frame_dropped(void);   /* the step built since the last frame end was never drawn */   /* call once per frame, right before the display list is walked */
 /* For a tile packet of a background layer in the frame being drawn: offset to
  * add to its vertices (ox, oy, 640x480 space), and where it was one tick
  * earlier relative to that (px, py). Returns 0 if the packet isn't a layer

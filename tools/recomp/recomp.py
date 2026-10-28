@@ -24,6 +24,8 @@ folder and never committed.
 """
 import os
 
+RECOMP_FILE = globals().get("RECOMP_FILE", "tools/recomp/recomp.py")   # set by the caller (exec)
+
 from ghidra.program.model.pcode import PcodeOp
 from ghidra.util.task import TaskMonitor
 
@@ -91,6 +93,30 @@ def x87_delta(pcode):
     return d
 
 
+# Code mml.dll patches while the game runs (tools/recomp/patch_sites.txt). The generated code
+# does what the patched machine code would: calls the hook_mid handlers (rt_hook), reads patched
+# operands from memory instead of using the constants, and checks patched opcodes (a jump that
+# replaced a conditional jump, a redirected call, a function entry replaced by a jump). Since it
+# reads the bytes at run time, settings that patch and unpatch while playing keep working.
+PATCH_SITES = []   # (address, length, kind 'H'/'P', first new byte)
+
+
+def load_patch_sites(path):
+    global PATCH_SITES
+    PATCH_SITES = []
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        a, n, kind, b0 = line.split()
+        PATCH_SITES.append((int(a, 16), int(n), kind, int(b0, 16)))
+
+
+def orig_bytes(a, n):
+    mem, af = program.getMemory(), program.getAddressFactory()
+    return [mem.getByte(af.getAddress(hex(a + i))) & 0xFF for i in range(n)]
+
+
 class FuncGen:
     INDEX = {}   # entry address -> table index (set by main)
 
@@ -103,6 +129,8 @@ class FuncGen:
         self.plabels = set()          # (instruction address, op index) inside one instruction
         self.lines = []
         self.callees = set()          # functions this one calls or jumps into
+        self.consts = {}              # (value, size) -> expression, for the instruction being emitted
+        self.dyn_call = None          # address of a CALL whose target mml.dll redirects
         self.impure = False           # reaches something outside the recompiled code
         self.insns = list(program.getListing().getInstructions(func.getBody(), True))
         self.addrs = set(i.getAddress().getOffset() for i in self.insns)
@@ -120,6 +148,8 @@ class FuncGen:
         if sp == "const":
             if size > 8:
                 raise Unsupported("wide constant")
+            if (off, size) in self.consts:
+                return self.consts[(off, size)]
             mask = (1 << (8 * size)) - 1
             return "((%s)0x%xull)" % (ctype(size), off & mask)
         if sp == "register":
@@ -134,12 +164,18 @@ class FuncGen:
             ctype(size)
             return self.local(off, size)
         if sp == "ram":
+            at = self.ram_addr(off)
             if size == 10:
-                return "rt_ld80(0x%xu)" % off
+                return "rt_ld80(%s)" % at
             if size not in INT_T:
-                return "LDN(0x%xu,%d)" % (off, size)
-            return "LD%d(0x%xu)" % (size * 8, off)
+                return "LDN(%s,%d)" % (at, size)
+            return "LD%d(%s)" % (size * 8, at)
         raise Unsupported("space " + sp)
+
+    def ram_addr(self, off):
+        """a direct memory operand's address; mml.dll may have patched it in the instruction (an
+        operand patch: the address is then read from the code bytes, like a patched constant)"""
+        return self.consts.get((off, 4), "0x%xu" % off)
 
     def wr(self, v, expr):
         sp = v.getAddress().getAddressSpace().getName()
@@ -156,11 +192,12 @@ class FuncGen:
             ctype(size)
             return "%s = %s;" % (self.local(off, size), expr)
         if sp == "ram":
+            at = self.ram_addr(off)
             if size == 10:
-                return "rt_st80(c,0x%xu,%s);" % (off, expr)
+                return "rt_st80(c,%s,%s);" % (at, expr)
             if size not in INT_T:
-                return "STN(c,0x%xu,%s,%d);" % (off, expr, size)
-            return "ST%d(c,0x%xu,%s);" % (size * 8, off, expr)
+                return "STN(c,%s,%s,%d);" % (at, expr, size)
+            return "ST%d(c,%s,%s);" % (size * 8, at, expr)
         raise Unsupported("write to space " + sp)
 
     def fval(self, v):
@@ -188,15 +225,15 @@ class FuncGen:
     def goto_ram(self, target, ins):
         if target in INTRINSICS:
             self.impure = True
-            return "{ %s(c); return; }" % INTRINSICS[target][0]
+            return "{ %s(c); return 0; }" % INTRINSICS[target][0]
         if target in self.addrs:
             self.labels.add(target)
             return "goto L_%08x;" % target
         if target in self.known:
             self.callees.add(target)
-            return "{ RC_TAIL(c,%d,0x%xu,%s); return; }" % (self.INDEX[target], target, fname(target))
+            return "return 0x%xu;" % target   # a tail jump: the caller's dispatcher runs it
         self.impure = True
-        return "{ rt_jump(c,0x%xu); return; }" % target
+        return "return 0x%xu;" % target
 
     def branch(self, v, ins, idx):
         sp = v.getAddress().getAddressSpace().getName()
@@ -240,7 +277,13 @@ class FuncGen:
             if t in INTRINSICS:
                 self.impure = True
                 name, noreturn = INTRINSICS[t]
-                return "%s(c);%s" % (name, " return;" if noreturn else "")
+                return "%s(c);%s" % (name, " return 0;" if noreturn else "")
+            if self.dyn_call is not None:   # mml.dll may point this call elsewhere
+                a = self.dyn_call
+                direct = ("RC_CALL(c,%d,0x%xu,%s);" % (self.INDEX[t], t, fname(t)) if t in self.known
+                          else "rt_call(c,0x%xu);" % t)
+                return "{ uint32_t t_ = 0x%xu + LD32(0x%xu); if (t_ == 0x%xu) %s else rt_call(c,t_); }" % (
+                    a + 5, a + 1, t, direct)
             if t in self.known:
                 self.callees.add(t)
                 return "RC_CALL(c,%d,0x%xu,%s);" % (self.INDEX[t], t, fname(t))
@@ -250,7 +293,7 @@ class FuncGen:
             self.impure = True
             return "rt_call(c,%s);" % rd(ins_[0])
         if o == PcodeOp.RETURN:
-            return "c->ret = %s; return;" % rd(ins_[0])
+            return "c->ret = %s; return 0;" % rd(ins_[0])
         if o == PcodeOp.CALLOTHER:
             name = program.getLanguage().getUserDefinedOpName(int(ins_[0].getOffset()))
             args = ins_[1:]
@@ -376,8 +419,46 @@ class FuncGen:
                 cases.append("case 0x%xu: goto L_%08x;" % (t, t))
         if not cases:
             self.impure = True
-            return "{ rt_jump(c,%s); return; }" % expr
-        return "switch (%s) { %s default: rt_jump(c,%s); return; }" % (expr, " ".join(cases), expr)
+            return "return %s;" % expr
+        return "switch (%s) { %s default: return %s; }" % (expr, " ".join(cases), expr)
+
+    # ---- mml.dll's runtime patches ----
+    def patch_prelude(self, ins):
+        """statements before the instruction; also sets up patched operands for its ops"""
+        a, n = ins.getAddress().getOffset(), ins.getLength()
+        out = []
+        for site, length, kind, b0 in PATCH_SITES:
+            if site >= a + n or site + length <= a:
+                continue
+            self.impure = True
+            if kind == "H":
+                if site == a:
+                    out.append("rt_hook(c,0x%xu);" % a)
+                continue
+            if site > a:   # an operand: immediate or address
+                v = orig_bytes(site, length)
+                if length == 4:
+                    self.consts[(v[0] | v[1] << 8 | v[2] << 16 | v[3] << 24, 4)] = "LD32(0x%xu)" % site
+                elif length == 1:
+                    self.consts[(v[0], 1)] = "LD8(0x%xu)" % site
+                    sx = v[0] - 256 if v[0] > 127 else v[0]
+                    self.consts[(sx & 0xFFFFFFFF, 4)] = "(uint32_t)(int32_t)(int8_t)LD8(0x%xu)" % site
+                    self.consts[(sx & 0xFFFF, 2)] = "(uint16_t)(int16_t)(int8_t)LD8(0x%xu)" % site
+                else:
+                    print("  patch %08x: %d-byte operand patch not handled" % (site, length))
+                continue
+            first = orig_bytes(a, 1)[0]
+            if b0 == 0xEB and 0x70 <= first <= 0x7F:     # a conditional jump made unconditional
+                flows = list(ins.getFlows())
+                if flows:
+                    out.append("if (LD8(0x%xu) == 0xEB) %s" % (a, self.goto_ram(flows[0].getOffset(), ins)))
+            elif b0 == 0xE8 and first == 0xE8:           # a call pointed elsewhere
+                self.dyn_call = a
+            elif b0 == 0xE9:                              # the code here replaced by a jump to ours
+                out.append("if (LD8(0x%xu) == 0xE9) return 0x%xu + LD32(0x%xu);" % (a, a + 5, a + 1))
+            else:
+                print("  patch %08x: opcode %02x over %02x not handled" % (site, b0, first))
+        return out
 
     # ---- dead flag writes ----
     FLOW = (PcodeOp.BRANCH, PcodeOp.CBRANCH, PcodeOp.BRANCHIND, PcodeOp.CALL, PcodeOp.CALLIND,
@@ -414,6 +495,8 @@ class FuncGen:
         for n, ins in enumerate(insns):
             a = ins.getAddress().getOffset()
             body.append(("I", a, "/* %08x  %s */" % (a, str(ins).replace("*/", "* /")), None))
+            for x in self.patch_prelude(ins):
+                body.append(("X", None, x, None))
             pc = list(ins.getPcode())
             d = x87_delta(pc)
             if d:
@@ -421,13 +504,14 @@ class FuncGen:
             for i, p in enumerate(pc):
                 body.append(("P", (a, i), self.op(p, ins, i), p))
             body.append(("P", (a, len(pc)), "", None))   # target for branches past the last op
+            self.consts, self.dyn_call = {}, None
             ft = ins.getFallThrough()
             nxt = insns[n + 1].getAddress().getOffset() if n + 1 < len(insns) else None
             if ft is not None and ft.getOffset() != nxt:
                 body.append(("X", None, self.goto_ram(ft.getOffset(), ins), None))
         if self.entry not in self.addrs:   # inside an instruction: data Ghidra decoded as code
             raise Unsupported("entry %08x is not an instruction" % self.entry)
-        out = ["void %s(RCtx *c)" % fname(self.entry), "{"]
+        out = ["uint32_t %s(RCtx *c)" % fname(self.entry), "{"]
         for (off, size), name in sorted(self.locals.items()):
             out.append("    %s %s = 0;" % (ctype(size), name))
         if insns and insns[0].getAddress().getOffset() != self.entry:
@@ -446,7 +530,7 @@ class FuncGen:
                     out.append("    " + text)
             else:
                 out.append("    " + text)
-        out.append("    ;")
+        out.append("    return 0;")
         out.append("}")
         return "\n".join(out)
 
@@ -463,7 +547,13 @@ def stack_switch(g):
 def reloc_code_targets():
     """every absolute address of code in the image, from the relocation table: function pointers
     in data (the game's task and object handlers live in tables) and in instructions"""
-    mem, lst = program.getMemory(), program.getListing()
+    lst, af = program.getListing(), program.getAddressFactory()
+    return set(v for v in reloc_code_values() if lst.getInstructionAt(af.getAddress(hex(v))) is not None)
+
+
+def reloc_code_values():
+    """every relocated value pointing into the code section (disassembled there or not)"""
+    mem = program.getMemory()
     text = [b for b in mem.getBlocks() if b.isExecute()]
     lo = min(b.getStart().getOffset() for b in text)
     hi = max(b.getEnd().getOffset() for b in text)
@@ -474,9 +564,58 @@ def reloc_code_targets():
             v = mem.getInt(r.getAddress()) & 0xFFFFFFFF
         except Exception:
             continue
-        if lo <= v <= hi and lst.getInstructionAt(af.getAddress(hex(v))) is not None:
+        if lo <= v <= hi:
             out.add(v)
     return out
+
+
+def apply_static_patch():
+    """The Ghidra project holds the vanilla executable; the game runs the installer's patched one
+    (src/patch_manifest.py: relocated renderer tables, the culling fix). Put its code bytes into
+    the project and disassemble them, so the recompiled code is the patched code. Data patches
+    don't matter here (the running process has them in memory)."""
+    import importlib.util
+    from ghidra.app.cmd.disassemble import DisassembleCommand
+    from ghidra.app.cmd.function import CreateFunctionCmd
+    here = os.path.dirname(os.path.abspath(RECOMP_FILE))
+    spec = importlib.util.spec_from_file_location("patch_manifest",
+                                                  os.path.join(here, "..", "..", "src", "patch_manifest.py"))
+    pm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pm)
+    mem, lst, fm, af = program.getMemory(), program.getListing(), program.getFunctionManager(), program.getAddressFactory()
+    code = [b for b in mem.getBlocks() if b.isExecute()][0]
+    text_va, text_raw = code.getStart().getOffset(), 0x400          # AUTO: file offset 0x400
+    applied, funcs = 0, set()
+    for off, hexbytes in pm.PATCHES:
+        data = bytes.fromhex(hexbytes)
+        if not text_raw <= off < text_raw + code.getSize():
+            continue
+        va = text_va + off - text_raw
+        a = af.getAddress(hex(va))
+        cur = bytes((mem.getByte(a.add(i)) & 0xFF) for i in range(len(data)))
+        if cur == data:
+            continue
+        starts = []
+        for i in range(len(data)):
+            ins = lst.getInstructionContaining(a.add(i))
+            if ins is not None and ins.getAddress() not in starts:
+                starts.append(ins.getAddress())
+        for st in starts:
+            f = fm.getFunctionContaining(st)
+            if f is not None:
+                funcs.add(f)
+        lo = min(starts + [a])
+        hi = max([x.add(lst.getInstructionAt(x).getLength() - 1) for x in starts] + [a.add(len(data) - 1)])
+        lst.clearCodeUnits(lo, hi, False)
+        import jpype
+        mem.setBytes(a, jpype.JArray(jpype.JByte)([b - 256 if b > 127 else b for b in data]))
+        for st in sorted(set(starts + [lo])):
+            if lst.getInstructionAt(st) is None:
+                DisassembleCommand(st, None, True).applyTo(program, MON)
+        applied += 1
+    for f in funcs:
+        CreateFunctionCmd.fixupFunctionBody(program, f, MON)
+    print("apply_static_patch: %d code patches applied, %d functions re-flowed" % (applied, len(funcs)))
 
 
 def fix_noreturn():
@@ -514,6 +653,7 @@ def fix_noreturn():
 def discover():
     """make functions where code is only reached through pointers (Ghidra's analysis misses them);
     returns every pointed-to code address, for use as extra roots"""
+    apply_static_patch()
     fix_noreturn()
     fm, af = program.getFunctionManager(), program.getAddressFactory()
     targets = reloc_code_targets()
@@ -524,12 +664,134 @@ def discover():
             if flat.createFunction(ad, None) is not None:
                 made += 1
     print("discover: %d code addresses in the relocation table, %d new functions" % (len(targets), made))
+    jump_orphans()
     return targets
+
+
+def jump_orphans():
+    """Code that no function contains becomes functions: direct call and jump targets, fall-throughs
+    (shared tails Ghidra left out of every body), and pointer targets Ghidra never disassembled
+    (createFunction doesn't disassemble, so discover() skipped them). Otherwise the recompiled
+    code has nowhere to go there but machine code, which may never come back."""
+    from ghidra.app.cmd.function import CreateFunctionCmd
+    fm, lst, mem, af = program.getFunctionManager(), program.getListing(), program.getMemory(), program.getAddressFactory()
+    made = fix_switchdata()
+    pointed = set()
+    for v in reloc_code_values():
+        x = af.getAddress(hex(v))
+        if (fm.getFunctionContaining(x) is None and lst.getInstructionAt(x) is None and
+                lst.getDefinedDataAt(x) is None and not switch_table(x)):
+            pointed.add(x)
+    for _ in range(8):   # new functions can lead to further orphans
+        new, pointed = set(pointed), set()
+        for ins in lst.getInstructions(True):
+            ft = ins.getFlowType()
+            out = list(ins.getFlows()) if ft.isJump() or ft.isCall() else []
+            src = fm.getFunctionContaining(ins.getAddress())
+            # (not out of Ghidra's "switchdata" functions: those are jump tables read as code)
+            if src is not None and not src.getName().startswith("switchdata") and ins.getFallThrough() is not None:
+                out.append(ins.getFallThrough())
+            for x in out:
+                b = mem.getBlock(x)
+                if b is not None and b.isExecute() and fm.getFunctionContaining(x) is None:
+                    new.add(x)
+        if not new:
+            break
+        for x in sorted(new, key=lambda a: a.getOffset()):
+            # (a fall-through out of bytes Ghidra misread can land in data: no function there)
+            if disassemble_at(x) and fm.getFunctionContaining(x) is None and flat.createFunction(x, None) is not None:
+                made += 1
+                print("  orphan %08x: new function" % x.getOffset())
+    # functions whose entry never got disassembled (made before disassemble_at existed)
+    fixed = 0
+    for f in list(fm.getFunctions(True)):
+        e = f.getEntryPoint()
+        b = mem.getBlock(e)
+        if (f.isExternal() or b is None or not b.isExecute() or lst.getInstructionAt(e) is not None or
+                f.getName().startswith("switchdata")):
+            continue
+        if disassemble_at(e):
+            CreateFunctionCmd.fixupFunctionBody(program, f, MON)
+            fixed += 1
+            print("  %s %08x: disassembled" % (f.getName(), e.getOffset()))
+    print("jump_orphans: %d new functions, %d entries disassembled" % (made, fixed))
+
+
+def switch_table(a):
+    """a jump table Ghidra labelled (it is a relocation target too: the operand of JMP [EAX*4+table])"""
+    s = program.getSymbolTable().getPrimarySymbol(a)
+    return s is not None and s.getName().startswith("switchdata")
+
+
+def fix_switchdata():
+    """Ghidra sometimes makes a function out of a jump table ("switchdataD_..."), decodes the
+    table as instructions and runs on, misaligned, into the real code after it (0x49F707: an
+    8-entry table, then a function at 0x49F727 reached only through a pointer). Dissolve those,
+    then make functions at every code address in the range that something points or branches to."""
+    fm, lst, rm, af = (program.getFunctionManager(), program.getListing(), program.getReferenceManager(),
+                       program.getAddressFactory())
+    from ghidra.program.model.symbol import SourceType
+    targets = reloc_code_targets()
+    made = 0
+    for f in [f for f in fm.getFunctions(True) if f.getName().startswith("switchdata")]:
+        body = f.getBody()
+        lo, hi = body.getMinAddress(), body.getMaxAddress()
+        entries = set()
+        for r in body.getAddressRanges():
+            a = r.getMinAddress()
+            while a.compareTo(r.getMaxAddress()) <= 0:
+                if switch_table(a):
+                    pass
+                elif a.getOffset() in targets or any(
+                        x.getReferenceType().isFlow() and not body.contains(x.getFromAddress())
+                        for x in rm.getReferencesTo(a)):
+                    entries.add(a)
+                a = a.next()
+        name = f.getName()
+        fm.removeFunction(f.getEntryPoint())
+        lst.clearCodeUnits(lo, hi, False)
+        if not switch_table(lo):   # keep the table's label: it marks the address as data from now on
+            program.getSymbolTable().createLabel(lo, name, SourceType.ANALYSIS)
+        n = 0
+        for a in sorted(entries, key=lambda x: x.getOffset()):
+            if disassemble_at(a) and fm.getFunctionContaining(a) is None and flat.createFunction(a, None) is not None:
+                n += 1
+        made += n
+        print("  %s (%08x-%08x): dissolved, %d functions made" % (f.getName(), lo.getOffset(), hi.getOffset(), n))
+    return made
+
+
+def disassemble_at(x):
+    """Disassemble at x. Ghidra's analysis sometimes decoded the same bytes from a byte or two
+    off (from a data reference); those stray instructions belong to no function and block the
+    real decode, so they are cleared first."""
+    from ghidra.app.cmd.disassemble import DisassembleCommand
+    lst, fm = program.getListing(), program.getFunctionManager()
+    if lst.getInstructionAt(x) is not None:
+        return True
+    end = x.add(15)
+    first = lst.getInstructionContaining(x)
+    stray = []
+    for ins in lst.getInstructions(first.getAddress() if first is not None else x, True):
+        if ins.getAddress().compareTo(end) > 0:
+            break
+        if fm.getFunctionContaining(ins.getAddress()) is None:
+            stray.append(ins)
+    for ins in stray:
+        lst.clearCodeUnits(ins.getAddress(), ins.getMaxAddress(), False)
+    DisassembleCommand(x, None, True).applyTo(program, MON)
+    return lst.getInstructionAt(x) is not None
+
+
+def system_thunk(f):
+    """a JMP to an imported (system DLL) function: left to the machine code. Thunks into the game's
+    own code are translated like any function (some are reached only through pointers)."""
+    return f.isThunk() and f.getThunkedFunction(True).isExternal()
 
 
 def all_roots(with_pointers=True):
     roots = [f.getEntryPoint().getOffset() for f in program.getFunctionManager().getFunctions(True)
-             if not f.isExternal() and not f.isThunk()]
+             if not f.isExternal() and not system_thunk(f)]
     if with_pointers:
         roots += sorted(reloc_code_targets())
     return roots
@@ -545,7 +807,7 @@ def closure(roots):
             continue
         t = af.getAddress(hex(a))
         f = fm.getFunctionAt(t) or fm.getFunctionContaining(t)
-        if f is None or f.isThunk():
+        if f is None or system_thunk(f):
             continue
         seen[a] = f
         for ins in program.getListing().getInstructions(f.getBody(), True):
@@ -584,7 +846,9 @@ def steal_info(f):
     return n, raw
 
 
-def main(roots, out, shards=1):
+def main(roots, out, shards=1, patches=None):
+    if patches:
+        load_patch_sites(patches)
     funcs = closure(roots)
     known = set(funcs)
     parts, table, failed = [], [], []
@@ -595,18 +859,21 @@ def main(roots, out, shards=1):
         try:
             g = FuncGen(f, known, a)
             parts.append(g.gen())
-            gens[a] = g
+            # keep only what the table needs: holding the generator would pin every instruction and
+            # P-code object of the whole program in memory (tens of GB over the full executable)
+            gens[a] = g.callees
             if g.impure or stack_switch(g):
                 impure.add(a)
+            del g
         except Unsupported as e:
             failed.append("%s %08x: %s" % (f.getName(), a, e))
-            parts.append("void %s(RCtx *c) { rt_unsupported(c,0x%xu,\"%s\"); }" % (fname(a), a, str(e)))
+            parts.append("uint32_t %s(RCtx *c) { rt_unsupported(c,0x%xu,\"%s\"); return 0; }" % (fname(a), a, str(e)))
             impure.add(a)
     changed = True   # impure if anything reachable is
     while changed:
         changed = False
-        for a, g in gens.items():
-            if a not in impure and g.callees & impure:
+        for a, callees in gens.items():
+            if a not in impure and callees & impure:
                 impure.add(a)
                 changed = True
     lst = program.getListing()
@@ -622,7 +889,7 @@ def main(roots, out, shards=1):
         n, raw = steal_info(f) if f.getEntryPoint().getOffset() == a and called else (0, [])
         name = f.getName() if f.getEntryPoint().getOffset() == a else "%s%+#x" % (f.getName(), a - f.getEntryPoint().getOffset())
         body = f.getBody()
-        cl = sorted(index[x] for x in gens[a].callees) if a in gens else []
+        cl = sorted(index[x] for x in gens[a]) if a in gens else []
         if cl:
             callee_arrays.append("static const uint16_t c_%08x[] = { %s };" % (a, ", ".join(map(str, cl))))
         table.append('    { 0x%xu, %s, "%s", %d, %d, { %s }, 0x%xu, 0x%xu, %s, %d },' % (
@@ -630,7 +897,7 @@ def main(roots, out, shards=1):
             body.getMinAddress().getOffset(), body.getMaxAddress().getOffset() + 1,
             "c_%08x" % a if cl else "0", len(cl)))
     head = "/* Generated by tools/recomp/recomp.py from MEGAMAN.EXE. Do not edit or commit. */\n"
-    protos = "".join("void %s(RCtx *c);\n" % fname(a) for a in sorted(funcs))
+    protos = "".join("uint32_t %s(RCtx *c);\n" % fname(a) for a in sorted(funcs))
     d = os.path.dirname(out)
     os.makedirs(d, exist_ok=True)
     for fn in os.listdir(d):   # old shards
@@ -643,6 +910,7 @@ def main(roots, out, shards=1):
             fp.write("\n\n" + "\n".join(callee_arrays))
             fp.write("\n\nconst RFuncInfo g_recomp_funcs[] = {\n%s\n};\n" % "\n".join(table))
             fp.write("const int g_recomp_nfuncs = %d;\n" % len(funcs))
+            fp.write("const int g_recomp_patch_aware = %d;\n" % int(bool(PATCH_SITES)))
     else:
         with open(os.path.join(d, "recomp_gen.h"), "w", encoding="utf-8") as fp:
             fp.write(head + '#pragma once\n#include "recomp_rt.h"\n\n' + protos)
@@ -656,6 +924,7 @@ def main(roots, out, shards=1):
             fp.write("\n".join(callee_arrays) + "\n\n")
             fp.write("const RFuncInfo g_recomp_funcs[] = {\n%s\n};\n" % "\n".join(table))
             fp.write("const int g_recomp_nfuncs = %d;\n" % len(funcs))
+            fp.write("const int g_recomp_patch_aware = %d;\n" % int(bool(PATCH_SITES)))
     print("recomp: %d functions -> %s (%d files), %d pure" % (len(funcs), d, max(1, shards),
                                                              len(funcs) - len(impure)))
     for x in failed:

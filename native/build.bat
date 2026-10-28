@@ -26,7 +26,7 @@ set "GENOBJ="
 set "GENDEF=/DRECOMP_NONE"
 if exist "%OUT%\gen\recomp_*.c" (
   del /q "%OUT%\gen\*.obj" 2>nul
-  cl /nologo /c /MP /O2 /MT /W0 /GS- /I"%ROOT%src" /Fo"%OUT%\gen\\" "%OUT%\gen\recomp_*.c" >nul || exit /b 1
+  cl /nologo /c /MP4 /O2 /MT /W0 /GS- /I"%ROOT%src" /Fo"%OUT%\gen\\" "%OUT%\gen\recomp_*.c" >nul || exit /b 1
   set "GENOBJ=%OUT%\gen\*.obj"
   set "GENDEF="
 )

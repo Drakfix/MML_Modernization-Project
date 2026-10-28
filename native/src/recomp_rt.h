@@ -248,6 +248,9 @@ void rt_port_out(RCtx *c, uint32_t port);
 double rt_ld80(uint32_t a);
 void rt_st80(RCtx *c, uint32_t a, double v);
 
+/* a hook mml.dll installed at this address (tools/recomp/patch_sites.txt): run its handler */
+void rt_hook(RCtx *c, uint32_t site);
+
 /* calls and jumps the recompiler couldn't resolve statically */
 void rt_call(RCtx *c, uint32_t target);
 void rt_jump(RCtx *c, uint32_t target);
@@ -262,25 +265,25 @@ void rt_co_exit(RCtx *c);
 
 /* calls to recompiled functions: per function, the runtime can choose to run the original
    machine code instead (code that mml.dll patches, so its changes keep working) */
-extern uint8_t g_rc_native[];
+extern uint8_t *g_rc_native;
 void rt_call_native(RCtx *c, uint32_t target);
+/* A generated function returns 0 when it returned (RET), or the address it jumps on to: a
+   jump into another function. The caller's dispatcher runs that one, and whatever it jumps to,
+   at a constant C stack depth (a loop whose back edge crosses functions would otherwise nest). */
+uint32_t rt_dispatch(RCtx *c, uint32_t target);
 #define RC_CALL(c, i, a, f)                                                                        \
     do {                                                                                           \
-        if (g_rc_native[i])                                                                        \
+        if (g_rc_native[i]) {                                                                      \
             rt_call_native(c, a);                                                                  \
-        else                                                                                       \
-            f(c);                                                                                  \
-    } while (0)
-#define RC_TAIL(c, i, a, f)                                                                        \
-    do {                                                                                           \
-        if (g_rc_native[i])                                                                        \
-            rt_jump(c, a);                                                                         \
-        else                                                                                       \
-            f(c);                                                                                  \
+        } else {                                                                                   \
+            uint32_t t_ = f(c);                                                                    \
+            if (t_)                                                                                \
+                rt_dispatch(c, t_);                                                                \
+        }                                                                                          \
     } while (0)
 void rt_unsupported(RCtx *c, uint32_t at, const char *what);
 
-typedef void (*rfunc)(RCtx *c);
+typedef uint32_t (*rfunc)(RCtx *c);   /* returns a tail-jump target or 0 */
 typedef struct {
     uint32_t addr;
     rfunc fn;

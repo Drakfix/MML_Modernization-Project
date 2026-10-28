@@ -43,6 +43,10 @@ int interp_borrow_residual(float sx, float sy, float z, interp_vec3 *resid);
  * since the previous one leaves the frame without previous positions) */
 void interp_frame_end(void);
 
+/* the game built a frame and didn't draw it (it fell behind): forget what it projected, so the
+   next frame isn't merged with it */
+void interp_frame_dropped(void);
+
 /* draw side: camera-space position of the vertex projected to (sx, sy) in the
  * frame being drawn, and where the same vertex was the frame before.
  * Returns 0 if unknown, 1 if only the current position is known, 2 if both,

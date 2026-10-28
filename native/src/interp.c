@@ -444,6 +444,15 @@ void interp_frame_end(void)
     g_sets[g_build].cam.valid = 0;
 }
 
+void interp_frame_dropped(void)
+{
+    if (!g_ready)
+        return;
+    g_sets[g_build].count = 0;
+    g_sets[g_build].gen++;
+    g_sets[g_build].cam.valid = 0;
+}
+
 int interp_lookup(float sx, float sy, interp_vec3 *cur, interp_vec3 *prev)
 {
     const frame_set *c;
