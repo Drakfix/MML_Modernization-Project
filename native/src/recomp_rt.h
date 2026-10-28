@@ -25,6 +25,7 @@ typedef struct RCtx {
     uint32_t ret;        /* target of the last RETURN */
     int log;             /* differential mode: record memory writes (see recomp.c) */
     int fdelta;          /* net x87 pushes since entry (Ghidra's model has no TOP) */
+    uint16_t fsw0;       /* x87 status word at entry: TOP and the sticky exception flags */
 } RCtx;
 
 #ifndef G_MEMBASE
@@ -161,6 +162,14 @@ static __inline uint64_t FBITS64(double f)
     return b;
 }
 
+/* FNSTSW: Ghidra keeps only the condition codes in the status word; add the stack top
+   (tracked through fdelta) and the sticky exception flags the FPU had at entry */
+static __inline uint16_t FSW(const RCtx *c)
+{
+    unsigned top = ((unsigned)(c->fsw0 >> 11) - (unsigned)c->fdelta) & 7;
+    return (uint16_t)((R16(c, 0x10A2) & 0x4700) | (top << 11) | (c->fsw0 & 0xFF));
+}
+
 /* x87 precision control (CW bits 8-9): 0 = single, 2 = double, 3 = extended (as double) */
 static __inline double FPC(const RCtx *c, double v)
 {
@@ -218,5 +227,9 @@ typedef struct {
     rfunc fn;
     const char *name;
     uint8_t steal;            /* bytes of whole, position-independent instructions at the entry (0 = can't hook) */
+    uint8_t pure;             /* everything it reaches is recompiled code (safe to run twice in diff mode) */
     uint8_t entry_bytes[16];
+    uint32_t lo, hi;          /* the function's code range */
+    const uint16_t *callees;  /* indices into the table */
+    uint16_t ncallees;
 } RFuncInfo;

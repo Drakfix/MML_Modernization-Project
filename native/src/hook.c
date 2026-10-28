@@ -27,9 +27,28 @@ int mem_expect(uintptr_t addr, const void *bytes, size_t n)
     return memcmp((const void *)addr, bytes, n) == 0;
 }
 
+static struct { uintptr_t addr; size_t n; } g_patches[1024];
+static size_t g_npatches;
+
+size_t mem_patch_count(void)
+{
+    return g_npatches;
+}
+
+void mem_patch_get(size_t i, uintptr_t *addr, size_t *n)
+{
+    *addr = g_patches[i].addr;
+    *n = g_patches[i].n;
+}
+
 int mem_write(uintptr_t addr, const void *bytes, size_t n)
 {
     DWORD old;
+    if (g_npatches < sizeof g_patches / sizeof g_patches[0]) {
+        g_patches[g_npatches].addr = addr;
+        g_patches[g_npatches].n = n;
+        g_npatches++;
+    }
     if (!VirtualProtect((void *)addr, n, PAGE_EXECUTE_READWRITE, &old))
         return 0;
     memcpy((void *)addr, bytes, n);

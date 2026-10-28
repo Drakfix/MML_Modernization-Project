@@ -460,7 +460,6 @@ static void init(void)
         if (w[0])
             watch_configure(w);
     }
-    recomp_install(g_ini);   /* [debug] recomp: recompiled game code (diff / replace) */
     g_player_log = GetPrivateProfileIntA("debug", "player_log", 0, g_ini);
     if (GetPrivateProfileIntA("debug", "census", 0, g_ini))
         census_enable();
@@ -584,6 +583,7 @@ static void init(void)
             }
         }
     }
+    recomp_install(g_ini);   /* [debug] recomp: recompiled game code (diff / replace), after every other patch */
     log_printf("init done");
 }
 

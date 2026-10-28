@@ -22,12 +22,12 @@ fxc /nologo /T vs_4_0 /E vs_ui /Vn g_vs_ui /Fh "%SH%\ui_vs.h" "%HLSL%" >nul || e
 fxc /nologo /T ps_4_0 /E ps_ui /Vn g_ps_ui /Fh "%SH%\ui_ps.h" "%HLSL%" >nul || exit /b 1
 rem recompiled game code (tools/recomp/recomp.py output, never committed): compiled on its own with
 rem warnings off; without it the harness builds empty
-set "GEN=%OUT%\gen\recomp_gen.c"
 set "GENOBJ="
 set "GENDEF=/DRECOMP_NONE"
-if exist "%GEN%" (
-  cl /nologo /c /O2 /MT /W0 /GS- /I"%ROOT%src" /Fo"%OUT%\gen\recomp_gen.obj" "%GEN%" >nul || exit /b 1
-  set "GENOBJ=%OUT%\gen\recomp_gen.obj"
+if exist "%OUT%\gen\recomp_*.c" (
+  del /q "%OUT%\gen\*.obj" 2>nul
+  cl /nologo /c /MP /O2 /MT /W0 /GS- /I"%ROOT%src" /Fo"%OUT%\gen\\" "%OUT%\gen\recomp_*.c" >nul || exit /b 1
+  set "GENOBJ=%OUT%\gen\*.obj"
   set "GENDEF="
 )
 rem C4201: the SDK's own D3D11 headers use nameless unions

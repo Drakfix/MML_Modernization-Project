@@ -18,6 +18,10 @@ int mem_expect(uintptr_t addr, const void *bytes, size_t n);
 /* Overwrite game memory (code or data), handling page protection. */
 int mem_write(uintptr_t addr, const void *bytes, size_t n);
 
+/* every mem_write so far (the recompiler's test harness skips code we patched) */
+size_t mem_patch_count(void);
+void mem_patch_get(size_t i, uintptr_t *addr, size_t *n);
+
 /* Run fn before the instruction(s) at `site`, then replay them.
  * `steal` must cover whole instructions (>= 5 bytes). The stolen bytes must be
  * position-independent, or be exactly one E8/E9 rel32 call/jmp, which is

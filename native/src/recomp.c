@@ -34,8 +34,9 @@ extern const RFuncInfo g_recomp_funcs[];
 extern const int g_recomp_nfuncs;
 #endif
 
-#define MAX_ROOTS 64
-#define MAX_LOG 65536
+#define MAX_ROOTS 8192
+#define MAX_LOG (1 << 20)
+#define EXEC_SIZE (1 << 20)   /* stubs + trampolines: 48 bytes per root */
 
 enum { MODE_OFF, MODE_DIFF, MODE_REPLACE };
 
@@ -61,16 +62,17 @@ static int g_busy, g_pending, g_pending_root;
 static uint32_t g_real_ret, g_exp[8], g_exp_esp;
 static int g_depth0;           /* x87 stack depth at the entry */
 static unsigned g_calls, g_ok, g_bad, g_reported;
+static uint8_t *g_modded;      /* per function: reaches code mml.dll patched (differs by design) */
 
 static uint8_t *exec_alloc(size_t n)
 {
     uint8_t *p;
     if (!g_exec) {
-        g_exec = (uint8_t *)VirtualAlloc(NULL, 65536, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        g_exec = (uint8_t *)VirtualAlloc(NULL, EXEC_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
         if (!g_exec)
             return NULL;
     }
-    if (g_exec_used + n > 65536)
+    if (g_exec_used + n > EXEC_SIZE)
         return NULL;
     p = g_exec + g_exec_used;
     g_exec_used += (n + 15) & ~(size_t)15;
@@ -228,6 +230,7 @@ static void x87_from_ctx(const RCtx *c, uint8_t *img, int depth0)
 static void ctx_from_cpu(RCtx *c)
 {
     memset(c, 0, sizeof *c);
+    c->fsw0 = *(const uint16_t *)(t_fsave + FS_SW);
     R32_SET(c, REG_EAX, t_eax);
     R32_SET(c, REG_ECX, t_ecx);
     R32_SET(c, REG_EDX, t_edx);
@@ -470,6 +473,35 @@ static int install_root(uint32_t addr)
     return 1;
 }
 
+/* functions containing a byte mml.dll patched, and everything that calls them: their recompiled
+   copy (made from the unpatched exe) is meant to differ from the running original */
+static void mark_modded(void)
+{
+    size_t k;
+    int i, j, changed = 1, n = 0;
+    g_modded = (uint8_t *)calloc((size_t)g_recomp_nfuncs, 1);
+    if (!g_modded)
+        return;
+    for (k = 0; k < mem_patch_count(); k++) {
+        uintptr_t a;
+        size_t len;
+        mem_patch_get(k, &a, &len);
+        for (i = 0; i < g_recomp_nfuncs; i++)
+            if (a < g_recomp_funcs[i].hi && a + len > g_recomp_funcs[i].lo)
+                g_modded[i] = 1;
+    }
+    while (changed) {
+        changed = 0;
+        for (i = 0; i < g_recomp_nfuncs; i++)
+            for (j = 0; !g_modded[i] && j < g_recomp_funcs[i].ncallees; j++)
+                if (g_modded[g_recomp_funcs[i].callees[j]])
+                    g_modded[i] = 1, changed = 1;
+    }
+    for (i = 0; i < g_recomp_nfuncs; i++)
+        n += g_modded[i];
+    log_printf("recomp: %d functions reach code patched by mml.dll (%u patches)", n, (unsigned)mem_patch_count());
+}
+
 /* while recompiled code is being tried, say where the game crashed */
 static LONG CALLBACK on_crash(EXCEPTION_POINTERS *ep)
 {
@@ -499,10 +531,12 @@ void recomp_install(const char *ini)
     AddVectoredExceptionHandler(0, on_crash);
     t_post_addr = (uint32_t)(uintptr_t)stub_post;
     GetPrivateProfileStringA("debug", "recomp_roots", "", roots, sizeof roots, ini);
-    if (_stricmp(roots, "all") == 0) {   /* every function that can be hooked */
+    mark_modded();
+    if (_stricmp(roots, "all") == 0) {   /* every function that can be hooked (diff: pure and not modded) */
         int i;
         for (i = 0; i < g_recomp_nfuncs; i++)
-            if (g_recomp_funcs[i].steal >= 5)
+            if (g_recomp_funcs[i].steal >= 5 &&
+                (g_mode == MODE_REPLACE || (g_recomp_funcs[i].pure && !g_modded[i])))
                 install_root(g_recomp_funcs[i].addr);
     } else {
         for (p = strtok_s(roots, ", ", &next); p; p = strtok_s(NULL, ", ", &next))

@@ -40,7 +40,18 @@ def ctype(size):
         return "double"
     if size in INT_T:
         return INT_T[size]
+    if size in (3, 5, 6, 7):
+        return "uint64_t"
     raise Unsupported("varnode size %d" % size)
+
+
+FLAGS = range(0x200, 0x210)   # CF PF AF ZF SF DF OF... one byte each
+
+
+def flag_of(v):
+    if v is None or v.getAddress().getAddressSpace().getName() != "register":
+        return None
+    return v.getOffset() if v.getOffset() in FLAGS and v.getSize() == 1 else None
 
 
 ST0, ST1, ST2 = 0x1100, 0x1110, 0x1120
@@ -49,18 +60,21 @@ ST0, ST1, ST2 = 0x1100, 0x1110, 0x1120
 def x87_delta(pcode):
     """net x87 pushes of one instruction: Ghidra models the stack as fixed registers,
     a push is the chain ST1<-ST0, ST2<-ST1..., a pop the chain ST0<-ST1, ST1<-ST2..."""
-    moves = set()
+    moves = []
     for p in pcode:
+        m = None
         if p.getOpcode() == PcodeOp.COPY and p.getNumInputs() == 1:
             o, i = p.getOutput(), p.getInput(0)
             if (o.getAddress().getAddressSpace().getName() == "register" and
                     i.getAddress().getAddressSpace().getName() == "register" and o.getSize() == 10):
-                moves.add((o.getOffset(), i.getOffset()))
+                m = (o.getOffset(), i.getOffset())
+        moves.append(m)
     d = 0
-    if (ST1, ST0) in moves and (ST2, ST1) in moves:
-        d += 1
-    if (ST0, ST1) in moves and (ST1, ST2) in moves:
-        d -= 1
+    for k in range(len(moves) - 1):
+        if moves[k] == (ST2, ST1) and moves[k + 1] == (ST1, ST0):
+            d += 1
+        if moves[k] == (ST0, ST1) and moves[k + 1] == (ST1, ST2):
+            d -= 1
     return d
 
 
@@ -73,6 +87,8 @@ class FuncGen:
         self.labels = set()           # instruction addresses that need a label
         self.plabels = set()          # (instruction address, op index) inside one instruction
         self.lines = []
+        self.callees = set()          # functions this one calls or jumps into
+        self.impure = False           # reaches something outside the recompiled code
         self.insns = list(program.getListing().getInstructions(func.getBody(), True))
         self.addrs = set(i.getAddress().getOffset() for i in self.insns)
 
@@ -94,6 +110,8 @@ class FuncGen:
         if sp == "register":
             if size == 10:
                 return "RF(c,0x%x)" % off
+            if off == 0x10A2 and size == 2:
+                return "FSW(c)"
             if size not in INT_T:
                 raise Unsupported("register size %d" % size)
             return "R%d(c,0x%x)" % (size * 8, off)
@@ -103,12 +121,16 @@ class FuncGen:
         if sp == "ram":
             if size == 10:
                 return "rt_ld80(0x%xu)" % off
+            if size not in INT_T:
+                raise Unsupported("memory operand size %d" % size)
             return "LD%d(0x%xu)" % (size * 8, off)
         raise Unsupported("space " + sp)
 
     def wr(self, v, expr):
         sp = v.getAddress().getAddressSpace().getName()
         off, size = v.getOffset(), v.getSize()
+        if size in (3, 5, 6, 7):
+            expr = "((%s) & 0x%xull)" % (expr, (1 << (8 * size)) - 1)
         if sp == "register":
             if size == 10:
                 return "RF_SET(c,0x%x,%s);" % (off, expr)
@@ -151,7 +173,9 @@ class FuncGen:
             self.labels.add(target)
             return "goto L_%08x;" % target
         if target in self.known:
+            self.callees.add(target)
             return "{ %s(c); return; }" % fname(target)   # tail jump into another function
+        self.impure = True
         return "{ rt_jump(c,0x%xu); return; }" % target
 
     def branch(self, v, ins, idx):
@@ -173,11 +197,15 @@ class FuncGen:
             return self.wr(out, rd(ins_[0]))
         if o == PcodeOp.LOAD:
             s = out.getSize()
+            if s not in INT_T and s != 10:
+                raise Unsupported("load size %d" % s)
             if s == 10:
                 return self.wr(out, "rt_ld80(%s)" % rd(ins_[1]))
             return self.wr(out, "LD%d(%s)" % (s * 8, rd(ins_[1])))
         if o == PcodeOp.STORE:
             v = ins_[2]
+            if v.getSize() not in INT_T and v.getSize() != 10:
+                raise Unsupported("store size %d" % v.getSize())
             if v.getSize() == 10:
                 return "rt_st80(c,%s,%s);" % (rd(ins_[1]), rd(v))
             return "ST%d(c,%s,%s);" % (v.getSize() * 8, rd(ins_[1]), rd(v))
@@ -189,12 +217,18 @@ class FuncGen:
             return self.branchind(rd(ins_[0]), ins)
         if o == PcodeOp.CALL:
             t = ins_[0].getOffset()
-            return "%s(c);" % fname(t) if t in self.known else "rt_call(c,0x%xu);" % t
+            if t in self.known:
+                self.callees.add(t)
+                return "%s(c);" % fname(t)
+            self.impure = True
+            return "rt_call(c,0x%xu);" % t
         if o == PcodeOp.CALLIND:
+            self.impure = True
             return "rt_call(c,%s);" % rd(ins_[0])
         if o == PcodeOp.RETURN:
             return "c->ret = %s; return;" % rd(ins_[0])
         if o == PcodeOp.CALLOTHER:
+            self.impure = True
             name = program.getLanguage().getUserDefinedOpName(int(ins_[0].getOffset()))
             return 'rt_unsupported(c,0x%xu,"%s");' % (ins.getAddress().getOffset(), name)
 
@@ -215,6 +249,8 @@ class FuncGen:
             return self.wr(out, "(uint8_t)(%s %s %s)" % (a, cmps[o], b))
         scmps = {PcodeOp.INT_SLESS: "<", PcodeOp.INT_SLESSEQUAL: "<="}
         if o in scmps:
+            if isz not in SINT_T:
+                raise Unsupported("signed compare size %d" % isz)
             S = SINT_T[isz]
             return self.wr(out, "(uint8_t)((%s)%s %s (%s)%s)" % (S, a, scmps[o], S, b))
         if o in (PcodeOp.INT_SDIV, PcodeOp.INT_SREM):
@@ -229,7 +265,12 @@ class FuncGen:
         if o == PcodeOp.INT_ZEXT:
             return self.wr(out, "(%s)%s" % (T, a))
         if o == PcodeOp.INT_SEXT:
+            if s not in SINT_T or isz not in SINT_T:
+                raise Unsupported("sext %d->%d" % (isz, s))
             return self.wr(out, "(%s)(%s)(%s)%s" % (T, SINT_T[s], SINT_T[isz], a))
+        if o in (PcodeOp.INT_LEFT, PcodeOp.INT_RIGHT, PcodeOp.INT_SRIGHT, PcodeOp.INT_CARRY,
+                 PcodeOp.INT_SCARRY, PcodeOp.INT_SBORROW) and isz not in INT_T:
+            raise Unsupported("op size %d" % isz)
         if o in (PcodeOp.INT_LEFT, PcodeOp.INT_RIGHT, PcodeOp.INT_SRIGHT):
             fn = {PcodeOp.INT_LEFT: "SHL", PcodeOp.INT_RIGHT: "SHR", PcodeOp.INT_SRIGHT: "SAR"}[o]
             return self.wr(out, "%s%d(%s,%s)" % (fn, bits, a, b))
@@ -291,8 +332,37 @@ class FuncGen:
                 self.labels.add(t)
                 cases.append("case 0x%xu: goto L_%08x;" % (t, t))
         if not cases:
+            self.impure = True
             return "{ rt_jump(c,%s); return; }" % expr
         return "switch (%s) { %s default: rt_jump(c,%s); return; }" % (expr, " ".join(cases), expr)
+
+    # ---- dead flag writes ----
+    FLOW = (PcodeOp.BRANCH, PcodeOp.CBRANCH, PcodeOp.BRANCHIND, PcodeOp.CALL, PcodeOp.CALLIND,
+            PcodeOp.RETURN, PcodeOp.CALLOTHER)
+
+    def drop_dead_flags(self, body):
+        """a flag write is dead if, going forward in straight-line code, the same flag is written
+        again before anything reads it; any branch, call or return ends the straight line"""
+        over = set()
+        for k in range(len(body) - 1, -1, -1):
+            kind, key, text, p = body[k]
+            if kind == "X":
+                over = set()
+                continue
+            if p is None:
+                continue
+            if p.getOpcode() in self.FLOW:
+                over = set()
+            f = flag_of(p.getOutput())
+            if f is not None:
+                if f in over:
+                    body[k] = (kind, key, "", None)
+                    continue
+                over.add(f)
+            for i in range(p.getNumInputs()):
+                g = flag_of(p.getInput(i))
+                if g is not None:
+                    over.discard(g)
 
     # ---- the function ----
     def gen(self):
@@ -300,25 +370,28 @@ class FuncGen:
         insns = self.insns
         for n, ins in enumerate(insns):
             a = ins.getAddress().getOffset()
-            body.append(("I", a, "/* %08x  %s */" % (a, str(ins).replace("*/", "* /"))))
+            body.append(("I", a, "/* %08x  %s */" % (a, str(ins).replace("*/", "* /")), None))
             pc = list(ins.getPcode())
             d = x87_delta(pc)
             if d:
-                body.append(("P", (a, -1), "c->fdelta += %d;" % d))
+                body.append(("P", (a, -1), "c->fdelta += %d;" % d, None))
             for i, p in enumerate(pc):
-                body.append(("P", (a, i), self.op(p, ins, i)))
-            body.append(("P", (a, len(pc)), ""))   # target for branches past the last op
+                body.append(("P", (a, i), self.op(p, ins, i), p))
+            body.append(("P", (a, len(pc)), "", None))   # target for branches past the last op
             ft = ins.getFallThrough()
             nxt = insns[n + 1].getAddress().getOffset() if n + 1 < len(insns) else None
             if ft is not None and ft.getOffset() != nxt:
-                body.append(("X", None, self.goto_ram(ft.getOffset(), ins)))
+                body.append(("X", None, self.goto_ram(ft.getOffset(), ins), None))
+        if self.entry not in self.addrs:   # inside an instruction: data Ghidra decoded as code
+            raise Unsupported("entry %08x is not an instruction" % self.entry)
         out = ["void %s(RCtx *c)" % fname(self.entry), "{"]
         for (off, size), name in sorted(self.locals.items()):
             out.append("    %s %s = 0;" % (ctype(size), name))
         if insns and insns[0].getAddress().getOffset() != self.entry:
             self.labels.add(self.entry)
             out.append("    goto L_%08x;" % self.entry)
-        for kind, key, text in body:
+        self.drop_dead_flags(body)
+        for kind, key, text, meta in body:
             if kind == "I":
                 if key in self.labels:
                     out.append("L_%08x:" % key)
@@ -333,6 +406,15 @@ class FuncGen:
         out.append("    ;")
         out.append("}")
         return "\n".join(out)
+
+
+def stack_switch(g):
+    """loads ESP from memory or another register (the coroutine scheduler): can't be run twice"""
+    for ins in g.insns:
+        m = str(ins)
+        if (m.startswith("MOV ESP,") or m.startswith("XCHG ESP") or m.startswith("LSS")) and "EBP" not in m:
+            return True
+    return False
 
 
 def closure(roots):
@@ -371,21 +453,48 @@ def steal_info(f):
             return 0, []
         raw += [b & 0xFF for b in ins.getBytes()]
         n += ins.getLength()
-    return (n, raw) if 5 <= n <= 16 else (0, [])
+    if not 5 <= n <= 16:
+        return 0, []
+    # nothing may branch into the bytes the hook overwrites (loops back to the entry's second
+    # instruction are common)
+    rm, af = program.getReferenceManager(), program.getAddressFactory()
+    e = f.getEntryPoint().getOffset()
+    for x in range(e + 1, e + n):
+        for r in rm.getReferencesTo(af.getAddress(hex(x))):
+            if r.getReferenceType().isFlow():
+                return 0, []
+    return n, raw
 
 
-def main(roots, out):
+def main(roots, out, shards=1):
     funcs = closure(roots)
     known = set(funcs)
     parts, table, failed = [], [], []
+    gens, impure = {}, set()
     for a in sorted(funcs):
         f = funcs[a]
         try:
-            parts.append(FuncGen(f, known, a).gen())
+            g = FuncGen(f, known, a)
+            parts.append(g.gen())
+            gens[a] = g
+            if g.impure or stack_switch(g):
+                impure.add(a)
         except Unsupported as e:
             failed.append("%s %08x: %s" % (f.getName(), a, e))
             parts.append("void %s(RCtx *c) { rt_unsupported(c,0x%xu,\"%s\"); }" % (fname(a), a, str(e)))
-        lst = program.getListing()
+            impure.add(a)
+    changed = True   # impure if anything reachable is
+    while changed:
+        changed = False
+        for a, g in gens.items():
+            if a not in impure and g.callees & impure:
+                impure.add(a)
+                changed = True
+    lst = program.getListing()
+    index = dict((x, i) for i, x in enumerate(sorted(funcs)))
+    callee_arrays = []
+    for a in sorted(funcs):
+        f = funcs[a]
         called = any(lst.getInstructionAt(r.getFromAddress()) is not None and
                      lst.getInstructionAt(r.getFromAddress()).getMnemonicString() == "CALL"
                      for r in program.getReferenceManager().getReferencesTo(f.getEntryPoint()))
@@ -393,18 +502,42 @@ def main(roots, out):
         # with a local frame on the stack instead of a return address
         n, raw = steal_info(f) if f.getEntryPoint().getOffset() == a and called else (0, [])
         name = f.getName() if f.getEntryPoint().getOffset() == a else "%s%+#x" % (f.getName(), a - f.getEntryPoint().getOffset())
-        table.append('    { 0x%xu, %s, "%s", %d, { %s } },' % (a, fname(a), name, n,
-                                                              ", ".join("0x%02x" % b for b in raw) or "0"))
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    with open(out, "w", encoding="utf-8") as fp:
-        fp.write("/* Generated by tools/recomp/recomp.py from MEGAMAN.EXE. Do not edit or commit. */\n")
-        fp.write('#include "recomp_rt.h"\n\n')
-        for a in sorted(funcs):
-            fp.write("void %s(RCtx *c);\n" % fname(a))
-        fp.write("\n")
-        fp.write("\n\n".join(parts))
-        fp.write("\n\nconst RFuncInfo g_recomp_funcs[] = {\n%s\n};\n" % "\n".join(table))
-        fp.write("const int g_recomp_nfuncs = %d;\n" % len(funcs))
-    print("recomp: %d functions -> %s" % (len(funcs), out))
+        body = f.getBody()
+        cl = sorted(index[x] for x in gens[a].callees) if a in gens else []
+        if cl:
+            callee_arrays.append("static const uint16_t c_%08x[] = { %s };" % (a, ", ".join(map(str, cl))))
+        table.append('    { 0x%xu, %s, "%s", %d, %d, { %s }, 0x%xu, 0x%xu, %s, %d },' % (
+            a, fname(a), name, n, int(a not in impure), ", ".join("0x%02x" % b for b in raw) or "0",
+            body.getMinAddress().getOffset(), body.getMaxAddress().getOffset() + 1,
+            "c_%08x" % a if cl else "0", len(cl)))
+    head = "/* Generated by tools/recomp/recomp.py from MEGAMAN.EXE. Do not edit or commit. */\n"
+    protos = "".join("void %s(RCtx *c);\n" % fname(a) for a in sorted(funcs))
+    d = os.path.dirname(out)
+    os.makedirs(d, exist_ok=True)
+    for fn in os.listdir(d):   # old shards
+        if fn.startswith("recomp_") and fn.endswith((".c", ".h", ".obj")):
+            os.remove(os.path.join(d, fn))
+    if shards <= 1:
+        with open(out, "w", encoding="utf-8") as fp:
+            fp.write(head + '#include "recomp_rt.h"\n\n' + protos + "\n")
+            fp.write("\n\n".join(parts))
+            fp.write("\n\n" + "\n".join(callee_arrays))
+            fp.write("\n\nconst RFuncInfo g_recomp_funcs[] = {\n%s\n};\n" % "\n".join(table))
+            fp.write("const int g_recomp_nfuncs = %d;\n" % len(funcs))
+    else:
+        with open(os.path.join(d, "recomp_gen.h"), "w", encoding="utf-8") as fp:
+            fp.write(head + '#pragma once\n#include "recomp_rt.h"\n\n' + protos)
+        per = (len(parts) + shards - 1) // shards
+        for k in range(shards):
+            with open(os.path.join(d, "recomp_%03d.c" % k), "w", encoding="utf-8") as fp:
+                fp.write(head + '#include "recomp_gen.h"\n\n')
+                fp.write("\n\n".join(parts[k * per:(k + 1) * per]) + "\n")
+        with open(os.path.join(d, "recomp_table.c"), "w", encoding="utf-8") as fp:
+            fp.write(head + '#include "recomp_gen.h"\n\n')
+            fp.write("\n".join(callee_arrays) + "\n\n")
+            fp.write("const RFuncInfo g_recomp_funcs[] = {\n%s\n};\n" % "\n".join(table))
+            fp.write("const int g_recomp_nfuncs = %d;\n" % len(funcs))
+    print("recomp: %d functions -> %s (%d files), %d pure" % (len(funcs), d, max(1, shards),
+                                                             len(funcs) - len(impure)))
     for x in failed:
         print("  unsupported: " + x)
