@@ -1363,7 +1363,13 @@ void recomp_install(const char *ini)
                 }
         }
         if (n)
-            log_printf("recomp: %d functions forced to machine code", n);
+            log_printf("recomp: %d functions forced to machine code%s", n,
+#ifdef RECOMP_BISECT
+                       ""
+#else
+                       " (only where reached by jumps or dynamic calls: direct calls need a RECOMP_BISECT=1 build)"
+#endif
+            );
     }
     if (_stricmp(roots, "all") == 0) {   /* every function that can be hooked (diff: pure and not modded) */
         int i;

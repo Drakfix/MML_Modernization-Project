@@ -33,13 +33,21 @@ static char g_kind = 'P';   /* 'H' while hook_mid writes its jump */
 static struct { uintptr_t site; hook_fn fn; } g_hooks[256];
 static size_t g_nhooks;
 
+/* site -> hook: the recompiled game looks its hooks up on every call (some fire per vertex) */
+#define HOOK_SLOTS 1024u
+static struct { uintptr_t site; hook_fn fn; } g_hook_at[HOOK_SLOTS];
+
+static unsigned hook_slot(uintptr_t site)
+{
+    unsigned i = ((uint32_t)site * 0x9E3779B1u) >> 22;   /* 10 bits */
+    while (g_hook_at[i].site && g_hook_at[i].site != site)
+        i = (i + 1) & (HOOK_SLOTS - 1);
+    return i;
+}
+
 hook_fn hook_find(uintptr_t site)
 {
-    size_t i;
-    for (i = 0; i < g_nhooks; i++)
-        if (g_hooks[i].site == site)
-            return g_hooks[i].fn;
-    return NULL;
+    return g_hook_at[hook_slot(site)].fn;
 }
 
 char mem_patch_kind(size_t i)
@@ -137,9 +145,12 @@ int hook_mid(uintptr_t site, size_t steal, const uint8_t *expect, hook_fn fn)
     for (i = 5; i < steal; i++)
         jmp[i] = 0x90;
     if (g_nhooks < sizeof g_hooks / sizeof g_hooks[0]) {   /* recompiled code calls fn at the site itself */
+        unsigned k = hook_slot(site);
         g_hooks[g_nhooks].site = site;
         g_hooks[g_nhooks].fn = fn;
         g_nhooks++;
+        g_hook_at[k].site = site;
+        g_hook_at[k].fn = fn;
     }
     g_kind = 'H';
     i = (size_t)mem_write(site, jmp, steal);

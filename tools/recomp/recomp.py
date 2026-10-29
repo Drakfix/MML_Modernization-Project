@@ -266,9 +266,14 @@ class RegCache:
             m = RX_RC_CALL.match(line)
             if m:   # a call into generated code: its register sets decide (markers, see calls())
                 ind, i, a, f = m.group(1), m.group(2), m.group(3), m.group(4)
-                lines.append("%sif (g_rc_native[%s]) { %s rt_call_native(c,0x%su); %s } else { \x01C%s\x02 "
-                             "{ uint32_t t_ = %s(c); if (t_) rt_dispatch(c,t_); } \x01F%s\x02 }"
-                             % (ind, i, spill, a, self.fill(), a, f, a))
+                # (the runtime running a function as machine code instead, for bisecting a bad
+                # translation, needs every register: only in RECOMP_BISECT builds)
+                lines.append("#ifdef RECOMP_BISECT")
+                lines.append("%sif (g_rc_native[%s]) { %s rt_call_native(c,0x%su); %s } else"
+                             % (ind, i, spill, a, self.fill()))
+                lines.append("#endif")
+                lines.append("%s{ \x01C%s\x02 { uint32_t t_ = %s(c); if (t_) rt_dispatch(c,t_); } \x01F%s\x02 }"
+                             % (ind, a, f, a))
                 continue
             if RX_SYNC_CALL.search(line):
                 ind = line[:len(line) - len(line.lstrip())]
@@ -299,7 +304,7 @@ class FuncGen:
         self.impure = False           # reaches something outside the recompiled code
         self.regs = set()             # (offset, size) of every register read or written
         self.written = set()          # ... and of those written
-        self.insns = list(program.getListing().getInstructions(func.getBody(), True))
+        self.insns = region(func, self.entry)
         self.addrs = set(i.getAddress().getOffset() for i in self.insns)
 
     # ---- varnodes ----
@@ -712,6 +717,41 @@ class FuncGen:
         out.append("}")
         self.cache = cache
         return cache.resolve("\n".join(out))
+
+
+REGION_MAX = 4000   # instructions; a bigger region keeps Ghidra's function body
+
+
+def region(func, entry):
+    """The code one generated function covers: Ghidra's body, plus everything reached from it by
+    falling through or jumping (not calling), across Ghidra's function boundaries. Ghidra splits
+    some loops into several "functions" (the vertex loop around 0x4EF275, the display list walker
+    and its packet handlers): as separate C functions each iteration went back out to the
+    dispatcher. Inside one region a jump is a goto, and the compiler keeps registers across it.
+    Shared code is duplicated into each region that reaches it."""
+    lst, af = program.getListing(), program.getAddressFactory()
+    body = list(lst.getInstructions(func.getBody(), True))
+    seen = {}
+    todo = [entry] + [i.getAddress().getOffset() for i in body]
+    while todo:
+        a = todo.pop()
+        if a in seen or a in INTRINSICS:
+            continue
+        ins = lst.getInstructionAt(af.getAddress(hex(a)))
+        if ins is None:
+            continue
+        seen[a] = ins
+        if len(seen) > REGION_MAX:
+            return body
+        ft = ins.getFlowType()
+        nxt = ins.getFallThrough()
+        if nxt is not None:
+            todo.append(nxt.getOffset())
+        if ft.isJump():
+            todo += [x.getOffset() for x in ins.getFlows()]
+            if ft.isComputed():
+                todo += [r.getToAddress().getOffset() for r in ins.getReferencesFrom() if r.getReferenceType().isJump()]
+    return [seen[a] for a in sorted(seen)]
 
 
 def stack_switch(g):

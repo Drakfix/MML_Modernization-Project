@@ -27,6 +27,8 @@ set "GENDEF=/DRECOMP_NONE"
 rem RECOMP_DIFF=1: the recompiled code logs its memory writes, for [debug] recomp=diff (slower)
 set "DIFFDEF="
 if "%RECOMP_DIFF%"=="1" set "DIFFDEF=/DRECOMP_DIFF"
+rem RECOMP_BISECT=1: [debug] recomp_native ranges also apply to direct calls (bigger, slower code)
+if "%RECOMP_BISECT%"=="1" set "DIFFDEF=%DIFFDEF% /DRECOMP_BISECT"
 if exist "%OUT%\gen\recomp_*.c" (
   del /q "%OUT%\gen\*.obj" 2>nul
   rem RECOMP_CLANG=path\to\clang-cl.exe: compile the generated code with clang instead (faster code)
