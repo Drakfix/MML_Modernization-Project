@@ -132,12 +132,32 @@ RX_WRITE = re.compile(r"\x01W([0-9a-f]+),(\d+)\x02(.*?)\x03", re.S)
 # statements that hand the registers to someone else (their effects come back through the context)
 RX_SYNC_CALL = re.compile(r"\b(RC_CALL|rt_call|rt_dispatch|rt_hook|rt_co_\w+|rt_call_native|rt_unsupported)\(")
 RX_RETURN = re.compile(r"\breturn ([^;]*);")
+RX_RC_CALL = re.compile(r"^(\s*)RC_CALL\(c,(\d+),0x([0-9a-f]+)u,(\w+)\);$")
+RX_CALL_MARK = re.compile(r"\x01([CF])([0-9a-f]+)\x02")
 GPR_END = 0x20
+# Register sets per function: which register bytes a function (and everything it reaches) may
+# read or write. A call then writes back only what the callee may touch and reads back only what
+# it may write: most callees never use the x87 stack, and leaf functions use a few registers.
+FD_BIT = 0x2240               # the x87 stack depth (fdelta), next to the register bytes
+ALL_REGS = (1 << (FD_BIT + 1)) - 1
+
+
+def reg_mask(o, n):
+    return ((1 << n) - 1) << o
 
 
 class RegCache:
     def __init__(self, regs, written, fdelta):
         self.fdelta = fdelta
+        self.read_mask = 0      # every register byte this function touches (reads are a subset)
+        self.write_mask = 0     # ... and writes
+        for o, n in regs:
+            self.read_mask |= reg_mask(o, n)
+        for o, n in written:
+            self.write_mask |= reg_mask(o, n)
+        if fdelta:
+            self.read_mask |= 1 << FD_BIT
+            self.write_mask |= 1 << FD_BIT
         self.gpr = set()        # cached general registers: dword offsets
         self.other = {}         # cached other registers: offset -> size
         bad_gpr = set(o & ~3 for o, n in regs if o < GPR_END and ((o & 3) + n > 4 or n == 10))
@@ -188,6 +208,36 @@ class RegCache:
             s.append("c->fdelta = fd_;")
         return " ".join(s)
 
+    def spill_for(self, mask):
+        """write back what this function changed and a callee touching `mask` may read or write"""
+        s = ["R32_SET(c,0x%x,%s);" % (o, self.gname(o)) for o in sorted(self.wgpr) if reg_mask(o, 4) & mask]
+        for o in sorted(self.wother):
+            n = self.other[o]
+            if reg_mask(o, n) & mask:
+                s.append("RF_SET(c,0x%x,%s);" % (o, self.oname(o)) if n == 10
+                         else "R%d_SET(c,0x%x,%s);" % (n * 8, o, self.oname(o)))
+        if self.fdelta and mask >> FD_BIT & 1:
+            s.append("c->fdelta = fd_;")
+        return " ".join(s)
+
+    def fill_for(self, mask):
+        """read back what a callee writing `mask` may have changed"""
+        s = ["%s = R32(c,0x%x);" % (self.gname(o), o) for o in sorted(self.gpr) if reg_mask(o, 4) & mask]
+        for o in sorted(self.other):
+            n = self.other[o]
+            if reg_mask(o, n) & mask:
+                s.append("%s = %s;" % (self.oname(o), "RF(c,0x%x)" % o if n == 10 else "R%d(c,0x%x)" % (n * 8, o)))
+        if self.fdelta and mask >> FD_BIT & 1:
+            s.append("fd_ = c->fdelta;")
+        return " ".join(s)
+
+    def calls(self, text, sets):
+        """the call markers, once every callee's sets are known: sets(addr) -> (may read, may write)"""
+        def sub(m):
+            r, w = sets(int(m.group(2), 16))
+            return self.spill_for(r | w) if m.group(1) == "C" else self.fill_for(w)
+        return RX_CALL_MARK.sub(sub, text)
+
     def read(self, o, n):
         if o < GPR_END and (o & ~3) in self.gpr:
             g, sh = self.gname(o & ~3), 8 * (o & 3)
@@ -213,6 +263,13 @@ class RegCache:
         spill = self.spill()
         lines = []
         for line in text.split("\n"):
+            m = RX_RC_CALL.match(line)
+            if m:   # a call into generated code: its register sets decide (markers, see calls())
+                ind, i, a, f = m.group(1), m.group(2), m.group(3), m.group(4)
+                lines.append("%sif (g_rc_native[%s]) { %s rt_call_native(c,0x%su); %s } else { \x01C%s\x02 "
+                             "{ uint32_t t_ = %s(c); if (t_) rt_dispatch(c,t_); } \x01F%s\x02 }"
+                             % (ind, i, spill, a, self.fill(), a, f, a))
+                continue
             if RX_SYNC_CALL.search(line):
                 ind = line[:len(line) - len(line.lstrip())]
                 line = "%s%s %s %s" % (ind, spill, line.strip(), self.fill()) if spill or self.gpr or self.other or self.fdelta \
@@ -653,6 +710,7 @@ class FuncGen:
                 out.append("    " + text)
         out.append("    return 0;")
         out.append("}")
+        self.cache = cache
         return cache.resolve("\n".join(out))
 
 
@@ -973,7 +1031,7 @@ def main(roots, out, shards=1, patches=None):
     funcs = closure(roots)
     known = set(funcs)
     parts, table, failed = [], [], []
-    gens, impure = {}, set()
+    gens, impure, caches = {}, set(), {}
     FuncGen.INDEX = dict((x, i) for i, x in enumerate(sorted(funcs)))
     for a in sorted(funcs):
         f = funcs[a]
@@ -983,6 +1041,7 @@ def main(roots, out, shards=1, patches=None):
             # keep only what the table needs: holding the generator would pin every instruction and
             # P-code object of the whole program in memory (tens of GB over the full executable)
             gens[a] = g.callees
+            caches[a] = g.cache
             if g.impure or stack_switch(g):
                 impure.add(a)
             del g
@@ -990,6 +1049,30 @@ def main(roots, out, shards=1, patches=None):
             failed.append("%s %08x: %s" % (f.getName(), a, e))
             parts.append("uint32_t %s(RCtx *c) { rt_unsupported(c,0x%xu,\"%s\"); return 0; }" % (fname(a), a, str(e)))
             impure.add(a)
+    # register sets: what each function and everything it reaches may read / write. Reaching
+    # anything outside the generated code (hooks, dynamic calls, the runtime) means all registers.
+    rsets, wsets = {}, {}
+    for a in funcs:
+        if a in impure or a not in caches:
+            rsets[a] = wsets[a] = ALL_REGS
+        else:
+            rsets[a], wsets[a] = caches[a].read_mask, caches[a].write_mask
+    changed = True
+    while changed:
+        changed = False
+        for a, callees in gens.items():
+            r, w = rsets[a], wsets[a]
+            for x in callees:
+                r |= rsets.get(x, ALL_REGS)
+                w |= wsets.get(x, ALL_REGS)
+            if r != rsets[a] or w != wsets[a]:
+                rsets[a], wsets[a] = r, w
+                changed = True
+    sets = lambda x: (rsets.get(x, ALL_REGS), wsets.get(x, ALL_REGS))
+    for k, a in enumerate(sorted(funcs)):
+        if a in caches:
+            parts[k] = caches[a].calls(parts[k], sets)
+    caches = None
     changed = True   # impure if anything reachable is
     while changed:
         changed = False

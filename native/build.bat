@@ -29,7 +29,12 @@ set "DIFFDEF="
 if "%RECOMP_DIFF%"=="1" set "DIFFDEF=/DRECOMP_DIFF"
 if exist "%OUT%\gen\recomp_*.c" (
   del /q "%OUT%\gen\*.obj" 2>nul
-  cl /nologo /c /MP4 /O2 /MT /W0 /GS- %DIFFDEF% /I"%ROOT%src" /Fo"%OUT%\gen\\" "%OUT%\gen\recomp_*.c" >nul || exit /b 1
+  rem RECOMP_CLANG=path\to\clang-cl.exe: compile the generated code with clang instead (faster code)
+  if defined RECOMP_CLANG (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%clang_gen.ps1" -Clang "%RECOMP_CLANG%" -Src "%ROOT%src" -Gen "%OUT%\gen" -Defs "%DIFFDEF%" || exit /b 1
+  ) else (
+    cl /nologo /c /MP4 /O2 /MT /W0 /GS- %DIFFDEF% /I"%ROOT%src" /Fo"%OUT%\gen\\" "%OUT%\gen\recomp_*.c" >nul || exit /b 1
+  )
   set "GENOBJ=%OUT%\gen\*.obj"
   set "GENDEF="
 )
