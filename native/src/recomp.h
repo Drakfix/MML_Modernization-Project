@@ -3,6 +3,8 @@
 
 /* Recompiled game code harness ([debug] recomp=diff|replace, see recomp.c). */
 void recomp_install(const char *ini);
+/* [debug] recomp_census=1: once per game frame (writes recomp_census.txt now and then) */
+void recomp_census_tick(void);
 
 /* Machine code that recompiled code calls returns to our bridge, so the return address it sees
    is the bridge's. Code that tells its callers apart by return address passes what it saw

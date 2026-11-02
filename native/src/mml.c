@@ -422,6 +422,7 @@ static void on_frame(regs_t *r)
     if (g_bglayer_on)
         bglayer_frame_end();
     watch_frame();
+    recomp_census_tick();
     if (g_player_log) {
         /* dev: log every player state change (player struct 0x5F8364) */
         static uint32_t last = 0xFFFFFFFF;

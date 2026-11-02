@@ -255,6 +255,15 @@ typedef uint32_t(__stdcall *std4)(uint32_t, uint32_t, uint32_t, uint32_t);
 typedef uint32_t(__stdcall *std5)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 typedef uint32_t(__stdcall *std6)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 
+static int rt_direct_has(uint32_t target)
+{
+    int k;
+    for (k = 0; k < g_ndirect; k++)
+        if (g_direct[k].fn == target)
+            return 1;
+    return 0;
+}
+
 /* returns 1 if target is a registered stdcall function (and has been run) */
 static int rt_direct(RCtx *c, uint32_t target)
 {
@@ -281,6 +290,15 @@ static int rt_direct(RCtx *c, uint32_t target)
         c->ret = ret;
         return 1;
     }
+    return 0;
+}
+
+static int rt_impl_has(uint32_t target)
+{
+    int k;
+    for (k = 0; k < g_nimpl; k++)
+        if (g_impl[k].routine == target)
+            return 1;
     return 0;
 }
 
@@ -325,6 +343,225 @@ static void rt_dispatch_from(RCtx *c, uint32_t target)
 static uint32_t g_recent[16];   /* recent indirect / machine-code targets (crash reports) */
 static unsigned g_nrecent;
 
+/* ---- [debug] recomp_census=1: everything the recompiled game still hands to machine code ----
+ * The inventory for the portable runtime (no x86 to fall back to): every distinct target the
+ * recompiled code leaves to something else, every entry into it from machine code, with counts,
+ * the first caller and where it lives. Written to recomp_census.txt in the game folder every few
+ * seconds; an existing file is read back first, so the inventory grows over play sessions. */
+enum { CK_DIRECT, CK_IMPL, CK_HOST, CK_NATIVE, CK_MODDED, CK_ENTRY, CK_UNSUPPORTED, CK_HOOK, CK_KINDS };
+static const char *const g_ck_names[CK_KINDS] = {
+    "direct",        /* our stdcall C function, called from C (recomp_register_stdcall) */
+    "impl",          /* C version of one of our assembly routines (recomp_register_st0 / wrap) */
+    "host",          /* mml.dll C function through the stack-copying bridge (host_call_asm) */
+    "native",        /* machine code: Windows / DirectX, our assembly, untranslated game code */
+    "modded",        /* a recompiled game function run as machine code instead (patched by mml.dll) */
+    "entry",         /* machine code entering recompiled code (a hooked root) */
+    "unsupported",   /* a function the recompiler couldn't translate */
+    "hook",          /* one of mml.dll's hooks called from the generated code (C, regs_t) */
+};
+enum { CF_GAME = 1, CF_MML = 2, CF_OTHER = 4 };
+typedef struct {
+    uint32_t addr, caller;
+    unsigned n;
+    uint8_t kind, from;   /* from: CF_ bits of the callers seen */
+} cen_ent;
+#define CEN_SIZE 8192
+static cen_ent g_cen[CEN_SIZE];
+static int g_census, g_cen_used;
+static uint32_t g_exe_lo, g_exe_hi;           /* the game's image */
+static uint32_t g_mml_lo, g_mml_hi;           /* mml.dll's image */
+static char g_cen_path[MAX_PATH];
+
+static int cen_from(uint32_t a)
+{
+    if (a >= g_exe_lo && a < g_exe_hi)
+        return CF_GAME;
+    if (a >= g_mml_lo && a < g_mml_hi)
+        return CF_MML;
+    return CF_OTHER;
+}
+
+static cen_ent *cen_slot(int kind, uint32_t addr)
+{
+    uint32_t h = (addr * 2654435761u ^ (uint32_t)kind * 0x9E3779B1u) & (CEN_SIZE - 1);
+    for (;;) {
+        cen_ent *e = &g_cen[h];
+        if (!e->n || (e->addr == addr && e->kind == kind))
+            return e;
+        h = (h + 1) & (CEN_SIZE - 1);
+    }
+}
+
+static void census(int kind, uint32_t addr, uint32_t caller)
+{
+    cen_ent *e = cen_slot(kind, addr);
+    if (!e->n) {
+        if (g_cen_used >= CEN_SIZE * 3 / 4)
+            return;
+        g_cen_used++;
+        e->addr = addr;
+        e->kind = (uint8_t)kind;
+        e->caller = caller;
+    }
+    e->n++;
+    e->from |= (uint8_t)cen_from(caller);
+}
+#define CENSUS(kind, addr, caller) do { if (g_census) census(kind, addr, caller); } while (0)
+
+/* the exported name at or before address a in module m, and the distance from it */
+static const char *nearest_export(HMODULE m, uint32_t a, uint32_t *off)
+{
+    const uint8_t *base = (const uint8_t *)m;
+    const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(base + ((const IMAGE_DOS_HEADER *)m)->e_lfanew);
+    const IMAGE_DATA_DIRECTORY *dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    const IMAGE_EXPORT_DIRECTORY *ed;
+    const DWORD *funcs, *names;
+    const WORD *ords;
+    const char *best = NULL;
+    uint32_t rva = a - (uint32_t)(uintptr_t)m, best_rva = 0;
+    DWORD i;
+    if (!dir->VirtualAddress)
+        return NULL;
+    ed = (const IMAGE_EXPORT_DIRECTORY *)(base + dir->VirtualAddress);
+    funcs = (const DWORD *)(base + ed->AddressOfFunctions);
+    names = (const DWORD *)(base + ed->AddressOfNames);
+    ords = (const WORD *)(base + ed->AddressOfNameOrdinals);
+    for (i = 0; i < ed->NumberOfNames; i++) {
+        uint32_t f = funcs[ords[i]];
+        if (f <= rva && f >= best_rva && (f < dir->VirtualAddress || f >= dir->VirtualAddress + dir->Size)) {
+            best = (const char *)(base + names[i]);
+            best_rva = f;
+        }
+    }
+    *off = rva - best_rva;
+    return best;
+}
+
+/* "module!export+off", "MEGAMAN_NATIVE.EXE:function+off" or "module+rva" */
+static void cen_describe(uint32_t a, char *out, size_t n)
+{
+    HMODULE m;
+    char path[MAX_PATH], *name;
+    uint32_t off;
+    const char *ex;
+    int fi;
+    if (!a || !GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                  (LPCSTR)(uintptr_t)a, &m)) {
+        _snprintf_s(out, n, _TRUNCATE, "?");
+        return;
+    }
+    GetModuleFileNameA(m, path, sizeof path);
+    name = strrchr(path, '\\') ? strrchr(path, '\\') + 1 : path;
+    if (a >= g_exe_lo && a < g_exe_hi && (fi = find_func_slow(a)) >= 0) {
+        _snprintf_s(out, n, _TRUNCATE, "%s:%s+%X", name, g_recomp_funcs[fi].name, a - g_recomp_funcs[fi].addr);
+        return;
+    }
+    if (a >= g_mml_lo && a < g_mml_hi) {   /* our own: the map file names it (census_report.py) */
+        _snprintf_s(out, n, _TRUNCATE, "%s+%X", name, a - g_mml_lo);
+        return;
+    }
+    ex = nearest_export(m, a, &off);
+    if (ex && off < 0x10000)
+        _snprintf_s(out, n, _TRUNCATE, "%s!%s+%X", name, ex, off);
+    else
+        _snprintf_s(out, n, _TRUNCATE, "%s+%X", name, a - (uint32_t)(uintptr_t)m);
+}
+
+#define CEN_OLD 2048
+static char *g_cen_old[CEN_OLD];   /* "kind | target" of earlier sessions, outside the game's image */
+static int g_cen_nold;
+
+static int cen_order(const void *x, const void *y)
+{
+    const cen_ent *a = *(const cen_ent *const *)x, *b = *(const cen_ent *const *)y;
+    if (a->kind != b->kind)
+        return a->kind - b->kind;
+    return a->n < b->n ? 1 : a->n > b->n ? -1 : 0;
+}
+
+static void census_write(void)
+{
+    static cen_ent *list[CEN_SIZE];
+    int i, k = 0;
+    FILE *f;
+    for (i = 0; i < CEN_SIZE; i++)
+        if (g_cen[i].n)
+            list[k++] = &g_cen[i];
+    qsort(list, (size_t)k, sizeof list[0], cen_order);
+    if (fopen_s(&f, g_cen_path, "w") || !f)
+        return;
+    fprintf(f, "# recomp census: kind addr count caller from | target ; first caller\n"
+               "# from: G = game code, M = mml.dll, O = other (Windows, DirectX)\n");
+    for (i = 0; i < k; i++) {
+        char what[160], who[160];
+        cen_describe(list[i]->addr, what, sizeof what);
+        cen_describe(list[i]->caller, who, sizeof who);
+        fprintf(f, "%s %08X %u %08X %s%s%s | %s ; %s\n", g_ck_names[list[i]->kind], list[i]->addr, list[i]->n,
+                list[i]->caller, list[i]->from & CF_GAME ? "G" : "", list[i]->from & CF_MML ? "M" : "",
+                list[i]->from & CF_OTHER ? "O" : "", what, who);
+    }
+    /* earlier sessions' targets outside the game that this one hasn't reached */
+    for (i = 0; i < g_cen_nold; i++) {
+        int j, seen = 0;
+        for (j = 0; j < k && !seen; j++) {
+            char what[160];
+            size_t kl = strlen(g_ck_names[list[j]->kind]);
+            cen_describe(list[j]->addr, what, sizeof what);
+            seen = !strncmp(g_cen_old[i], g_ck_names[list[j]->kind], kl) && strstr(g_cen_old[i], what) != NULL;
+        }
+        if (!seen)
+            fputs(g_cen_old[i], f);
+    }
+    fclose(f);
+}
+
+/* an earlier session's file: its entries count too (addresses in mml.dll or system DLLs can
+   differ between sessions, so only game addresses and ours by kind are worth merging) */
+static void census_load(void)
+{
+    FILE *f;
+    char line[512];
+    if (fopen_s(&f, g_cen_path, "r") || !f)
+        return;
+    while (fgets(line, sizeof line, f)) {
+        char kind[32], from[8] = "";
+        unsigned addr, n, caller;
+        int k;
+        if (line[0] == '#' || sscanf_s(line, "%31s %x %u %x %7s", kind, (unsigned)sizeof kind, &addr, &n, &caller,
+                                       from, (unsigned)sizeof from) < 4)
+            continue;
+        for (k = 0; k < CK_KINDS && strcmp(kind, g_ck_names[k]); k++)
+            ;
+        if (k == CK_KINDS) {
+            continue;
+        } else if (!(addr >= g_exe_lo && addr < g_exe_hi)) {
+            if (g_cen_nold < CEN_OLD)
+                g_cen_old[g_cen_nold++] = _strdup(line);   /* kept as text, see census_write */
+        } else {
+            cen_ent *e = cen_slot(k, addr);
+            if (!e->n) {
+                if (g_cen_used >= CEN_SIZE * 3 / 4)
+                    break;
+                g_cen_used++;
+                e->addr = addr;
+                e->kind = (uint8_t)k;
+                e->caller = caller;
+            }
+            e->n += n;
+            e->from |= (uint8_t)((strchr(from, 'G') ? CF_GAME : 0) | (strchr(from, 'M') ? CF_MML : 0) |
+                                 (strchr(from, 'O') ? CF_OTHER : 0));
+        }
+    }
+    fclose(f);
+}
+
+void recomp_census_tick(void)
+{
+    static unsigned calls;
+    if (g_census && ++calls % 300 == 0)
+        census_write();
+}
+
 uint32_t rt_dispatch(RCtx *c, uint32_t target)
 {
     while (target) {
@@ -333,6 +570,17 @@ uint32_t rt_dispatch(RCtx *c, uint32_t target)
         if (i >= 0 && !g_rc_native[i]) {
             target = g_recomp_funcs[i].fn(c);
             continue;
+        }
+        if (g_census) {
+            uint32_t caller = LD32(R32(c, REG_ESP));
+            if (i >= 0)
+                census(CK_MODDED, target, caller);
+            else if (rt_direct_has(target))
+                census(CK_DIRECT, target, caller);
+            else if (rt_impl_has(target))
+                census(CK_IMPL, target, caller);
+            else
+                census(host_callable(target) ? CK_HOST : CK_NATIVE, target, caller);
         }
         if (c->log) {   /* diff mode can't undo what machine code does */
             if (g_rt_errors++ < 20)
@@ -467,7 +715,6 @@ uint32_t __cdecl recomp_return_address(uint32_t seen)
    popped (stdcall) are popped from the game's stack too. The exceptions are the targets of our
    code patches (a CALL or JMP pointed at an assembly routine that works on the game's registers
    or x87 stack): those keep the bridge. */
-static uint32_t g_mml_lo, g_mml_hi;          /* mml.dll's image */
 static uint32_t g_asm_targets[64];
 static int g_nasm_targets;
 static uint32_t hc_fn, hc_args, hc_ecx, hc_edx, hc_eax_out, hc_edx_out, hc_popped;
@@ -619,6 +866,7 @@ void rt_hook(RCtx *c, uint32_t site)
     regs_t r;
     if (!fn)
         return;   /* that setting is off this session */
+    CENSUS(CK_HOOK, site, LD32(R32(c, REG_ESP)));
     r.eax = R32(c, REG_EAX), r.ecx = R32(c, REG_ECX), r.edx = R32(c, REG_EDX), r.ebx = R32(c, REG_EBX);
     r.ebp = R32(c, REG_EBP), r.esi = R32(c, REG_ESI), r.edi = R32(c, REG_EDI);
     r.esp = R32(c, REG_ESP) - 4;   /* as the stub's PUSHAD saw it (handlers use r->esp + 4) */
@@ -659,7 +907,7 @@ void rt_port_out(RCtx *c, uint32_t port)
 
 void rt_unsupported(RCtx *c, uint32_t at, const char *what)
 {
-    (void)c;
+    CENSUS(CK_UNSUPPORTED, at, LD32(R32(c, REG_ESP)));
     if (g_rt_errors++ < 20)
         log_printf("recomp: unsupported at %08X: %s", at, what);
 }
@@ -773,6 +1021,7 @@ static void __cdecl on_enter(void)
     if (g_mode == MODE_REPLACE) {
         uint32_t r[8], saved_free = g_host_free, efl = t_efl;
         RCtx *c = (RCtx *)_alloca(sizeof(RCtx));
+        CENSUS(CK_ENTRY, info->addr, LD32(t_esp));
         ctx_from_cpu(c);
         g_host_free = (uint32_t)(uintptr_t)c - 256;   /* nested entries go below us */
         rt_dispatch_from(c, g_roots[root].fn(c));
@@ -1354,6 +1603,22 @@ void recomp_install(const char *ini)
     }
     build_func_index();
     host_call_setup();
+    {
+        const uint8_t *exe = (const uint8_t *)GetModuleHandleA(NULL);
+        const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(exe + ((const IMAGE_DOS_HEADER *)exe)->e_lfanew);
+        g_exe_lo = (uint32_t)(uintptr_t)exe;
+        g_exe_hi = g_exe_lo + nt->OptionalHeader.SizeOfImage;
+    }
+    if (GetPrivateProfileIntA("debug", "recomp_census", 0, ini)) {
+        char *slash;
+        strcpy_s(g_cen_path, sizeof g_cen_path, ini);
+        slash = strrchr(g_cen_path, '\\');
+        strcpy_s(slash ? slash + 1 : g_cen_path, sizeof g_cen_path - (size_t)(slash ? slash + 1 - g_cen_path : 0),
+                 "recomp_census.txt");
+        census_load();
+        g_census = 1;
+        log_printf("recomp: census on (%s, %d entries from earlier sessions)", g_cen_path, g_cen_used + g_cen_nold);
+    }
     g_rc_native = (uint8_t *)calloc((size_t)g_recomp_nfuncs, 1);
     if (!g_rc_native) {
         log_printf("recomp: no memory for the function table");
