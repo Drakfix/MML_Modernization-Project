@@ -4,8 +4,13 @@
 
 #include "interp.h"
 
-#define MAX_VERTS  (1u << 16)          /* projected vertices per frame */
-#define TABLE_BITS 17                  /* hash tables: 2x the vertex budget */
+/* Projected vertices per frame: the busiest views (City Hall) reach about 10,500; past the
+ * budget a vertex is drawn where it is, without interpolation. The hash tables are looked up
+ * at random several times per vertex, so their size is what the cache sees: 32K slots each
+ * (512 KB, at most 63% full) instead of sizing for a 65K-vertex worst case (2 MB each) took
+ * the interpolation from about 11% to 9% of the game thread in City Hall. */
+#define MAX_VERTS  20480u
+#define TABLE_BITS 15
 #define TABLE_SIZE (1u << TABLE_BITS)
 
 typedef struct {

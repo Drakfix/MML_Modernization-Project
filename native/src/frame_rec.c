@@ -342,6 +342,27 @@ static void reset(void)
     g_ndefer = 0;
 }
 
+/* When this frame's in-between frame goes up. Presenting it as soon as the game's frame was
+ * drawn put every change in how long the game took for the step on screen: one 9 ms step after
+ * a 6 ms one and the gap between two presents grew by 3 ms (the frame counter read 55). The
+ * presents follow a steady grid instead, one game step (two ticks) apart, a little after the
+ * slower steps finish: a step ready early waits for its slot (time the game thread would spend
+ * waiting for its next deadline anyway); a late one goes up at once and moves the grid later;
+ * plenty of slack moves it earlier again, a little per step, to keep the latency down. */
+static double present_slot(double period)
+{
+    static double grid;
+    double now = now_ms(), slot = grid + period;
+    if (grid <= 0.0 || now > slot + period || now < slot - period)
+        slot = now;                     /* first frame, or a gap (a skipped draw, loading): start over */
+    else if (now > slot)
+        slot = now;                     /* late: up at once, and the grid follows */
+    else if (slot - now > 4.0)
+        slot -= 0.1;                    /* lots of slack: creep earlier */
+    grid = slot;
+    return slot;
+}
+
 void rec_present(int steps)
 {
     static int overflow_logged;
@@ -359,14 +380,13 @@ void rec_present(int steps)
                    g_ncmds, g_nverts);
     }
     g_overflow = 0;
-    t0 = now_ms();
     tick = 1000.0 / 60.0;
+    t0 = present_slot(tick * steps);
     gfx_finish_depth(0);   /* the game's frame is complete: its depth is final before the replay */
     for (s = 1; s < steps; s++) {
         gfx_use_target(1);
         replay((float)s / (float)steps);
-        if (s > 1)
-            wait_until(t0 + tick * (s - 1));
+        wait_until(t0 + tick * (s - 1));
         gfx_present_target(1);
         note_present();
     }
