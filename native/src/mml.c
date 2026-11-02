@@ -46,7 +46,7 @@
 #include "bglayer.h"
 #include "watch.h"
 
-#define MML_NATIVE_BUILD "0.5.0-beta"
+#define MML_NATIVE_BUILD "0.5.1-beta"
 
 static char g_game_dir[MAX_PATH];
 static char g_ini[MAX_PATH];

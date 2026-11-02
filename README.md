@@ -6,7 +6,7 @@ controls and an in-game settings menu, while running the original game code.
 
 The project patches your own copy of the game. It contains no Capcom code or assets.
 
-**Current version: 0.5.0 beta.** This is a full rewrite of the 0.1 series. The 0.1 releases
+**Current version: 0.5.1 beta.** This is a full rewrite of the 0.1 series. The 0.1 releases
 are kept on the [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
