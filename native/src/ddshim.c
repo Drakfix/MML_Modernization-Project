@@ -41,6 +41,7 @@
 #define G_IAT_DIRECTDRAWCREATE    0x5083BCu
 #define G_IAT_DIRECTDRAWENUMERATE 0x5083C0u
 #define G_IAT_MCISENDSTRINGA      0x5083A4u
+#define G_CFG_FULLSCREEN          0x5303F8u   /* MEGAMAN.CFG line 1: 1 fullscreen, 0 windowed */
 
 /* ------------------------------------------------------------------ stubs */
 
@@ -1962,6 +1963,16 @@ static HRESULT WINAPI shim_direct_draw_create(GUID *guid, void **out, IUnknown *
 
 static HRESULT WINAPI shim_direct_draw_enumerate(LPDDENUMCALLBACKA cb, LPVOID ctx)
 {
+    /* The renderer does its own windowing, so the game always takes its
+     * fullscreen path. In its windowed path the texture formats must match the
+     * desktop depth (32 bits), we only offer 16-bit ones, and setup fails with
+     * "Setup Texture Format Error!" (MEGAMAN.CFG line 1 = 0, e.g. the KuroFix
+     * repack). Called from display init after the config is read and before
+     * the flag is checked. */
+    if (*(volatile DWORD *)G_CFG_FULLSCREEN == 0) {
+        *(volatile DWORD *)G_CFG_FULLSCREEN = 1;
+        log_printf("ddshim: MEGAMAN.CFG asked for the game's windowed mode, using fullscreen (window mode is ours)");
+    }
     if (cb)
         cb(NULL, "Modernization renderer", "display", ctx);
     return DD_OK;
