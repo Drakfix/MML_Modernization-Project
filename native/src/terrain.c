@@ -31,6 +31,7 @@
 #include "hook.h"
 #include "log.h"
 #include "mml.h"
+#include "recomp.h"
 #include "terrain.h"
 
 /* software GTE state */
@@ -423,6 +424,7 @@ void terrain_frame(void)
             void **vt = *(void ***)dev, *mine = (void *)clip_draw_prim;
             g_next_draw = (draw_prim_t)vt[VT_DRAW_PRIMITIVE];
             mem_write((uintptr_t)&vt[VT_DRAW_PRIMITIVE], &mine, sizeof mine);
+            recomp_register_stdcall((void *)clip_draw_prim, 6);
             log_printf("terrain: DrawPrimitive hooked (vtable %p)", (void *)vt);
         }
     }

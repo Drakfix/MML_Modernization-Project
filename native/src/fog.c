@@ -14,6 +14,7 @@
 #include "fog.h"
 #include "hook.h"
 #include "log.h"
+#include "recomp.h"
 
 #define G_D3D_DEVICE        0x551D10u   /* IDirect3DDevice3* */
 #define VT_SET_RENDER_STATE 22
@@ -99,6 +100,7 @@ void fog_frame(void)
         void **vt = *(void ***)dev, *mine = (void *)fog_set_rs;
         g_next_set_rs = (set_rs_t)vt[VT_SET_RENDER_STATE];
         mem_write((uintptr_t)&vt[VT_SET_RENDER_STATE], &mine, sizeof mine);
+        recomp_register_stdcall((void *)fog_set_rs, 3);   /* called tens of thousands of times a frame */
         log_printf("fog: SetRenderState hooked (vtable %p)", (void *)vt);
     }
 }

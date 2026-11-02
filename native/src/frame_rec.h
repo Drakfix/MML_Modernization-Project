@@ -25,6 +25,8 @@ void rec_enable(int on);
 /* debug: show only the in-between frames; log present timing */
 void rec_debug(int mid_only, int timing);
 int rec_enabled(void);
+/* debug: ms the game thread spent waiting for present slots since the last call */
+double rec_take_wait_ms(void);
 
 void rec_state(const gfx_state *s);
 void rec_texture(gfx_tex *t);

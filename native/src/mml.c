@@ -231,6 +231,9 @@ static unsigned g_perf_n, g_perf_skips;
 /* the two halves of an iteration: drawing (from the draw check to the first wait) and the logic
    step (from the last wait to the next draw check) */
 static double g_perf_draw, g_perf_logic, g_perf_first_wait, g_perf_last_wait;
+/* with interpolation, a frame drawn early waits for its present slot (frame_rec.c): idle time
+   inside the drawing half, counted apart so the busy time stays the work done */
+static double g_perf_present_wait;
 
 static void perf_iteration(double now_ms)
 {
@@ -241,19 +244,22 @@ static void perf_iteration(double now_ms)
     if (!g_perf_log)
         return;
     if (last > 0.0) {
+        double waited = rec_take_wait_ms();
         if (g_perf_first_wait > last)
-            g_perf_draw += g_perf_first_wait - last;
+            g_perf_draw += g_perf_first_wait - last - waited;
         if (g_perf_last_wait > last)
             g_perf_logic += now_ms - g_perf_last_wait;
-        busy = now_ms - last - g_perf_slept;
+        g_perf_present_wait += waited;
+        busy = now_ms - last - g_perf_slept - waited;
         g_perf_busy += busy;
         if (busy > g_perf_max)
             g_perf_max = busy;
         if (++g_perf_n == 300) {
             log_printf("perf: game thread busy %.2f ms per iteration (max %.2f; drawing %.2f, logic %.2f), "
-                       "%u draws skipped (300 iterations)", g_perf_busy / g_perf_n, g_perf_max,
-                       g_perf_draw / g_perf_n, g_perf_logic / g_perf_n, g_perf_skips);
-            g_perf_busy = g_perf_max = g_perf_draw = g_perf_logic = 0.0;
+                       "%.2f waiting for present slots, %u draws skipped (300 iterations)", g_perf_busy / g_perf_n,
+                       g_perf_max, g_perf_draw / g_perf_n, g_perf_logic / g_perf_n, g_perf_present_wait / g_perf_n,
+                       g_perf_skips);
+            g_perf_busy = g_perf_max = g_perf_draw = g_perf_logic = g_perf_present_wait = 0.0;
             g_perf_n = g_perf_skips = 0;
         }
     }

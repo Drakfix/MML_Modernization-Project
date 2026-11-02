@@ -228,6 +228,62 @@ void recomp_register_wrap(void *routine, uint32_t original, void (*pre)(const ui
     }
 }
 
+static struct {
+    uint32_t fn;
+    int nargs;
+} g_direct[8];
+static int g_ndirect;
+
+void recomp_register_stdcall(void *fn, int nargs)
+{
+    int k;
+    for (k = 0; k < g_ndirect; k++)
+        if (g_direct[k].fn == (uint32_t)(uintptr_t)fn)
+            return;
+    if (g_ndirect < 8 && nargs >= 0 && nargs <= 6) {
+        g_direct[g_ndirect].fn = (uint32_t)(uintptr_t)fn;
+        g_direct[g_ndirect].nargs = nargs;
+        g_ndirect++;
+    }
+}
+
+typedef uint32_t(__stdcall *std0)(void);
+typedef uint32_t(__stdcall *std1)(uint32_t);
+typedef uint32_t(__stdcall *std2)(uint32_t, uint32_t);
+typedef uint32_t(__stdcall *std3)(uint32_t, uint32_t, uint32_t);
+typedef uint32_t(__stdcall *std4)(uint32_t, uint32_t, uint32_t, uint32_t);
+typedef uint32_t(__stdcall *std5)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+typedef uint32_t(__stdcall *std6)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+
+/* returns 1 if target is a registered stdcall function (and has been run) */
+static int rt_direct(RCtx *c, uint32_t target)
+{
+    int k;
+    for (k = 0; k < g_ndirect; k++) {
+        uint32_t esp, ret, r, a[6];
+        int n = g_direct[k].nargs;
+        if (g_direct[k].fn != target)
+            continue;
+        esp = R32(c, REG_ESP);
+        ret = LD32(esp);
+        memcpy(a, HPTR(esp + 4), 4 * (size_t)n);
+        switch (n) {
+        case 0: r = ((std0)(uintptr_t)target)(); break;
+        case 1: r = ((std1)(uintptr_t)target)(a[0]); break;
+        case 2: r = ((std2)(uintptr_t)target)(a[0], a[1]); break;
+        case 3: r = ((std3)(uintptr_t)target)(a[0], a[1], a[2]); break;
+        case 4: r = ((std4)(uintptr_t)target)(a[0], a[1], a[2], a[3]); break;
+        case 5: r = ((std5)(uintptr_t)target)(a[0], a[1], a[2], a[3], a[4]); break;
+        default: r = ((std6)(uintptr_t)target)(a[0], a[1], a[2], a[3], a[4], a[5]); break;
+        }
+        R32_SET(c, REG_EAX, r);
+        R32_SET(c, REG_ESP, esp + 4 + 4 * (uint32_t)n);
+        c->ret = ret;
+        return 1;
+    }
+    return 0;
+}
+
 /* returns 1 if target is one of them (and has been run) */
 static int rt_impl(RCtx *c, uint32_t target)
 {
@@ -288,7 +344,7 @@ uint32_t rt_dispatch(RCtx *c, uint32_t target)
         if (i < 0 && target >= g_recomp_funcs[0].lo && target < g_recomp_funcs[g_recomp_nfuncs - 1].hi &&
             g_rt_errors++ < 20)
             log_printf("recomp: jump to %08X, outside every recompiled function", target);
-        if (rt_impl(c, target))
+        if (rt_direct(c, target) || rt_impl(c, target))
             ;
         else if (host_callable(target))
             rt_host_call(c, target);

@@ -37,6 +37,7 @@
 #include "lockon.h"
 #include "log.h"
 #include "packets.h"
+#include "recomp.h"
 
 #define G_IAT_DIRECTDRAWCREATE    0x5083BCu
 #define G_IAT_DIRECTDRAWENUMERATE 0x5083C0u
@@ -262,6 +263,36 @@ static uint32_t expand(uint32_t v, DWORD mask)
     return bits >= 8 ? x >> (bits - 8) : (x * 255 + ((1u << bits) - 1) / 2) / ((1u << bits) - 1);
 }
 
+static uint32_t to_rgba(uint32_t v, DWORD rm, DWORD gm, DWORD bm, DWORD am, int has_alpha)
+{
+    return expand(v, rm) | (expand(v, gm) << 8) | (expand(v, bm) << 16) | ((has_alpha ? expand(v, am) : 255) << 24);
+}
+
+/* Some areas animate whole texture pages (three 256x256 pages changed every frame in the
+ * field past the Forest), so the conversion runs per pixel per frame: 16-bit formats (all the
+ * game's textures) go through one 64K-entry table per pixel format, built on first use. */
+static const uint32_t *rgba_table(DWORD rm, DWORD gm, DWORD bm, DWORD am, int has_alpha)
+{
+    static struct {
+        DWORD rm, gm, bm, am;
+        int has_alpha;
+        uint32_t *t;
+    } tabs[4];
+    static int n;
+    int k;
+    uint32_t v;
+    for (k = 0; k < n; k++)
+        if (tabs[k].rm == rm && tabs[k].gm == gm && tabs[k].bm == bm && tabs[k].am == am &&
+            tabs[k].has_alpha == has_alpha)
+            return tabs[k].t;
+    if (n == 4 || !(tabs[n].t = (uint32_t *)malloc(65536 * sizeof(uint32_t))))
+        return NULL;
+    for (v = 0; v < 65536; v++)
+        tabs[n].t[v] = to_rgba(v, rm, gm, bm, am, has_alpha);
+    tabs[n].rm = rm, tabs[n].gm = gm, tabs[n].bm = bm, tabs[n].am = am, tabs[n].has_alpha = has_alpha;
+    return tabs[n++].t;
+}
+
 /* convert the CPU copy to RGBA8 and send it to the GPU */
 static void upload(surface *s)
 {
@@ -269,21 +300,22 @@ static void upload(surface *s)
     int x, y, bpp = s->pf.dwRGBBitCount / 8;
     DWORD rm = s->pf.dwRBitMask, gm = s->pf.dwGBitMask, bm = s->pf.dwBBitMask, am = s->pf.dwRGBAlphaBitMask;
     int has_alpha = (s->pf.dwFlags & DDPF_ALPHAPIXELS) && am;
-    const uint32_t *rep;
+    const uint32_t *rep, *table;
     int up_w, up_h, tw, th;
     if (!s->mem || bpp < 2)
         return;
     rgba = (uint32_t *)malloc((size_t)s->w * s->h * 4);
     if (!rgba)
         return;
+    table = bpp == 2 ? rgba_table(rm, gm, bm, am, has_alpha) : NULL;
     for (y = 0; y < s->h; y++) {
         const uint8_t *row = s->mem + (size_t)y * s->pitch;
+        uint32_t *out = rgba + (size_t)y * s->w;
         for (x = 0; x < s->w; x++) {
             uint32_t v = bpp == 2 ? *(const uint16_t *)(row + x * 2) : *(const uint32_t *)(row + x * bpp);
-            uint32_t a = has_alpha ? expand(v, am) : 255;
+            out[x] = table ? table[v] : to_rgba(v, rm, gm, bm, am, has_alpha);
             if (s->has_ck && v >= s->ck.dwColorSpaceLowValue && v <= s->ck.dwColorSpaceHighValue)
-                a = 0;
-            rgba[(size_t)y * s->w + x] = expand(v, rm) | (expand(v, gm) << 8) | (expand(v, bm) << 16) | (a << 24);
+                out[x] &= 0x00FFFFFFu;   /* colour key: transparent */
         }
     }
     /* an HD replacement (any size) for this exact texture, if there is one */
@@ -1901,6 +1933,11 @@ static void build_vtables(void)
     SET(vt_dev3, 21, dev_get_rs); SET(vt_dev3, 22, dev_set_rs); SET(vt_dev3, 28, dev_draw_prim);
     SET(vt_dev3, 37, dev_get_texture); SET(vt_dev3, 38, dev_set_texture); SET(vt_dev3, 39, dev_get_tss);
     SET(vt_dev3, 40, dev_set_tss); SET(vt_dev3, 41, dev_validate);
+    /* the ones the game calls for every polygon: straight from the recompiled code */
+    recomp_register_stdcall((void *)dev_set_rs, 3);
+    recomp_register_stdcall((void *)dev_draw_prim, 6);
+    recomp_register_stdcall((void *)dev_set_texture, 3);
+    recomp_register_stdcall((void *)dev_set_tss, 4);
     /* IDirect3DViewport3 */
     SET(vt_vp3, 0, vp_qi); SET(vt_vp3, 1, vp_addref); SET(vt_vp3, 2, vp_release);
     SET(vt_vp3, 8, vp_set_bg); SET(vt_vp3, 12, vp_clear); SET(vt_vp3, 16, vp_get2); SET(vt_vp3, 17, vp_set2);

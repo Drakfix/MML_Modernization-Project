@@ -46,6 +46,11 @@ def fname(a):
 # The game's cooperative threads (two slots, each with its own stack) switch stacks by
 # loading ESP, which C can't follow. Calls to these become runtime functions that run each
 # thread on a host fiber instead (native/src/recomp.c). exec and exit never return.
+# 0x4F915C: PUSH EAX; FNSTCW [ESP]; PUSH [ESP]; MOV byte [ESP+1],0x1F; FLDCW [ESP]; FRNDINT;
+# FLDCW [ESP+4]; LEA ESP,[ESP+8]; RET. Rounds ST0 toward zero for most of the game's float to int
+# conversions (tens of thousands a frame); as a call, its stack round trips stall the CPU (the
+# stores and differently sized reloads can't be forwarded), so calls to it are inlined.
+FPU_TRUNC = 0x4F915C
 INTRINSICS = {0x4EED08: ("rt_co_schedule", False), 0x4EED79: ("rt_co_create", False),
               0x4EEDA4: ("rt_co_yield", False), 0x4EEDCA: ("rt_co_exec", True),
               0x4EEDFD: ("rt_co_exit", True)}
@@ -374,6 +379,18 @@ class FuncGen:
         self.regs.add((off, size))
         return "\x01R%x,%d\x02" % (off, size)
 
+    def reg_wr(self, off, size, expr):
+        self.regs.add((off, size))
+        self.written.add((off, size))
+        return "\x01W%x,%d\x02%s\x03;" % (off, size, expr)
+
+    def trunc_st0(self):
+        """a CALL to FPU_TRUNC, inline: ST0 rounded toward zero, and the RET's pop of the return
+        address the CALL pushed. What the routine does besides (its control word copies below
+        ESP, the control word set and restored) is invisible to the caller."""
+        return "%s %s" % (self.reg_wr(0x1100, 10, "FROUNDW(0xC00,%s)" % self.reg_rd(0x1100, 10)),
+                          self.reg_wr(0x10, 4, "%s + 4u" % self.reg_rd(0x10, 4)))
+
     def cw(self):
         """the x87 control word (precision and rounding)"""
         return self.reg_rd(0x10A0, 2)
@@ -461,6 +478,8 @@ class FuncGen:
                           else "rt_call(c,0x%xu);" % t)
                 return "{ uint32_t t_ = 0x%xu + LD32(0x%xu); if (t_ == 0x%xu) %s else rt_call(c,t_); }" % (
                     a + 5, a + 1, t, direct)
+            if t == FPU_TRUNC:
+                return self.trunc_st0()
             if t in self.known:
                 self.callees.add(t)
                 return "RC_CALL(c,%d,0x%xu,%s);" % (self.INDEX[t], t, fname(t))
@@ -717,6 +736,41 @@ class FuncGen:
         out.append("}")
         self.cache = cache
         return cache.resolve("\n".join(out))
+
+
+RX_FUNC_HEAD = re.compile(r"^uint32_t f_[0-9a-f]{8}\(RCtx \*c\)\n\{\n")
+RX_CW_SET = re.compile(r"\br10a0_ = [^;]*;")
+RX_LABEL = re.compile(r"\b([LP]_[0-9a-f]{8}(?:_\d+)?)\b")
+
+
+def fp_specialize(text):
+    """x87 arithmetic rounds each result to the precision of the control word, which the code
+    reads at run time (FPCW): a test and two conversions per operation, and the compiler can't
+    use float arithmetic. The body is emitted twice in the function: a copy for single precision
+    (the game's mode once Direct3D is up), where the precision is a constant (FPCS) and the
+    compiler does float operands' arithmetic in float, and the general copy. Wherever the control
+    word may change (FLDCW, read back after a call) the single copy checks it and, if it no
+    longer selects single precision, carries on at the same place in the general copy."""
+    if not RX_FUNC_HEAD.match(text) or "FPCW(r10a0_," not in text:
+        return text
+    lines = text.split("\n")
+    fill = next((i for i, x in enumerate(lines) if "r10a0_ = R16(c,0x10a0);" in x), None)
+    if fill is None or lines[-1] != "}":
+        return text
+    head, body = lines[:fill + 1], "\n".join(lines[fill + 1:-1])
+    n = [0, 0]
+
+    def check(m):
+        n[0] += 1
+        return "%s if (r10a0_ & 0x300) goto G_%d;" % (m.group(0), n[0])
+
+    def label(m):
+        n[1] += 1
+        return "%s G_%d:;" % (m.group(0), n[1])
+
+    single = RX_CW_SET.sub(check, RX_LABEL.sub(r"\1_s", body).replace("FPCW(r10a0_,", "FPCS(1,r10a0_,"))
+    general = RX_CW_SET.sub(label, body)
+    return "\n".join(head + ["    if (r10a0_ & 0x300) goto G_0;", single, "G_0:;", general, "}"])
 
 
 REGION_MAX = 4000   # instructions; a bigger region keeps Ghidra's function body
@@ -1111,7 +1165,7 @@ def main(roots, out, shards=1, patches=None):
     sets = lambda x: (rsets.get(x, ALL_REGS), wsets.get(x, ALL_REGS))
     for k, a in enumerate(sorted(funcs)):
         if a in caches:
-            parts[k] = caches[a].calls(parts[k], sets)
+            parts[k] = fp_specialize(caches[a].calls(parts[k], sets))
     caches = None
     changed = True   # impure if anything reachable is
     while changed:

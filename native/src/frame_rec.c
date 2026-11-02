@@ -18,13 +18,24 @@ static double now_ms(void)
 }
 void mml_sleep_ms(double ms);   /* mml.c: high-resolution timer sleep */
 
+static double g_waited;   /* ms the game thread waited for present slots (perf_log) */
+
 static void wait_until(double t)
 {
-    double left = t - now_ms();
+    double start = now_ms(), left = t - start;
     if (left > 0.6)
         mml_sleep_ms(left - 0.5);
     while (now_ms() < t)
         YieldProcessor();
+    if (left > 0.0)
+        g_waited += now_ms() - start;
+}
+
+double rec_take_wait_ms(void)
+{
+    double ms = g_waited;
+    g_waited = 0.0;
+    return ms;
 }
 #endif
 

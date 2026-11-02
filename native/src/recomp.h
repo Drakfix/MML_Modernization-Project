@@ -19,3 +19,9 @@ uint32_t __cdecl recomp_return_address(uint32_t seen);
 void recomp_register_st0(void *routine, double (*fn)(double));
 void recomp_register_wrap(void *routine, uint32_t original, void (*pre)(const uint32_t regs[8]),
                           void (*post)(uint32_t eax));
+
+/* Our C functions that the game calls through pointers (Direct3D methods we replaced in a
+   vtable) go through the generic bridge: it copies the stack and finds out how much the callee
+   pops, too slow for the ones called tens of thousands of times a frame. A stdcall function
+   (WINAPI) with nargs 32-bit arguments registered here is called straight from C instead. */
+void recomp_register_stdcall(void *fn, int nargs);

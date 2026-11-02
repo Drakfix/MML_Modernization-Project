@@ -43,6 +43,8 @@ static IWICImagingFactory *g_wic;
 static uint32_t g_crc_table[256];
 static unsigned g_replaced, g_written;
 
+static uint32_t g_crc_slice[8][256];   /* [0] = g_crc_table; [k] = the table k bytes further on */
+
 static void crc_init(void)
 {
     uint32_t i, k, c;
@@ -52,12 +54,29 @@ static void crc_init(void)
             c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
         g_crc_table[i] = c;
     }
+    for (i = 0; i < 256; i++) {
+        g_crc_slice[0][i] = g_crc_table[i];
+        for (k = 1; k < 8; k++)
+            g_crc_slice[k][i] = (g_crc_slice[k - 1][i] >> 8) ^ g_crc_table[g_crc_slice[k - 1][i] & 0xFF];
+    }
 }
 
+/* CRC-32 (the hash in replacement file names), 8 bytes per step ("slicing by 8"): the same
+   values as a byte at a time, several times faster. Every changed texture is hashed, and some
+   areas change whole texture pages every frame. */
 static uint32_t crc_update(uint32_t c, const void *data, size_t n)
 {
     const uint8_t *p = (const uint8_t *)data;
     c = ~c;
+    for (; n >= 8; p += 8, n -= 8) {
+        uint32_t a, b;
+        memcpy(&a, p, 4);
+        memcpy(&b, p + 4, 4);
+        a ^= c;
+        c = g_crc_slice[7][a & 0xFF] ^ g_crc_slice[6][(a >> 8) & 0xFF] ^ g_crc_slice[5][(a >> 16) & 0xFF] ^
+            g_crc_slice[4][a >> 24] ^ g_crc_slice[3][b & 0xFF] ^ g_crc_slice[2][(b >> 8) & 0xFF] ^
+            g_crc_slice[1][(b >> 16) & 0xFF] ^ g_crc_slice[0][b >> 24];
+    }
     while (n--)
         c = g_crc_table[(c ^ *p++) & 0xFF] ^ (c >> 8);
     return ~c;
