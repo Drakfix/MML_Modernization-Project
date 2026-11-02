@@ -251,6 +251,10 @@ static void perf_iteration(double now_ms)
             g_perf_logic += now_ms - g_perf_last_wait;
         g_perf_present_wait += waited;
         busy = now_ms - last - g_perf_slept - waited;
+        if (busy > 45.0)   /* a single long iteration: a visible stutter */
+            log_printf("perf: long iteration %.1f ms (drawing %.1f, logic %.1f)", busy,
+                       g_perf_first_wait > last ? g_perf_first_wait - last - waited : 0.0,
+                       g_perf_last_wait > last ? now_ms - g_perf_last_wait : 0.0);
         g_perf_busy += busy;
         if (busy > g_perf_max)
             g_perf_max = busy;

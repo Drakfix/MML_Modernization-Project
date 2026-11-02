@@ -1172,6 +1172,8 @@ static const rec_prev *world_prevs(const gfx_vertex *raw, DWORD n)
     int exact = 0, little = 0, moves, rematched = 0, borrowed = 0, rebuilt = 0;
     if (n > sizeof out / sizeof out[0])
         return NULL;
+    for (k = 0; k < n; k++)
+        interp_prefetch(raw[k].x * 0.5f, raw[k].y * 0.5f);
     for (k = 0; k < n; k++) {
         float sx = raw[k].x * 0.5f, sy = raw[k].y * 0.5f;
         interp_vec3 *c = &cur[k];

@@ -52,6 +52,9 @@ void interp_frame_dropped(void);
  * Returns 0 if unknown, 1 if only the current position is known, 2 if both,
  * 3 if it's static geometry (cur known; the previous one is interp_static_prev). */
 int interp_lookup(float sx, float sy, interp_vec3 *cur, interp_vec3 *prev);
+/* start loading what interp_lookup(sx, sy) will read: a draw's vertices are all requested
+ * first, so their cache misses overlap */
+void interp_prefetch(float sx, float sy);
 
 /* nearest vertex (within max_dist, projector units) of the frame being drawn
  * that has a previous position too: for geometry built in screen space around
