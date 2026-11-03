@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ambience.h"
 #include "apicensus.h"
 #include "controls.h"
 #include "input.h"
@@ -600,6 +601,7 @@ static void init(void)
         else
             log_printf("input: legacy controller path selected (DirectInput joystick via Xidi)");
     }
+    ambience_install(g_ini);   /* room ambience loops ([general] ambience_loop) */
     {
         char w[128];
         ini_string("debug", "watch", "", w, sizeof w);

@@ -62,6 +62,7 @@ run_min=50           ; slowest run, % of normal (just past the walk range)
 
 [general]
 intro=play           ; or skip
+ambience_loop=1      ; forest ambience loops (0: plays once, as the original)
 ```
 
 What it did gets written to `mml.log`.
