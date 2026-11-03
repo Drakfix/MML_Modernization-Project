@@ -5,10 +5,11 @@
  * vertex layout, 16-bit textures, a handful of blend modes, alpha test, depth
  * test and table fog (see the API census notes in native/README.md). That's
  * the whole contract a backend has to meet; ddshim.c turns the game's
- * DirectDraw/Direct3D calls into these. The first backend is Direct3D 11
- * (gfx_d3d11.c); a GLES/Vulkan one can sit behind the same interface. */
+ * DirectDraw/Direct3D calls into these. gfx.c hands them to the backend
+ * chosen with [video] backend= (gfx_backend.h): Direct3D 11 (gfx_d3d11.c),
+ * the first; Vulkan next. Nothing here depends on the platform: the window is
+ * the platform's own handle (an HWND on Windows). */
 #include <stdint.h>
-#include <windows.h>
 
 /* matches the game's FVF 0x1C4: XYZRHW | DIFFUSE | SPECULAR | TEX1 (32 bytes) */
 typedef struct {
@@ -18,6 +19,10 @@ typedef struct {
 } gfx_vertex;
 
 typedef struct gfx_tex gfx_tex;
+
+typedef struct {
+    int32_t left, top, right, bottom;   /* the game's coordinates, right / bottom exclusive */
+} gfx_rect;
 
 enum { GFX_TRILIST = 4, GFX_TRISTRIP = 5, GFX_TRIFAN = 6 };   /* D3DPRIMITIVETYPE values */
 
@@ -51,11 +56,12 @@ typedef struct {
     int show_depth;               /* debug: show the effects depth instead of the picture */
     char shader[260];             /* RetroArch preset (.slangp, full path) for the final picture, "" = none */
     char game_dir[260];           /* where librashader.dll lives */
+    char backend[16];             /* [video] backend: "d3d11" (default) */
 } gfx_options;
 
-int gfx_init(HWND game_window, int app_w, int app_h, const gfx_options *opt);
+int gfx_init(void *game_window, int app_w, int app_h, const gfx_options *opt);
 /* place + black-fill the window before there is a device (intro video) */
-void gfx_prepare_window(HWND game_window, int app_w, int app_h, const gfx_options *opt);
+void gfx_prepare_window(void *game_window, int app_w, int app_h, const gfx_options *opt);
 int gfx_ready(void);
 void gfx_set_mode(int app_w, int app_h);   /* the game's display mode (coordinate space) */
 
@@ -68,7 +74,7 @@ void gfx_set_texture(gfx_tex *t);           /* NULL = untextured */
 void gfx_set_state(const gfx_state *s);
 void gfx_draw(int prim, const gfx_vertex *v, int count);
 /* clear in the game's coordinates; rect NULL = everything */
-void gfx_clear(const RECT *rect, int color_too, uint32_t color, int depth_too, float depth);
+void gfx_clear(const gfx_rect *rect, int color_too, uint32_t color, int depth_too, float depth);
 void gfx_present(void);
 /* frame interpolation: 0 = the game's frame, 1 = a second scene target for the
  * in-between frame. Draws and clears go to the target in use. */

@@ -634,8 +634,18 @@ static void copy_rect(surface *dst, const RECT *dr, surface *src, const RECT *sr
     dst->dirty = 1;
 }
 
+/* a DirectDraw rectangle for the renderer (NULL stays NULL) */
+static const gfx_rect *to_gfx_rect(const RECT *r, gfx_rect *out)
+{
+    if (!r)
+        return NULL;
+    out->left = r->left, out->top = r->top, out->right = r->right, out->bottom = r->bottom;
+    return out;
+}
+
 static HRESULT WINAPI s_blt(void **i, LPRECT dr, void **srci, LPRECT sr, DWORD flags, LPDDBLTFX fx)
 {
+    gfx_rect gr;
     surface *s = FROM(surface, vt4, i), *src = srci ? FROM(surface, vt4, srci) : NULL;
     if (flags & DDBLT_COLORFILL) {
         if (s->kind == K_BACK || s->kind == K_PRIMARY) {
@@ -643,7 +653,7 @@ static HRESULT WINAPI s_blt(void **i, LPRECT dr, void **srci, LPRECT sr, DWORD f
             /* 16-bit 565 fill colour to 0xRRGGBB */
             uint32_t rgb = ((c >> 11 & 0x1F) * 255 / 31) << 16 | ((c >> 5 & 0x3F) * 255 / 63) << 8 | (c & 0x1F) * 255 / 31;
             ensure_gfx(s->dd);
-            rec_clear(dr, 1, rgb, 0, 1.0f);
+            rec_clear(to_gfx_rect(dr, &gr), 1, rgb, 0, 1.0f);
         } else if (s->mem) {
             int x, y, bpp = s->pf.dwRGBBitCount / 8;
             RECT r = { 0, 0, s->w, s->h };
@@ -657,7 +667,7 @@ static HRESULT WINAPI s_blt(void **i, LPRECT dr, void **srci, LPRECT sr, DWORD f
     }
     if (flags & DDBLT_DEPTHFILL) {
         ensure_gfx(s->dd);
-        rec_clear(dr, 0, 0, 1, 1.0f);
+        rec_clear(to_gfx_rect(dr, &gr), 0, 0, 1, 1.0f);
         return DD_OK;
     }
     if (s->kind == K_PRIMARY && src && src->kind == K_BACK) {

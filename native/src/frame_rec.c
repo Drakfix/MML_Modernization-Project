@@ -50,7 +50,7 @@ typedef struct {
     union {
         struct { int index; } state;              /* into g_states */
         gfx_tex *tex;
-        struct { RECT rect; int has_rect, color_too, depth_too; uint32_t color; float depth; } clear;
+        struct { gfx_rect rect; int has_rect, color_too, depth_too; uint32_t color; float depth; } clear;
         struct { int prim, first, count, moves; } draw;  /* into g_verts / g_prevs */
     } u;
 } cmd;
@@ -108,7 +108,7 @@ void rec_texture(gfx_tex *t)
         c->u.tex = t;
 }
 
-void rec_clear(const RECT *rect, int color_too, uint32_t color, int depth_too, float depth)
+void rec_clear(const gfx_rect *rect, int color_too, uint32_t color, int depth_too, float depth)
 {
     cmd *c;
     gfx_clear(rect, color_too, color, depth_too, depth);

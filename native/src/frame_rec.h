@@ -30,7 +30,7 @@ double rec_take_wait_ms(void);
 
 void rec_state(const gfx_state *s);
 void rec_texture(gfx_tex *t);
-void rec_clear(const RECT *rect, int color_too, uint32_t color, int depth_too, float depth);
+void rec_clear(const gfx_rect *rect, int color_too, uint32_t color, int depth_too, float depth);
 /* prev may be NULL (nothing moves), else one entry per vertex */
 void rec_draw(int prim, const gfx_vertex *v, const rec_prev *prev, int count);
 void rec_tex_destroy(gfx_tex *t);

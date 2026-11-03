@@ -661,6 +661,7 @@ void mml_init(void)
             o.windowed = GetPrivateProfileIntA("video", "windowed", 0, g_ini);
             o.exclusive = GetPrivateProfileIntA("video", "exclusive", 0, g_ini);
             o.render_scale = GetPrivateProfileIntA("video", "render_scale", 0, g_ini);
+            ini_string("video", "backend", "d3d11", o.backend, sizeof o.backend);   /* gfx_backend.h */
             {
                 /* [video] shader=preset.slangp (relative to the game folder, or a full path):
                  * RetroArch shaders on the final picture. They're made for the console's own

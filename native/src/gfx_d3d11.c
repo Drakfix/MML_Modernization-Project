@@ -16,7 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "gfx.h"
+#include "gfx_backend.h"
 #include "log.h"
 #include "rshader.h"
 #include "gfx_ui.h"
@@ -27,6 +27,8 @@
 #include "shaders/blit_ps.h"
 #include "shaders/depth_copy_ps.h"
 #include "shaders/show_depth_ps.h"
+#include "shaders/ui_vs.h"
+#include "shaders/ui_ps.h"
 
 struct gfx_tex {
     ID3D11Texture2D *tex;
@@ -50,7 +52,9 @@ static int g_flip_mt;   /* the context is multithread-protected */
 static int g_reshade;   /* ReShade is loaded: present on the game thread (see gfx_flip_at) */
 static int g_depth_done[2];   /* effects depth already copied into target t's depth buffer */
 static void flush_batch(void);
-void gfx_wait_flip(void);
+static void d3d_wait_flip(void);
+static void d3d_present_target(int t);
+static void d3d_compose_target(int t);
 
 static struct {
     int ready;
@@ -148,8 +152,9 @@ static void place_window(void);
 /* Before the game has a Direct3D device (e.g. while the intro video plays on
  * its own temporary DirectDraw object): put the window where the renderer will
  * want it and paint it black, so nothing of the desktop shows around the video. */
-void gfx_prepare_window(HWND hwnd, int app_w, int app_h, const gfx_options *opt)
+static void d3d_prepare_window(void *window, int app_w, int app_h, const gfx_options *opt)
 {
+    HWND hwnd = (HWND)window;
     RECT rc;
     HDC dc;
     if (g.ready || !hwnd)
@@ -326,8 +331,9 @@ static ID3D11SamplerState *make_sampler(D3D11_FILTER f, D3D11_TEXTURE_ADDRESS_MO
     return out;
 }
 
-int gfx_init(HWND hwnd, int app_w, int app_h, const gfx_options *opt)
+static int d3d_init(void *window, int app_w, int app_h, const gfx_options *opt)
 {
+    HWND hwnd = (HWND)window;
     static const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0,
                                                 D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0 };
     IDXGIFactory1 *f1 = NULL;
@@ -459,12 +465,12 @@ int gfx_init(HWND hwnd, int app_w, int app_h, const gfx_options *opt)
     return 1;
 }
 
-int gfx_ready(void)
+static int d3d_ready(void)
 {
     return g.ready;
 }
 
-void gfx_set_mode(int app_w, int app_h)
+static void d3d_set_mode(int app_w, int app_h)
 {
     if (app_w <= 0 || app_h <= 0 || (app_w == g.app_w && app_h == g.app_h))
         return;
@@ -479,7 +485,7 @@ void gfx_set_mode(int app_w, int app_h)
 
 /* ---------------------------------------------------------------- textures */
 
-gfx_tex *gfx_tex_create(int w, int h)
+static gfx_tex *d3d_tex_create(int w, int h)
 {
     D3D11_TEXTURE2D_DESC d;
     gfx_tex *t;
@@ -508,7 +514,7 @@ gfx_tex *gfx_tex_create(int w, int h)
     return t;
 }
 
-void gfx_tex_upload(gfx_tex *t, const uint32_t *rgba, int w, int h)
+static void d3d_tex_upload(gfx_tex *t, const uint32_t *rgba, int w, int h)
 {
     if (!t || !g.ready || w != t->w || h != t->h)
         return;
@@ -516,13 +522,13 @@ void gfx_tex_upload(gfx_tex *t, const uint32_t *rgba, int w, int h)
     ID3D11DeviceContext_UpdateSubresource(g.ctx, (ID3D11Resource *)t->tex, 0, NULL, rgba, (UINT)w * 4, 0);
 }
 
-void gfx_tex_size(const gfx_tex *t, int *w, int *h)
+static void d3d_tex_size(const gfx_tex *t, int *w, int *h)
 {
     *w = t ? t->w : 0;
     *h = t ? t->h : 0;
 }
 
-void gfx_tex_destroy(gfx_tex *t)
+static void d3d_tex_destroy(gfx_tex *t)
 {
     if (!t)
         return;
@@ -534,7 +540,7 @@ void gfx_tex_destroy(gfx_tex *t)
     free(t);
 }
 
-void gfx_set_texture(gfx_tex *t)
+static void d3d_set_texture(gfx_tex *t)
 {
     if (g.tex != t) {
         g.tex = t;
@@ -542,7 +548,7 @@ void gfx_set_texture(gfx_tex *t)
     }
 }
 
-void gfx_set_state(const gfx_state *s)
+static void d3d_set_state(const gfx_state *s)
 {
     if (memcmp(&g.st, s, sizeof *s) != 0) {
         g.st = *s;
@@ -738,7 +744,7 @@ static void flush_batch(void)
     }
 }
 
-void gfx_draw(int prim, const gfx_vertex *v, int count)
+static void d3d_draw(int prim, const gfx_vertex *v, int count)
 {
     int need, i;
     gfx_vertex *o;
@@ -774,7 +780,7 @@ void gfx_draw(int prim, const gfx_vertex *v, int count)
     g_nbatch += need;
 }
 
-void gfx_clear(const RECT *rect, int color_too, uint32_t color, int depth_too, float depth)
+static void d3d_clear(const gfx_rect *rect, int color_too, uint32_t color, int depth_too, float depth)
 {
     float c[4];
     if (!g.ready)
@@ -841,13 +847,13 @@ static DWORD WINAPI flip_thread(void *p)
     }
 }
 
-void gfx_wait_flip(void)
+static void d3d_wait_flip(void)
 {
     if (g_flip_idle)
         WaitForSingleObject(g_flip_idle, INFINITE);
 }
 
-void gfx_flip_at(double due_ms, void (*on_flip)(void))
+static void d3d_flip_at(double due_ms, void (*on_flip)(void))
 {
     if (!g.ready)
         return;
@@ -872,37 +878,37 @@ void gfx_flip_at(double due_ms, void (*on_flip)(void))
             on_flip();
         return;
     }
-    gfx_wait_flip();
+    d3d_wait_flip();
     g_flip_cb = on_flip;
     g_flip_due = due_ms;
     ResetEvent(g_flip_idle);
     SetEvent(g_flip_go);
 }
 
-void gfx_present(void)
+static void d3d_present(void)
 {
-    gfx_present_target(g.cur);
+    d3d_present_target(g.cur);
 }
 
 /* ---- changing settings while the game runs (in-game menu); game thread only,
  * between frames ---- */
 
-const gfx_options *gfx_get_options(void)
+static const gfx_options *d3d_get_options(void)
 {
     return &g.opt;
 }
 
-void gfx_set_vsync(int on)
+static void d3d_set_vsync(int on)
 {
     g.opt.vsync = on;
 }
 
-void gfx_set_nearest_upscale(int on)
+static void d3d_set_nearest_upscale(int on)
 {
     g.opt.nearest_upscale = on;
 }
 
-void gfx_set_anisotropy(int n)
+static void d3d_set_anisotropy(int n)
 {
     if (!g.ready)
         return;
@@ -915,13 +921,13 @@ void gfx_set_anisotropy(int n)
 }
 
 /* resolution of the game's image and antialiasing: the scene targets are rebuilt */
-void gfx_set_scene(int render_scale, int msaa)
+static void d3d_set_scene(int render_scale, int msaa)
 {
     D3D11_RASTERIZER_DESC rd;
     if (!g.ready || (render_scale == g.opt.render_scale && msaa == g.opt.msaa))
         return;
     flush_batch();
-    gfx_wait_flip();
+    d3d_wait_flip();
     g.opt.render_scale = render_scale;
     g.opt.msaa = msaa;
     ID3D11DeviceContext_OMSetRenderTargets(g.ctx, 0, NULL, NULL);
@@ -939,17 +945,17 @@ void gfx_set_scene(int render_scale, int msaa)
 }
 
 /* RetroArch preset ("" = none) */
-int gfx_set_shader(const char *path)
+static int d3d_set_shader(const char *path)
 {
     if (!g.ready)
         return 0;
     flush_batch();
-    gfx_wait_flip();
+    d3d_wait_flip();
     strcpy_s(g.opt.shader, sizeof g.opt.shader, path ? path : "");
     return rshader_reload(g.dev, g.opt.game_dir, g.opt.shader);
 }
 
-void gfx_use_target(int t)
+static void d3d_use_target(int t)
 {
     if (!g.ready || t < 0 || t > 1)
         return;
@@ -999,7 +1005,7 @@ static void exclusive_follow_focus(void)
  * tools such as ReShade read (the floor looked infinitely far away). The
  * effects depth target has every visible surface; at the end of the frame it
  * becomes the depth buffer. Nothing of ours reads depth after this point. */
-void gfx_finish_depth(int t)
+static void d3d_finish_depth(int t)
 {
     D3D11_VIEWPORT vp;
     ID3D11ShaderResourceView *none = NULL;
@@ -1026,7 +1032,159 @@ void gfx_finish_depth(int t)
     bind_scene();
 }
 
-void gfx_compose_target(int t)
+/* ---- our UI over the final picture (gfx_ui.h) ---- */
+static struct {
+    int ready, failed;
+    ID3D11VertexShader *vs;
+    ID3D11PixelShader *ps;
+    ID3D11InputLayout *layout;
+    ID3D11Buffer *vb, *cb;
+    ID3D11BlendState *blend;
+    ID3D11SamplerState *smp;
+    ID3D11RasterizerState *raster;
+    ID3D11Texture2D *font;
+    ID3D11ShaderResourceView *font_srv;
+    unsigned font_gen;   /* the atlas generation uploaded */
+    UINT vb_bytes;
+} g_ui;
+
+#define UI_MAX_VERTS 60000   /* (gfx_ui.c's) */
+
+static int ui_setup(void)
+{
+    D3D11_INPUT_ELEMENT_DESC il[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_B8G8R8A8_UNORM, 0, 16, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+    D3D11_BUFFER_DESC bd;
+    D3D11_BLEND_DESC bl;
+    D3D11_SAMPLER_DESC sd;
+    D3D11_RASTERIZER_DESC rd;
+    ID3D11Device_CreateVertexShader(g.dev, g_vs_ui, sizeof g_vs_ui, NULL, &g_ui.vs);
+    ID3D11Device_CreatePixelShader(g.dev, g_ps_ui, sizeof g_ps_ui, NULL, &g_ui.ps);
+    ID3D11Device_CreateInputLayout(g.dev, il, 3, g_vs_ui, sizeof g_vs_ui, &g_ui.layout);
+    memset(&bd, 0, sizeof bd);
+    g_ui.vb_bytes = (UINT)(sizeof(gfx_ui_vert) * UI_MAX_VERTS);
+    bd.ByteWidth = g_ui.vb_bytes;
+    bd.Usage = D3D11_USAGE_DYNAMIC;
+    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    ID3D11Device_CreateBuffer(g.dev, &bd, NULL, &g_ui.vb);
+    bd.ByteWidth = 16;
+    bd.Usage = D3D11_USAGE_DEFAULT;   /* filled with UpdateSubresource */
+    bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    bd.CPUAccessFlags = 0;
+    ID3D11Device_CreateBuffer(g.dev, &bd, NULL, &g_ui.cb);
+    memset(&bl, 0, sizeof bl);
+    bl.RenderTarget[0].BlendEnable = TRUE;
+    bl.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    bl.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    bl.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    bl.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    bl.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    bl.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    bl.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    ID3D11Device_CreateBlendState(g.dev, &bl, &g_ui.blend);
+    memset(&sd, 0, sizeof sd);
+    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sd.MaxLOD = D3D11_FLOAT32_MAX;
+    ID3D11Device_CreateSamplerState(g.dev, &sd, &g_ui.smp);
+    memset(&rd, 0, sizeof rd);
+    rd.FillMode = D3D11_FILL_SOLID;
+    rd.CullMode = D3D11_CULL_NONE;
+    rd.DepthClipEnable = TRUE;
+    ID3D11Device_CreateRasterizerState(g.dev, &rd, &g_ui.raster);
+    if (!g_ui.vs || !g_ui.ps || !g_ui.layout || !g_ui.vb || !g_ui.cb || !g_ui.blend || !g_ui.smp || !g_ui.raster) {
+        log_printf("ui: setup failed");
+        g_ui.failed = 1;
+        return 0;
+    }
+    g_ui.ready = 1;
+    return 1;
+}
+
+static int ui_upload_atlas(const uint8_t *atlas, int aw, int ah)
+{
+    D3D11_TEXTURE2D_DESC td;
+    D3D11_SUBRESOURCE_DATA init;
+    memset(&td, 0, sizeof td);
+    td.Width = (UINT)aw;
+    td.Height = (UINT)ah;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_R8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_IMMUTABLE;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    init.pSysMem = atlas;
+    init.SysMemPitch = (UINT)aw;
+    init.SysMemSlicePitch = 0;
+    REL(g_ui.font_srv);
+    REL(g_ui.font);
+    return SUCCEEDED(ID3D11Device_CreateTexture2D(g.dev, &td, &init, &g_ui.font)) &&
+           SUCCEEDED(ID3D11Device_CreateShaderResourceView(g.dev, (ID3D11Resource *)g_ui.font, NULL, &g_ui.font_srv));
+}
+
+/* the in-game menu (if open) into the back buffer */
+static void ui_draw(void)
+{
+    D3D11_MAPPED_SUBRESOURCE m;
+    D3D11_VIEWPORT vp;
+    UINT stride = sizeof(gfx_ui_vert), off = 0;
+    const gfx_ui_vert *verts;
+    const uint8_t *atlas;
+    int n, aw, ah, w = g.back_w, h = g.back_h;
+    unsigned gen;
+    float cb[4];
+    if (g_ui.failed)
+        return;
+    n = gfx_ui_build(w, h, &verts, &atlas, &aw, &ah, &gen);
+    if (n <= 0)
+        return;
+    if (!g_ui.ready && !ui_setup())
+        return;
+    if (gen != g_ui.font_gen || !g_ui.font_srv) {
+        if (!ui_upload_atlas(atlas, aw, ah)) {
+            log_printf("ui: font texture failed");
+            g_ui.failed = 1;
+            return;
+        }
+        g_ui.font_gen = gen;
+    }
+    if ((UINT)n * stride > g_ui.vb_bytes)
+        n = (int)(g_ui.vb_bytes / stride);
+    if (FAILED(ID3D11DeviceContext_Map(g.ctx, (ID3D11Resource *)g_ui.vb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m)))
+        return;
+    memcpy(m.pData, verts, (size_t)stride * (size_t)n);
+    ID3D11DeviceContext_Unmap(g.ctx, (ID3D11Resource *)g_ui.vb, 0);
+    cb[0] = 1.0f / w;
+    cb[1] = 1.0f / h;
+    cb[2] = cb[3] = 0;
+    ID3D11DeviceContext_UpdateSubresource(g.ctx, (ID3D11Resource *)g_ui.cb, 0, NULL, cb, 0, 0);
+    vp.TopLeftX = vp.TopLeftY = 0;
+    vp.Width = (float)w;
+    vp.Height = (float)h;
+    vp.MinDepth = 0;
+    vp.MaxDepth = 1;
+    ID3D11DeviceContext_OMSetRenderTargets(g.ctx, 1, &g.back_rtv, NULL);
+    ID3D11DeviceContext_RSSetViewports(g.ctx, 1, &vp);
+    ID3D11DeviceContext_RSSetState(g.ctx, g_ui.raster);
+    ID3D11DeviceContext_OMSetBlendState(g.ctx, g_ui.blend, NULL, 0xFFFFFFFF);
+    ID3D11DeviceContext_OMSetDepthStencilState(g.ctx, NULL, 0);
+    ID3D11DeviceContext_IASetInputLayout(g.ctx, g_ui.layout);
+    ID3D11DeviceContext_IASetVertexBuffers(g.ctx, 0, 1, &g_ui.vb, &stride, &off);
+    ID3D11DeviceContext_IASetPrimitiveTopology(g.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ID3D11DeviceContext_VSSetShader(g.ctx, g_ui.vs, NULL, 0);
+    ID3D11DeviceContext_VSSetConstantBuffers(g.ctx, 0, 1, &g_ui.cb);
+    ID3D11DeviceContext_PSSetShader(g.ctx, g_ui.ps, NULL, 0);
+    ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &g_ui.font_srv);
+    ID3D11DeviceContext_PSSetSamplers(g.ctx, 0, 1, &g_ui.smp);
+    ID3D11DeviceContext_Draw(g.ctx, (UINT)n, 0);
+}
+
+static void d3d_compose_target(int t)
 {
     static const float black[4] = { 0, 0, 0, 1 };
     D3D11_VIEWPORT vp;
@@ -1036,10 +1194,10 @@ void gfx_compose_target(int t)
     if (!g.ready)
         return;
     flush_batch();
-    gfx_wait_flip();   /* the back buffer may still hold a frame waiting for its moment */
+    d3d_wait_flip();   /* the back buffer may still hold a frame waiting for its moment */
     if (t < 0 || t > 1 || !g.tg_used[t])
         t = 0;
-    gfx_finish_depth(t);
+    d3d_finish_depth(t);
     exclusive_follow_focus();
     if (g.tg[t].scene_resolved)
         ID3D11DeviceContext_ResolveSubresource(g.ctx, (ID3D11Resource *)g.tg[t].scene_resolved, 0,
@@ -1089,13 +1247,24 @@ void gfx_compose_target(int t)
                        (unsigned)vp.Height))
         ID3D11DeviceContext_Draw(g.ctx, 3, 0);   /* plain upscale (or the shader failed this frame) */
     ID3D11DeviceContext_PSSetShaderResources(g.ctx, 0, 1, &none);
-    gfx_ui_render(g.dev, g.ctx, g.back_rtv, g.back_w, g.back_h);   /* in-game menu, if open */
+    ui_draw();   /* in-game menu, if open */
     bind_scene();
 }
 
-void gfx_present_target(int t)
+static void d3d_present_target(int t)
 {
-    gfx_compose_target(t);
+    d3d_compose_target(t);
     if (g.ready)
         IDXGISwapChain1_Present(g.swap, g.opt.vsync ? 1 : 0, 0);
 }
+
+const gfx_backend gfx_backend_d3d11 = {
+    "d3d11",
+    d3d_init, d3d_prepare_window, d3d_ready, d3d_set_mode,
+    d3d_tex_create, d3d_tex_upload, d3d_tex_destroy, d3d_tex_size,
+    d3d_set_texture, d3d_set_state, d3d_draw, d3d_clear,
+    d3d_present, d3d_use_target, d3d_present_target, d3d_compose_target,
+    d3d_flip_at, d3d_wait_flip, d3d_get_options,
+    d3d_set_vsync, d3d_set_nearest_upscale, d3d_set_anisotropy, d3d_set_scene, d3d_set_shader,
+    d3d_finish_depth,
+};

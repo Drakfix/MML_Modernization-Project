@@ -1,6 +1,5 @@
 #pragma once
 #include <stdint.h>
-#include <d3d11.h>
 
 /* Our UI over the final picture, in window pixels (see gfx_ui.c). Each owner
  * registers a draw callback, which calls the drawing functions below; they run
@@ -28,5 +27,14 @@ float gfx_ui_text(float x, float y, const char *s, uint32_t argb, float scale); 
 float gfx_ui_text_width(const char *s, float scale);
 float gfx_ui_line(float scale);   /* body line height */
 
-/* gfx_d3d11.c: draw the UI into the window's back buffer */
-void gfx_ui_render(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11RenderTargetView *rtv, int w, int h);
+/* For the backends, while composing a presented frame: the UI's triangles for a w x h window
+   (their count; 0 = nothing to draw) and the coverage atlas they sample (R8, aw x ah, alpha =
+   colour alpha x coverage), a new one whenever atlas_gen changes. Positions are window pixels
+   (y down). Drawn with alpha = vertex alpha x coverage, blended SRC_ALPHA / INV_SRC_ALPHA (alpha:
+   ONE / INV_SRC_ALPHA), no depth, no culling, the atlas sampled bilinear and clamped. */
+typedef struct {
+    float x, y, u, v;
+    uint32_t color;   /* 0xAARRGGBB (B8G8R8A8 in memory) */
+} gfx_ui_vert;
+int gfx_ui_build(int w, int h, const gfx_ui_vert **verts, const uint8_t **atlas, int *aw, int *ah,
+                 unsigned *atlas_gen);
