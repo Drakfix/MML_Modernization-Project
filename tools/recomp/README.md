@@ -83,7 +83,9 @@ the project before translating:
 - `jump_orphans()` creates functions at code that no function contains: call and jump
   targets, fall-throughs off the end of a body, and pointer targets that Ghidra never
   disassembled. It also dissolves the "functions" Ghidra made out of jump tables. Those were
-  decoded as instructions and ran misaligned into the real code after the table.
+  decoded as instructions and ran misaligned into the real code after the table. They are
+  found by name (`switchdata...`), by a relocated pointer at their start, or by a pointer
+  target that falls inside one of their instructions.
 
 Without these passes, recompiled code reaches addresses that have no translation and falls
 back to machine code, which the ports don't have.
@@ -101,9 +103,10 @@ back to machine code, which the ports don't have.
 - It is slow: the game thread needs about three times the CPU time of the original code, so
   busy scenes fall below the frame rate. The game then skips drawing frames, as it was
   designed to; see [Falling behind](#falling-behind).
-- Known gaps: 7 pointer targets overlap instructions of other functions (bytes with two
-  valid decodings, which Ghidra can't represent), and 3 entries are not code. None of them
-  are reached on the tested routes.
+- Pointer targets inside instructions: 7 were handlers placed right after a jump table (or
+  after padding) that Ghidra had decoded as code, misaligned; `jump_orphans()` now dissolves
+  those and makes the handlers (one is the boss door at `0x4DC1CF`). The 2 that remain
+  (`0x435879`, `0x506AB0`) point at data in the code section and are never executed.
 
 Next: make the generated code fast (the x87 stack resolved at translation time, flags only
 where something reads them, registers in local variables, a direct dispatch table, cheaper

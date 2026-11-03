@@ -953,7 +953,8 @@ def jump_orphans():
     for v in reloc_code_values():
         x = af.getAddress(hex(v))
         if (fm.getFunctionContaining(x) is None and lst.getInstructionAt(x) is None and
-                lst.getDefinedDataAt(x) is None and not switch_table(x)):
+                lst.getDefinedDataAt(x) is None and not switch_table(x) and
+                (mem.getByte(x) & 0xFF) not in (0x90, 0xCC, 0x00)):   # (padding: see fix_switchdata)
             pointed.add(x)
     for _ in range(8):   # new functions can lead to further orphans
         new, pointed = set(pointed), set()
@@ -996,41 +997,81 @@ def switch_table(a):
     return s is not None and s.getName().startswith("switchdata")
 
 
+def misread_functions(values):
+    """Functions that are other bytes read as code, found through the pointer targets they swallowed:
+    a code address from the relocation table that falls inside one of their instructions. The ones
+    that start with a relocated dword are jump tables (from a pointer to the table: no switchdata
+    name, so not caught by that), as at 0x4DC1B7, a 6-entry table followed by a handler at 0x4DC1CF
+    that the game reaches through a pointer at 0x55057D (a boss door). The ones nothing refers to
+    began in padding and read the function after it a byte off (0x401003, the real one at 0x401010).
+    A function that is referred to and starts on no relocation stays: its targets inside are data
+    (0x506A90, a DirectInput data format in the code section)."""
+    fm, lst, rm, af = (program.getFunctionManager(), program.getListing(), program.getReferenceManager(),
+                       program.getAddressFactory())
+    at = set(r.getAddress().getOffset() for r in program.getRelocationTable().getRelocations() if r.getType() == 3)
+    out = {}
+    for v in values:
+        x = af.getAddress(hex(v))
+        ins = lst.getInstructionContaining(x)
+        if lst.getInstructionAt(x) is not None or ins is None:
+            continue
+        f = fm.getFunctionContaining(ins.getAddress())   # (x itself can be left out of the body)
+        if f is None or f.getName().startswith("switchdata"):
+            continue
+        e = f.getEntryPoint()
+        if e.getOffset() in at or rm.getReferenceCountTo(e) == 0:
+            out[e.getOffset()] = (f, e.getOffset() in at)
+    return [out[k] for k in sorted(out)]
+
+
 def fix_switchdata():
     """Ghidra sometimes makes a function out of a jump table ("switchdataD_..."), decodes the
     table as instructions and runs on, misaligned, into the real code after it (0x49F707: an
     8-entry table, then a function at 0x49F727 reached only through a pointer). Dissolve those,
-    then make functions at every code address in the range that something points or branches to."""
+    and the other misread functions (misread_functions), then make functions at every code
+    address in the range that something points or branches to."""
     fm, lst, rm, af = (program.getFunctionManager(), program.getListing(), program.getReferenceManager(),
                        program.getAddressFactory())
     from ghidra.program.model.symbol import SourceType
-    targets = reloc_code_targets()
+    targets = reloc_code_values()
     made = 0
-    for f in [f for f in fm.getFunctions(True) if f.getName().startswith("switchdata")]:
+    found = [(f, True) for f in fm.getFunctions(True) if f.getName().startswith("switchdata")]
+    found += misread_functions(targets)
+    at = set(r.getAddress().getOffset() for r in program.getRelocationTable().getRelocations() if r.getType() == 3)
+    for f, table in found:
         body = f.getBody()
         lo, hi = body.getMinAddress(), body.getMaxAddress()
+        end = lo.getOffset()   # the table: the run of relocated dwords it starts with
+        while table and end in at:
+            end += 4
         entries = set()
-        for r in body.getAddressRanges():
-            a = r.getMinAddress()
-            while a.compareTo(r.getMaxAddress()) <= 0:
-                if switch_table(a):
-                    pass
-                elif a.getOffset() in targets or any(
-                        x.getReferenceType().isFlow() and not body.contains(x.getFromAddress())
-                        for x in rm.getReferencesTo(a)):
-                    entries.add(a)
-                a = a.next()
-        name = f.getName()
+        a = lo   # (the whole range: a pointer target inside a misread instruction can be left out of the body)
+        while a.compareTo(hi) <= 0:
+            flow = any(x.getReferenceType().isFlow() and
+                       not (lo.compareTo(x.getFromAddress()) <= 0 and x.getFromAddress().compareTo(hi) <= 0)
+                       for x in rm.getReferencesTo(a))
+            if switch_table(a) or a.getOffset() < end:
+                pass
+            elif flow or (a.getOffset() in targets and
+                          # a pointer to padding is no code entry (0x4FA905: the runtime's signature
+                          # block points at 0x401003, NOPs before the function at 0x401010)
+                          (program.getMemory().getByte(a) & 0xFF) not in (0x90, 0xCC, 0x00)):
+                entries.add(a)
+            a = a.next()
+        name = orig = f.getName()
+        if not name.startswith("switchdata"):
+            name = "switchdata_%08x" % lo.getOffset()
         fm.removeFunction(f.getEntryPoint())
         lst.clearCodeUnits(lo, hi, False)
-        if not switch_table(lo):   # keep the table's label: it marks the address as data from now on
+        # keep or make the table's label: it marks the address as data from now on
+        if table and not switch_table(lo):
             program.getSymbolTable().createLabel(lo, name, SourceType.ANALYSIS)
         n = 0
         for a in sorted(entries, key=lambda x: x.getOffset()):
             if disassemble_at(a) and fm.getFunctionContaining(a) is None and flat.createFunction(a, None) is not None:
                 n += 1
         made += n
-        print("  %s (%08x-%08x): dissolved, %d functions made" % (f.getName(), lo.getOffset(), hi.getOffset(), n))
+        print("  %s (%08x-%08x): dissolved, %d functions made" % (orig, lo.getOffset(), hi.getOffset(), n))
     return made
 
 
