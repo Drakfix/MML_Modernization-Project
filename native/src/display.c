@@ -204,8 +204,8 @@ void display_frame(void)
         void *mine1 = (void *)hooked_draw_prim, *mine2 = (void *)hooked_draw_indexed;
         g_draw_prim = (draw_prim_t)vt[VT_DRAW_PRIMITIVE];
         g_draw_indexed = (draw_indexed_t)vt[VT_DRAW_INDEXED_PRIMITIVE];
-        mem_write((uintptr_t)&vt[VT_DRAW_PRIMITIVE], &mine1, sizeof mine1);
-        mem_write((uintptr_t)&vt[VT_DRAW_INDEXED_PRIMITIVE], &mine2, sizeof mine2);
+        host_write(&vt[VT_DRAW_PRIMITIVE], &mine1, sizeof mine1);
+        host_write(&vt[VT_DRAW_INDEXED_PRIMITIVE], &mine2, sizeof mine2);
         log_printf("display: DrawPrimitive hooked (vtable %p)", (void *)vt);
     }
     if (++frames == 600)

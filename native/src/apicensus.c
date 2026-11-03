@@ -386,7 +386,7 @@ static void patch_vtbl(void *obj, int iface)
             t[6] = 0xFF; t[7] = 0x25; memcpy(t + 8, &org, 4);
             repl = t;
         }
-        mem_write((uintptr_t)&vtbl[s], &repl, sizeof repl);
+        host_write(&vtbl[s], &repl, sizeof repl);
     }
     log_printf("apicensus: instrumented %s vtable %p (%d slots)", I_NAME[iface], (void *)vtbl, n);
 }

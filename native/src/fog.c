@@ -98,7 +98,7 @@ void fog_frame(void)
     if (vt) {
         void *mine = (void *)fog_set_rs;
         g_next_set_rs = (set_rs_t)vt[VT_SET_RENDER_STATE];
-        mem_write((uintptr_t)&vt[VT_SET_RENDER_STATE], &mine, sizeof mine);
+        host_write(&vt[VT_SET_RENDER_STATE], &mine, sizeof mine);
         log_printf("fog: SetRenderState hooked (vtable %p)", (void *)vt);
     }
 }

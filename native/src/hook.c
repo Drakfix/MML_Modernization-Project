@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <string.h>
 
+#include "guest.h"
 #include "hook.h"
 #include "log.h"
 
@@ -24,7 +25,7 @@ static uint8_t *stub_alloc(size_t n)
 
 int mem_expect(uintptr_t addr, const void *bytes, size_t n)
 {
-    return memcmp((const void *)addr, bytes, n) == 0;
+    return memcmp(GUEST(addr), bytes, n) == 0;
 }
 
 static struct { uintptr_t addr; size_t n; char kind; } g_patches[1024];
@@ -68,18 +69,23 @@ void mem_patch_get(size_t i, uintptr_t *addr, size_t *n)
 
 int mem_write(uintptr_t addr, const void *bytes, size_t n)
 {
-    DWORD old;
     if (g_npatches < sizeof g_patches / sizeof g_patches[0]) {
         g_patches[g_npatches].addr = addr;
         g_patches[g_npatches].n = n;
         g_patches[g_npatches].kind = g_kind;
         g_npatches++;
     }
-    if (!VirtualProtect((void *)addr, n, PAGE_EXECUTE_READWRITE, &old))
+    return host_write(GUEST(addr), bytes, n);
+}
+
+int host_write(void *p, const void *bytes, size_t n)
+{
+    DWORD old;
+    if (!VirtualProtect(p, n, PAGE_EXECUTE_READWRITE, &old))
         return 0;
-    memcpy((void *)addr, bytes, n);
-    VirtualProtect((void *)addr, n, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), (void *)addr, n);
+    memcpy(p, bytes, n);
+    VirtualProtect(p, n, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), p, n);
     return 1;
 }
 

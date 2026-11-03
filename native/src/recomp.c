@@ -998,7 +998,7 @@ static void host_call_setup(void)
         size_t len;
         const uint8_t *b;
         mem_patch_get(k, &a, &len);
-        b = (const uint8_t *)a;
+        b = HPTR(a);
         if (len >= 5 && (b[0] == 0xE8 || b[0] == 0xE9) && g_nasm_targets < 64) {
             uint32_t t = (uint32_t)a + 5 + *(const uint32_t *)(b + 1);
             if (t >= g_mml_lo && t < g_mml_hi)
@@ -1846,7 +1846,7 @@ static void mark_modded(void)
                 mem_patch_get(k, &a, &len);
                 fprintf(f, "%08X %u %c", (unsigned)a, (unsigned)len, mem_patch_kind(k));
                 for (b = 0; b < len && b < 64; b++)
-                    fprintf(f, " %02X", ((const uint8_t *)a)[b]);
+                    fprintf(f, " %02X", HPTR(a)[b]);
                 fprintf(f, "\n");
             }
             fclose(f);

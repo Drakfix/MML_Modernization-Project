@@ -34,7 +34,7 @@ int iat_patch(HMODULE mod, const char *dll, const char *func, void *repl, void *
                 continue;
             if (orig)
                 *orig = (void *)(uintptr_t)slots->u1.Function;
-            return mem_write((uintptr_t)&slots->u1.Function, &repl, sizeof repl);
+            return host_write(&slots->u1.Function, &repl, sizeof repl);
         }
     }
     return 0;

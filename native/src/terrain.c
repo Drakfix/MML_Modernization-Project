@@ -423,7 +423,7 @@ void terrain_frame(void)
              * first and hands it the game's 640-wide coordinates */
             void *mine = (void *)clip_draw_prim;
             g_next_draw = (draw_prim_t)vt[VT_DRAW_PRIMITIVE];
-            mem_write((uintptr_t)&vt[VT_DRAW_PRIMITIVE], &mine, sizeof mine);
+            host_write(&vt[VT_DRAW_PRIMITIVE], &mine, sizeof mine);
             log_printf("terrain: DrawPrimitive hooked (vtable %p)", (void *)vt);
         }
     }
