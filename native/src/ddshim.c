@@ -154,6 +154,23 @@ enum { DD4_METHODS(SLOT_ENUM) DD4_SLOTS };
 #undef SLOT_ENUM
 #define SET(vt, slot, fn) ((vt)[slot] = (void *)(fn))
 
+/* the game's enumeration callbacks run as recompiled code in the recompiled game (recomp.h) */
+static HRESULT game_callback2(void *cb, void *a, void *b)
+{
+    uint32_t args[2];
+    args[0] = (uint32_t)(uintptr_t)a, args[1] = (uint32_t)(uintptr_t)b;
+    return (HRESULT)recomp_callback((uint32_t)(uintptr_t)cb, 2, args);
+}
+
+/* argument counts (with this) per slot, from the same lists */
+#define NARGS(n, c) c,
+static const uint8_t nargs_dd1[] = { DD1_METHODS(NARGS) }, nargs_dd4[] = { DD4_METHODS(NARGS) },
+                     nargs_d3d3[] = { D3D3_METHODS(NARGS) }, nargs_surf1[] = { SURF1_METHODS(NARGS) },
+                     nargs_surf4[] = { SURF4_METHODS(NARGS) }, nargs_dev3[] = { DEV3_METHODS(NARGS) },
+                     nargs_vp3[] = { VP3_METHODS(NARGS) }, nargs_mat3[] = { MAT3_METHODS(NARGS) },
+                     nargs_tex2[] = { TEX2_METHODS(NARGS) }, nargs_clip[] = { CLIP_METHODS(NARGS) };
+#undef NARGS
+
 /* ------------------------------------------------------------------ objects */
 
 typedef struct ddraw ddraw;
@@ -860,6 +877,7 @@ static HRESULT WINAPI dev_qi(void **i, REFIID r, void **o) { (void)r; *o = i; ad
 static ULONG WINAPI dev_addref(void **i) { return add_ref(&FROM(device, vt, i)->ref); }
 static ULONG WINAPI dev_release(void **i) { LONG n = InterlockedDecrement(&FROM(device, vt, i)->ref); return (ULONG)(n < 0 ? 0 : n); }
 static HRESULT WINAPI dev_ok1(void **i) { (void)i; return D3D_OK; }
+static HRESULT WINAPI dev_ok2(void **i, void *a) { (void)i; (void)a; return D3D_OK; }
 
 static HRESULT WINAPI dev_add_vp(void **i, void **vp) { (void)i; if (vp) add_ref(&FROM(viewport, vt, vp)->ref); return D3D_OK; }
 static HRESULT WINAPI dev_set_vp(void **i, void **vp)
@@ -886,10 +904,10 @@ static HRESULT WINAPI dev_enum_tex_formats(void **i, LPD3DENUMPIXELFORMATSCALLBA
     if (!cb)
         return DDERR_INVALIDPARAMS;
     set_pf_1555(&pf);
-    if (cb(&pf, ctx) == D3DENUMRET_CANCEL)
+    if (game_callback2((void *)cb, &pf, ctx) == D3DENUMRET_CANCEL)
         return D3D_OK;
     set_pf_565(&pf);
-    cb(&pf, ctx);
+    game_callback2((void *)cb, &pf, ctx);
     return D3D_OK;
 }
 
@@ -1613,7 +1631,13 @@ static HRESULT WINAPI d3_enum_devices(void **i, LPD3DENUMDEVICESCALLBACK cb, LPV
     hel.dwSize = sizeof hel;
     fill_device_desc(&hw);
     fill_device_desc(&hel);
-    cb((LPGUID)&IID_IDirect3DHALDevice, "Direct3D HAL", "Modernization renderer", &hw, &hel, ctx);
+    {
+        uint32_t a[6];
+        a[0] = (uint32_t)(uintptr_t)&IID_IDirect3DHALDevice, a[1] = (uint32_t)(uintptr_t)"Direct3D HAL";
+        a[2] = (uint32_t)(uintptr_t)"Modernization renderer", a[3] = (uint32_t)(uintptr_t)&hw;
+        a[4] = (uint32_t)(uintptr_t)&hel, a[5] = (uint32_t)(uintptr_t)ctx;
+        recomp_callback((uint32_t)(uintptr_t)cb, 6, a);
+    }
     return D3D_OK;
 }
 
@@ -1677,7 +1701,7 @@ static HRESULT WINAPI d3_enum_z(void **i, REFCLSID cls, LPD3DENUMPIXELFORMATSCAL
     if (!cb)
         return DDERR_INVALIDPARAMS;
     set_pf_z16(&pf);
-    cb(&pf, ctx);
+    game_callback2((void *)cb, &pf, ctx);
     return D3D_OK;
 }
 
@@ -1930,17 +1954,12 @@ static void build_vtables(void)
     SET(vt_tex2, 3, t2_get_handle); SET(vt_tex2, 4, t2_palette_changed); SET(vt_tex2, 5, t2_load);
     /* IDirect3DDevice3 */
     SET(vt_dev3, 0, dev_qi); SET(vt_dev3, 1, dev_addref); SET(vt_dev3, 2, dev_release);
-    SET(vt_dev3, 3, dev_get_caps); SET(vt_dev3, 5, dev_add_vp); SET(vt_dev3, 6, dev_ok1);
+    SET(vt_dev3, 3, dev_get_caps); SET(vt_dev3, 5, dev_add_vp); SET(vt_dev3, 6, dev_ok2);
     SET(vt_dev3, 8, dev_enum_tex_formats); SET(vt_dev3, 9, dev_ok1); SET(vt_dev3, 10, dev_ok1);
     SET(vt_dev3, 11, dev_get_d3d); SET(vt_dev3, 12, dev_set_vp); SET(vt_dev3, 13, dev_get_vp);
     SET(vt_dev3, 21, dev_get_rs); SET(vt_dev3, 22, dev_set_rs); SET(vt_dev3, 28, dev_draw_prim);
     SET(vt_dev3, 37, dev_get_texture); SET(vt_dev3, 38, dev_set_texture); SET(vt_dev3, 39, dev_get_tss);
     SET(vt_dev3, 40, dev_set_tss); SET(vt_dev3, 41, dev_validate);
-    /* the ones the game calls for every polygon: straight from the recompiled code */
-    recomp_register_stdcall((void *)dev_set_rs, 3);
-    recomp_register_stdcall((void *)dev_draw_prim, 6);
-    recomp_register_stdcall((void *)dev_set_texture, 3);
-    recomp_register_stdcall((void *)dev_set_tss, 4);
     /* IDirect3DViewport3 */
     SET(vt_vp3, 0, vp_qi); SET(vt_vp3, 1, vp_addref); SET(vt_vp3, 2, vp_release);
     SET(vt_vp3, 8, vp_set_bg); SET(vt_vp3, 12, vp_clear); SET(vt_vp3, 16, vp_get2); SET(vt_vp3, 17, vp_set2);
@@ -1951,6 +1970,11 @@ static void build_vtables(void)
     /* IDirectDrawClipper */
     SET(vt_clip, 0, clip_qi); SET(vt_clip, 1, clip_addref); SET(vt_clip, 2, clip_release);
     SET(vt_clip, 8, clip_set_hwnd);
+    /* every method, straight from the recompiled code (no stack-copying bridge) */
+#define REGISTER(iface)                                                                        {                                                                                              size_t k_;                                                                                 for (k_ = 0; k_ < sizeof nargs_##iface; k_++)                                                  recomp_register_stdcall(vt_##iface[k_], nargs_##iface[k_]);                        }
+    REGISTER(dd1) REGISTER(dd4) REGISTER(d3d3) REGISTER(surf1) REGISTER(surf4) REGISTER(dev3) REGISTER(vp3)
+    REGISTER(mat3) REGISTER(tex2) REGISTER(clip)
+#undef REGISTER
 }
 
 /* The intro video (CAPCOM.AVI) plays through MCI into the game window at a
@@ -2012,8 +2036,12 @@ static HRESULT WINAPI shim_direct_draw_enumerate(LPDDENUMCALLBACKA cb, LPVOID ct
         *(volatile DWORD *)G_CFG_FULLSCREEN = 1;
         log_printf("ddshim: MEGAMAN.CFG asked for the game's windowed mode, using fullscreen (window mode is ours)");
     }
-    if (cb)
-        cb(NULL, "Modernization renderer", "display", ctx);
+    if (cb) {
+        uint32_t a[4];
+        a[0] = 0, a[1] = (uint32_t)(uintptr_t)"Modernization renderer", a[2] = (uint32_t)(uintptr_t)"display";
+        a[3] = (uint32_t)(uintptr_t)ctx;
+        recomp_callback((uint32_t)(uintptr_t)cb, 4, a);
+    }
     return DD_OK;
 }
 
@@ -2041,6 +2069,9 @@ int ddshim_install(const gfx_options *opt)
     g_real_mci = *(MCIERROR(WINAPI **)(LPCSTR, LPSTR, UINT, HWND))G_IAT_MCISENDSTRINGA;
     mem_write(G_IAT_MCISENDSTRINGA, &mci, sizeof mci);
     build_vtables();
+    recomp_register_stdcall(create, 3);
+    recomp_register_stdcall(enumerate, 2);
+    recomp_register_stdcall(mci, 4);
     if (!mem_write(G_IAT_DIRECTDRAWCREATE, &create, sizeof create) ||
         !mem_write(G_IAT_DIRECTDRAWENUMERATE, &enumerate, sizeof enumerate))
         return 0;

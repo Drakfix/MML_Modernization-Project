@@ -229,23 +229,52 @@ void recomp_register_wrap(void *routine, uint32_t original, void (*pre)(const ui
     }
 }
 
+/* our stdcall C functions the game calls through pointers: address -> argument count */
+#define DIRECT_SLOTS 2048u
 static struct {
     uint32_t fn;
     int nargs;
-} g_direct[8];
+} g_direct[DIRECT_SLOTS];
 static int g_ndirect;
+
+static unsigned direct_slot(uint32_t fn)
+{
+    return (fn * 0x9E3779B1u) >> 21;   /* 11 bits */
+}
 
 void recomp_register_stdcall(void *fn, int nargs)
 {
-    int k;
-    for (k = 0; k < g_ndirect; k++)
-        if (g_direct[k].fn == (uint32_t)(uintptr_t)fn)
-            return;
-    if (g_ndirect < 8 && nargs >= 0 && nargs <= 6) {
-        g_direct[g_ndirect].fn = (uint32_t)(uintptr_t)fn;
-        g_direct[g_ndirect].nargs = nargs;
-        g_ndirect++;
+    uint32_t a = (uint32_t)(uintptr_t)fn;
+    unsigned i = direct_slot(a);
+    if (!a || nargs < 0 || nargs > 8 || g_ndirect >= (int)DIRECT_SLOTS / 2)
+        return;
+    while (g_direct[i].fn && g_direct[i].fn != a)
+        i = (i + 1) & (DIRECT_SLOTS - 1);
+    if (g_direct[i].fn && g_direct[i].nargs != nargs) {
+        /* one function in slots with different argument counts: the bridge sees what it pops */
+        if (g_direct[i].nargs >= 0)
+            log_printf("recomp: %08X registered with %d and %d arguments, left to the bridge", a,
+                       g_direct[i].nargs, nargs);
+        g_direct[i].nargs = -1;
+        return;
     }
+    if (!g_direct[i].fn)
+        g_ndirect++;
+    g_direct[i].fn = a;
+    g_direct[i].nargs = nargs;
+}
+
+static int direct_nargs(uint32_t fn)
+{
+    unsigned i = direct_slot(fn);
+    if (!g_ndirect)
+        return -1;
+    while (g_direct[i].fn) {
+        if (g_direct[i].fn == fn)
+            return g_direct[i].nargs;   /* -1: a conflict */
+        i = (i + 1) & (DIRECT_SLOTS - 1);
+    }
+    return -1;
 }
 
 typedef uint32_t(__stdcall *std0)(void);
@@ -255,6 +284,24 @@ typedef uint32_t(__stdcall *std3)(uint32_t, uint32_t, uint32_t);
 typedef uint32_t(__stdcall *std4)(uint32_t, uint32_t, uint32_t, uint32_t);
 typedef uint32_t(__stdcall *std5)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 typedef uint32_t(__stdcall *std6)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+typedef uint32_t(__stdcall *std7)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+typedef uint32_t(__stdcall *std8)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+
+/* a stdcall machine-code function (ours or a game callback's native copy) with n arguments */
+static uint32_t call_stdcall(uint32_t fn, int n, const uint32_t *a)
+{
+    switch (n) {
+    case 0: return ((std0)(uintptr_t)fn)();
+    case 1: return ((std1)(uintptr_t)fn)(a[0]);
+    case 2: return ((std2)(uintptr_t)fn)(a[0], a[1]);
+    case 3: return ((std3)(uintptr_t)fn)(a[0], a[1], a[2]);
+    case 4: return ((std4)(uintptr_t)fn)(a[0], a[1], a[2], a[3]);
+    case 5: return ((std5)(uintptr_t)fn)(a[0], a[1], a[2], a[3], a[4]);
+    case 6: return ((std6)(uintptr_t)fn)(a[0], a[1], a[2], a[3], a[4], a[5]);
+    case 7: return ((std7)(uintptr_t)fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+    default: return ((std8)(uintptr_t)fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+    }
+}
 
 static RCtx *g_shim_ctx;   /* the context of the shim running now (recomp_call_stdcall) */
 
@@ -277,6 +324,13 @@ static int rt_shim(RCtx *c, uint32_t target)
     R32_SET(c, REG_ESP, esp + 4 + 4 * (uint32_t)n);   /* stdcall: the shim's arguments are popped */
     c->ret = ret;
     return 1;
+}
+
+uint32_t recomp_callback(uint32_t fn, int nargs, const uint32_t *args)
+{
+    if (g_shim_ctx)
+        return recomp_call_stdcall(fn, nargs, args);
+    return call_stdcall(fn, nargs, args);
 }
 
 int recomp_in_shim(void)
@@ -314,40 +368,32 @@ uint32_t recomp_call_stdcall(uint32_t fn, int nargs, const uint32_t *args)
 
 static int rt_direct_has(uint32_t target)
 {
-    int k;
-    for (k = 0; k < g_ndirect; k++)
-        if (g_direct[k].fn == target)
-            return 1;
-    return 0;
+    return direct_nargs(target) >= 0;
 }
+
+static uint32_t g_direct_ret;   /* the game's return address while a direct call runs */
 
 /* returns 1 if target is a registered stdcall function (and has been run) */
 static int rt_direct(RCtx *c, uint32_t target)
 {
-    int k;
-    for (k = 0; k < g_ndirect; k++) {
-        uint32_t esp, ret, r, a[6];
-        int n = g_direct[k].nargs;
-        if (g_direct[k].fn != target)
-            continue;
-        esp = R32(c, REG_ESP);
-        ret = LD32(esp);
-        memcpy(a, HPTR(esp + 4), 4 * (size_t)n);
-        switch (n) {
-        case 0: r = ((std0)(uintptr_t)target)(); break;
-        case 1: r = ((std1)(uintptr_t)target)(a[0]); break;
-        case 2: r = ((std2)(uintptr_t)target)(a[0], a[1]); break;
-        case 3: r = ((std3)(uintptr_t)target)(a[0], a[1], a[2]); break;
-        case 4: r = ((std4)(uintptr_t)target)(a[0], a[1], a[2], a[3]); break;
-        case 5: r = ((std5)(uintptr_t)target)(a[0], a[1], a[2], a[3], a[4]); break;
-        default: r = ((std6)(uintptr_t)target)(a[0], a[1], a[2], a[3], a[4], a[5]); break;
-        }
-        R32_SET(c, REG_EAX, r);
-        R32_SET(c, REG_ESP, esp + 4 + 4 * (uint32_t)n);
-        c->ret = ret;
-        return 1;
-    }
-    return 0;
+    int n = direct_nargs(target);
+    uint32_t esp, ret, r, a[8];
+    RCtx *outer = g_shim_ctx;
+    uint32_t outer_ret = g_direct_ret;
+    if (n < 0)
+        return 0;
+    esp = R32(c, REG_ESP);
+    ret = LD32(esp);
+    memcpy(a, HPTR(esp + 4), 4 * (size_t)n);
+    g_shim_ctx = c;   /* it may call the game back (recomp_callback) */
+    g_direct_ret = ret;   /* the game's return address (recomp_return_address) */
+    r = call_stdcall(target, n, a);
+    g_direct_ret = outer_ret;
+    g_shim_ctx = outer;
+    R32_SET(c, REG_EAX, r);
+    R32_SET(c, REG_ESP, esp + 4 + 4 * (uint32_t)n);
+    c->ret = ret;
+    return 1;
 }
 
 static int rt_impl_has(uint32_t target)
@@ -655,6 +701,15 @@ uint32_t rt_dispatch(RCtx *c, uint32_t target)
             g_rt_bypass = 0;
             continue;
         }
+        /* one of the exe's import thunks (JMP [slot]): where the slot points now (Windows, or the
+           function a mod put there), so a shim or registered function is found by that address */
+        if (i < 0 && target >= g_exe_lo && target < g_exe_hi && LD8(target) == 0xFF && LD8(target + 1) == 0x25) {
+            uint32_t slot = LD32(target + 2);
+            if (slot >= g_exe_lo && slot < g_exe_hi) {
+                target = LD32(slot);
+                continue;
+            }
+        }
         if (g_census) {
             uint32_t caller = LD32(R32(c, REG_ESP));
             shim_fn sf;
@@ -791,6 +846,8 @@ uint32_t __cdecl recomp_return_address(uint32_t seen)
 {
     if ((seen == (uint32_t)(uintptr_t)bridge_back || (g_hc_after && seen == g_hc_after)) && g_bridge_ret)
         return g_bridge_ret;
+    if (g_direct_ret && seen >= g_mml_lo && seen < g_mml_hi)   /* called by rt_direct (call_stdcall) */
+        return g_direct_ret;
     return seen;
 }
 

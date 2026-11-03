@@ -481,6 +481,7 @@ static void install_timing(void)
         QueryPerformanceFrequency(&g_qpc_freq);
         QueryPerformanceCounter(&g_qpc_base);
         mem_write(G_IAT_GETTICKCOUNT, &mine, sizeof mine);
+        recomp_register_stdcall(mine, 0);   /* the frame wait spins on it: no bridge */
         log_printf("timing: GetTickCount rebased");
     }
     if (hook_mid(G_SITE_WALKER_CALL, sizeof walker_call, walker_call, on_frame))

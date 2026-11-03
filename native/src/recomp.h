@@ -25,7 +25,8 @@ void recomp_register_wrap(void *routine, uint32_t original, void (*pre)(const ui
 /* Our C functions that the game calls through pointers (Direct3D methods we replaced in a
    vtable) go through the generic bridge: it copies the stack and finds out how much the callee
    pops, too slow for the ones called tens of thousands of times a frame. A stdcall function
-   (WINAPI) with nargs 32-bit arguments registered here is called straight from C instead. */
+   (WINAPI) with nargs (up to 8) 32-bit arguments registered here is called straight from C
+   instead; ddshim registers every method of its interfaces. */
 void recomp_register_stdcall(void *fn, int nargs);
 
 /* Inside a shim (shim.h): runs the game function at fn, stdcall with nargs 32-bit arguments, as
@@ -33,3 +34,7 @@ void recomp_register_stdcall(void *fn, int nargs);
    portable runtime calls game callbacks (the window procedure) without machine code. */
 uint32_t recomp_call_stdcall(uint32_t fn, int nargs, const uint32_t *args);
 int recomp_in_shim(void);   /* recomp_call_stdcall can run now */
+/* A game callback our code calls (the DirectDraw enumeration callbacks): stdcall, nargs
+   32-bit arguments; as recompiled code inside a shim or a registered stdcall function, as the
+   machine code otherwise (the normal game) */
+uint32_t recomp_callback(uint32_t fn, int nargs, const uint32_t *args);
