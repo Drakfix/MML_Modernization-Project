@@ -33,6 +33,7 @@
 #include "log.h"
 #include "recomp.h"
 #include "recomp_rt.h"
+#include "costack.h"
 #include "shim.h"
 #include "watch.h"
 
@@ -69,7 +70,7 @@ static uint32_t t_id, t_eax, t_ecx, t_edx, t_ebx, t_esp, t_ebp, t_esi, t_edi, t_
 static uint32_t t_new_esp, t_target, t_post_addr;
 static uint32_t g_host_free;   /* our private stack is free below this */
 static uint32_t guest_fs_base(void);
-/* Our own stacks: the private one, and the running thread fiber's. A stub entered while ESP is
+/* Our own stacks: the private one, and the running thread's (costack). A stub entered while ESP is
    already on one of them (our C code called a game function directly, e.g. from a hook handler)
    carries on 256 KB below ESP: the game code uses the stack from ESP down as its own (its
    arguments are there), and jumping to g_host_free would overwrite the frames in between. */
@@ -834,13 +835,13 @@ static uint32_t b_target, b_esp, b_eax, b_ecx, b_edx, b_ebx, b_ebp, b_esi, b_edi
 static uint8_t b_fsave[108];
 
 /* where each open bridge left our stack: bridges nest (machine code calls back into recompiled
-   code, which calls machine code again), and each fiber has its own */
+   code, which calls machine code again), and each thread stack has its own */
 typedef struct {
     uint32_t sp[512];
     int depth;
 } bridge_stack;
 static bridge_stack g_bs_main;
-static uint32_t *g_bsp = g_bs_main.sp;   /* the running fiber's */
+static uint32_t *g_bsp = g_bs_main.sp;   /* the running stack's */
 static int g_bdepth;
 
 static __declspec(naked) void bridge_back(void)
@@ -1620,13 +1621,13 @@ static int install_root_bytes(uint32_t addr, rfunc fn, int fi, unsigned steal, c
     return 1;
 }
 
-/* ---- the game's cooperative threads, on host fibers ----
+/* ---- the game's cooperative threads, on host stacks of their own (costack.h) ----
  *
  * Two thread slots; slot i: state word at 0x5513FC + 8i (0 free, 1 sleeping, 2 ready), sleep
  * counter at 0x5513FE + 8i, saved stack pointer at 0x551400 + 8i; the running slot (times 8)
  * at 0x55140C; each slot's 16 KB stack ends at [0x551414] - 0x4000 i. The game switches
- * between them by loading ESP. Here each slot runs on a fiber (its own host stack and guest
- * context); the slot fields in memory are kept as the game's code leaves them. */
+ * between them by loading ESP. Here each slot runs on a host stack of its own (and has its own
+ * guest context); the slot fields in memory are kept as the game's code leaves them. */
 #define CO_SLOTS 2
 #define CO_STATE(i) (*(volatile uint16_t *)HPTR(0x5513FCu + 8u * (unsigned)(i)))
 #define CO_COUNT(i) (*(volatile uint16_t *)HPTR(0x5513FEu + 8u * (unsigned)(i)))
@@ -1634,13 +1635,13 @@ static int install_root_bytes(uint32_t addr, rfunc fn, int fi, unsigned steal, c
 #define CO_CUR (*(volatile uint32_t *)HPTR(0x55140Cu))
 #define CO_TOP (*(volatile uint32_t *)HPTR(0x551414u))
 
-static void *g_main_fiber, *g_co_fiber[CO_SLOTS];
-static int g_co_fresh[CO_SLOTS];          /* the slot needs a new fiber (created, restarted or ended) */
+static costack *g_co_stack[CO_SLOTS];
+static int g_co_fresh[CO_SLOTS];          /* the slot needs a new stack (created, restarted or ended) */
 static uint32_t g_co_entry[CO_SLOTS], g_co_host_free[CO_SLOTS], g_main_host_free;
 static uint16_t g_co_fpucw = 0x027F;
 static RCtx g_co_ctx[CO_SLOTS];
 static bridge_stack g_bs_co[CO_SLOTS];
-static uint32_t g_co_range[CO_SLOTS][2];   /* each fiber's own stack */
+static uint32_t g_co_range[CO_SLOTS][2];   /* each slot's host stack */
 
 static uint32_t co_top(int i)
 {
@@ -1661,7 +1662,7 @@ static void co_pop_return(RCtx *c)   /* the callee's RET */
 
 static void co_to_main(void)
 {
-    SwitchToFiber(g_main_fiber);
+    costack_switch(g_co_stack[co_slot()], costack_main());
 }
 
 void rt_co_exit(RCtx *c)
@@ -1671,17 +1672,18 @@ void rt_co_exit(RCtx *c)
     CO_STATE(i) = 0;
     CO_SP(i) = 0;
     g_co_fresh[i] = 1;
-    co_to_main();   /* never resumed: the scheduler drops this fiber */
+    co_to_main();   /* never resumed: the scheduler drops this stack */
 }
 
-static void CALLBACK co_fiber(void *param)
+static void co_thread(void *param)
 {
     int i = (int)(intptr_t)param, fi = find_func(g_co_entry[i]);
     RCtx *c = &g_co_ctx[i];
     {
-        NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
-        g_co_range[i][1] = (uint32_t)(uintptr_t)tib->StackBase;
-        g_co_range[i][0] = g_co_range[i][1] - (4u << 20);
+        size_t lo, hi;
+        costack_bounds(g_co_stack[i], &lo, &hi);
+        g_co_range[i][0] = (uint32_t)lo;
+        g_co_range[i][1] = (uint32_t)hi;
         g_co_lo = g_co_range[i][0];
         g_co_hi = g_co_range[i][1];
     }
@@ -1725,7 +1727,7 @@ void rt_co_exec(RCtx *c)
     *(uint32_t *)HPTR(sp + 0x18) = R32(c, REG_EAX);
     g_co_entry[i] = R32(c, REG_EAX);
     g_co_fresh[i] = 1;
-    co_to_main();   /* never resumed: the scheduler starts the new entry on a new fiber */
+    co_to_main();   /* never resumed: the scheduler starts the new entry on a new stack */
 }
 
 void rt_co_yield(RCtx *c)
@@ -1743,20 +1745,12 @@ void rt_co_yield(RCtx *c)
 void rt_co_schedule(RCtx *c)
 {
     int i;
-    if (!g_main_fiber) {
-        g_main_fiber = IsThreadAFiber() ? GetCurrentFiber() : ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
-        if (!g_main_fiber) {
-            log_printf("recomp: no fiber for the main thread (%lu)", GetLastError());
-            co_pop_return(c);
-            return;
-        }
-    }
     for (i = 0; i < CO_SLOTS; i++) {
         CO_CUR = (uint32_t)i * 8;
         if (CO_STATE(i) == 0) {
-            if (g_co_fiber[i] && g_co_fresh[i]) {
-                DeleteFiber(g_co_fiber[i]);
-                g_co_fiber[i] = NULL;
+            if (g_co_stack[i] && g_co_fresh[i]) {
+                costack_free(g_co_stack[i]);
+                g_co_stack[i] = NULL;
             }
             continue;
         }
@@ -1765,18 +1759,20 @@ void rt_co_schedule(RCtx *c)
                 continue;
             CO_STATE(i) = 2;
         }
-        if (g_co_fresh[i] || !g_co_fiber[i]) {
-            if (g_co_fiber[i])
-                DeleteFiber(g_co_fiber[i]);
-            /* fully committed: a stub entered on this stack carries on 256 KB below ESP (pick_stack_asm),
-               past the guard page that grows a stack on demand */
-            g_co_fiber[i] = CreateFiberEx(4 << 20, 4 << 20, FIBER_FLAG_FLOAT_SWITCH, co_fiber, (void *)(intptr_t)i);
+        if (g_co_fresh[i] || !g_co_stack[i]) {
+            costack_free(g_co_stack[i]);
+            /* 4 MB, fully committed: a stub entered on this stack carries on 256 KB below ESP
+               (pick_stack_asm) */
+            g_co_stack[i] = costack_new(4u << 20, co_thread, (void *)(intptr_t)i);
             g_co_fresh[i] = 0;
-            g_bs_co[i].depth = 0;   /* a new fiber has no open bridges */
-            if (!g_co_fiber[i]) {
-                log_printf("recomp: can't create a fiber (%lu)", GetLastError());
-                continue;
+            {
+                static int logged;
+                if (logged++ < 20)
+                    log_printf("recomp: thread %d starts at %08X", i, g_co_entry[i]);
             }
+            g_bs_co[i].depth = 0;   /* a new stack has no open bridges */
+            if (!g_co_stack[i])
+                continue;
         }
         g_main_host_free = g_host_free;
         g_bs_main.depth = g_bdepth;
@@ -1787,7 +1783,7 @@ void rt_co_schedule(RCtx *c)
         g_in_co = 1;
         g_co_lo = g_co_range[i][0];
         g_co_hi = g_co_range[i][1];
-        SwitchToFiber(g_co_fiber[i]);
+        costack_switch(costack_main(), g_co_stack[i]);
         g_in_co = 0;
         g_bs_co[i].depth = g_bdepth;
         g_bsp = g_bs_main.sp;
@@ -1970,7 +1966,7 @@ void recomp_install(const char *ini)
         shims_install(ini, NULL);
     GetPrivateProfileStringA("debug", "recomp_roots", "", roots, sizeof roots, ini);
     mark_modded();
-    if (g_mode == MODE_REPLACE) {   /* the threads run on fibers */
+    if (g_mode == MODE_REPLACE) {   /* the game's threads run on our stack switch */
         static const struct { uint32_t a; rfunc fn; } co[] = {
             { 0x4EED08, co_schedule_root }, { 0x4EED79, co_create_root }, { 0x4EEDA4, co_yield_root },
             { 0x4EEDCA, co_exec_root }, { 0x4EEDFD, co_exit_root },
