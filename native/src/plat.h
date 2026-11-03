@@ -10,6 +10,8 @@
 typedef void (*plat_event_fn)(uint32_t win, uint32_t msg, uint32_t wparam, uint32_t lparam, int sent);
 
 uint32_t plat_ticks_ms(void);                 /* milliseconds, wrapping like GetTickCount */
+void plat_sleep_ms(unsigned ms);
+long plat_atomic_xchg(volatile long *p, long v);   /* returns the old value; a full barrier */
 void plat_desktop_size(int *w, int *h);       /* the primary display's resolution */
 void plat_message_box(const char *text, const char *title);
 
@@ -25,6 +27,9 @@ uint32_t plat_window_set_long(uint32_t win, int index, uint32_t value);   /* sty
 uint32_t plat_window_focus(uint32_t win);     /* previous focus window */
 void plat_adjust_rect(int32_t rect[4], uint32_t style, uint32_t exstyle, int menu);
 int plat_show_cursor(int show);               /* the new display count, as ShowCursor */
+
+/* the keyboard now, by DirectInput scan code (DIK_*): 0x80 for a key that is down */
+void plat_key_state(uint8_t keys[256]);
 
 /* deliver pending events (to on_event); returns 0 once the platform asked the program to quit */
 int plat_pump(void);

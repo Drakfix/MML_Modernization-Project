@@ -238,6 +238,8 @@ static uint32_t sh_close_handle(const uint32_t *a)
 {
     FILE *f = file_of(a[0]);
     BOOL ok;
+    if (shim_event_close(a[0]))
+        return 1;
     if (f) {
         fclose(f);
         g_files[(a[0] - HANDLE_BASE) / 4] = NULL;

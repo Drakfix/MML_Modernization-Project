@@ -9,8 +9,13 @@
 
 typedef uint32_t (*shim_fn)(const uint32_t *args);
 
-/* the import dll!name (case-insensitive dll) of the game's exe runs fn, with nargs arguments */
+/* the import dll!name (case-insensitive dll; "#n" for one imported by ordinal) of the game's
+   exe runs fn, with nargs arguments */
 int shim_add(const char *dll, const char *name, int nargs, shim_fn fn);
+
+/* a method of an object we hand the game (COM vtables): a guest address that only means "run
+   fn" to the runtime (machine code calling it faults), stdcall with nargs arguments, this first */
+uint32_t shim_method(int nargs, shim_fn fn);
 
 /* recomp.c: target is a shimmed import (or thunk): fills in its function and argument count */
 int shim_find(uint32_t target, shim_fn *fn, int *nargs);
@@ -24,10 +29,19 @@ void shims_install(const char *ini, const char *game_dir);
 void shim_kernel32_install(void);
 void shim_process_install(void);
 void shim_user32_install(void);   /* USER32 / GDI32: the window, messages, window procedure */
+void shim_sync_install(void);     /* events and waits */
+int shim_dsound_install(const char *ini, const char *game_dir);   /* DirectSound on SDL3 audio; 0 without SDL3 */
+int shim_dinput_install(void);    /* DirectInput: platform keyboard, SDL controller; 0 without SDL input */
+
+/* events (shim_sync.c): our handles; set may be called from any thread */
+uint32_t shim_event_create(int manual, int initial);
+void shim_event_set(uint32_t h);
+int shim_event_close(uint32_t h);   /* 1 if h was one of ours */
 
 /* memory the game can address, for what a shim hands it (strings, blocks): on 32-bit Windows
    any host memory is; the portable runtime takes it from its reserved guest block (M3 item 4) */
-uint32_t shim_guest_alloc(size_t n);
+uint32_t shim_guest_alloc(size_t n);   /* zeroed */
+void shim_guest_free(uint32_t g);
 /* the game folder (the current directory the game runs in) */
 const char *shim_game_dir(void);
 void shim_kernel32_log(int on);   /* [debug] shim_log=1: log every file the game opens */

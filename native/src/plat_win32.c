@@ -24,6 +24,16 @@ uint32_t plat_ticks_ms(void)
     return GetTickCount();
 }
 
+void plat_sleep_ms(unsigned ms)
+{
+    Sleep(ms);
+}
+
+long plat_atomic_xchg(volatile long *p, long v)
+{
+    return InterlockedExchange(p, v);
+}
+
 void plat_desktop_size(int *w, int *h)
 {
     HDC dc = GetDC(NULL);
@@ -154,6 +164,23 @@ void plat_adjust_rect(int32_t rect[4], uint32_t style, uint32_t exstyle, int men
 int plat_show_cursor(int show)
 {
     return ShowCursor(show);
+}
+
+/* DIK codes are set-1 scan codes, 0x80 marking the E0-prefixed (extended) ones */
+void plat_key_state(uint8_t keys[256])
+{
+    static uint8_t vk[256];
+    static int ready;
+    int k;
+    if (!ready) {
+        for (k = 1; k < 256; k++)
+            vk[k] = (uint8_t)MapVirtualKeyA(k < 0x80 ? (UINT)k : 0xE000u | (UINT)(k & 0x7F), MAPVK_VSC_TO_VK_EX);
+        vk[0x45] = VK_NUMLOCK, vk[0xC5] = VK_PAUSE;   /* the two the table swaps */
+        ready = 1;
+    }
+    keys[0] = 0;
+    for (k = 1; k < 256; k++)
+        keys[k] = vk[k] && (GetAsyncKeyState(vk[k]) & 0x8000) ? 0x80 : 0;
 }
 
 /* everything queued for this thread's windows (ours, and the renderer's and video player's);

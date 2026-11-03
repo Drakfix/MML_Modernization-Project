@@ -25,6 +25,11 @@ uint32_t shim_guest_alloc(size_t n)
     return (uint32_t)(uintptr_t)calloc(1, n);
 }
 
+void shim_guest_free(uint32_t g)
+{
+    free((void *)(uintptr_t)g);
+}
+
 const char *shim_game_dir(void)
 {
     return g_game_dir;
@@ -97,14 +102,35 @@ static uint32_t import_slot(const char *dll, const char *name)
         slots = (const IMAGE_THUNK_DATA32 *)(g_exe + d->FirstThunk);
         for (; names->u1.AddressOfData; names++, slots++) {
             const IMAGE_IMPORT_BY_NAME *ibn;
-            if (IMAGE_SNAP_BY_ORDINAL32(names->u1.Ordinal))
+            if (IMAGE_SNAP_BY_ORDINAL32(names->u1.Ordinal)) {
+                if (name[0] == '#' && (uint32_t)atoi(name + 1) == IMAGE_ORDINAL32(names->u1.Ordinal))
+                    return (uint32_t)(uintptr_t)&slots->u1.Function;
                 continue;
+            }
             ibn = (const IMAGE_IMPORT_BY_NAME *)(g_exe + names->u1.AddressOfData);
             if (strcmp((const char *)ibn->Name, name) == 0)
                 return (uint32_t)(uintptr_t)&slots->u1.Function;
         }
     }
     return 0;
+}
+
+/* method addresses: a reserved, inaccessible range nothing else uses */
+#define METHOD_SPACE 0x10000u
+static uint32_t g_method_base, g_methods;
+
+uint32_t shim_method(int nargs, shim_fn fn)
+{
+    uint32_t a;
+    if (!g_method_base)
+        g_method_base = (uint32_t)(uintptr_t)VirtualAlloc(NULL, METHOD_SPACE, MEM_RESERVE, PAGE_NOACCESS);
+    if (!g_method_base || g_methods >= METHOD_SPACE / 4) {
+        log_printf("shims: no room for another method");
+        return 0;
+    }
+    a = g_method_base + 4 * g_methods++;
+    put(a, fn, nargs);
+    return a;
 }
 
 int shim_add(const char *dll, const char *name, int nargs, shim_fn fn)
@@ -130,7 +156,8 @@ int shim_add(const char *dll, const char *name, int nargs, shim_fn fn)
         if (!(sec->Characteristics & IMAGE_SCN_CNT_CODE))
             continue;
         p = g_exe + sec->VirtualAddress;
-        end = p + sec->Misc.VirtualSize - 6;
+        /* the exe's headers say VirtualSize 0 for every section (Windows maps SizeOfRawData) */
+        end = p + (sec->Misc.VirtualSize > sec->SizeOfRawData ? sec->Misc.VirtualSize : sec->SizeOfRawData) - 6;
         for (; p < end; p++)
             if (p[0] == 0xFF && p[1] == 0x25 && *(const uint32_t *)(p + 2) == slot)
                 put((uint32_t)(uintptr_t)p, fn, nargs);
@@ -166,6 +193,13 @@ void shims_install(const char *ini, const char *game_dir)
     shim_kernel32_install();
     shim_process_install();
     shim_user32_install();
+    /* the events are DirectSound's: Windows' DirectSound needs Windows' events */
+    if (GetPrivateProfileIntA("debug", "shim_dsound", 1, ini) && shim_dsound_install(ini, g_game_dir)) {
+        shim_sync_install();
+        log_printf("shims: DirectSound is ours (SDL3 audio)");
+    }
+    if (GetPrivateProfileIntA("debug", "shim_dinput", 1, ini) && shim_dinput_install())
+        log_printf("shims: DirectInput is ours (keyboard, SDL controller)");
     shim_kernel32_log(GetPrivateProfileIntA("debug", "shim_log", 0, ini));
     log_printf("shims: %d call targets run our own Windows functions", g_nshims);
 }
