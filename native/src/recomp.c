@@ -256,21 +256,60 @@ typedef uint32_t(__stdcall *std4)(uint32_t, uint32_t, uint32_t, uint32_t);
 typedef uint32_t(__stdcall *std5)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 typedef uint32_t(__stdcall *std6)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 
+static RCtx *g_shim_ctx;   /* the context of the shim running now (recomp_call_stdcall) */
+
 /* returns 1 if target is a shimmed Windows import (and its shim has run) */
 static int rt_shim(RCtx *c, uint32_t target)
 {
     shim_fn fn;
     int n;
-    uint32_t esp, ret, a[8];
+    uint32_t esp, ret, r, a[12];
+    RCtx *outer = g_shim_ctx;
     if (!shim_find(target, &fn, &n))
         return 0;
     esp = R32(c, REG_ESP);
     ret = LD32(esp);
     memcpy(a, HPTR(esp + 4), 4 * (size_t)n);
-    R32_SET(c, REG_EAX, fn(a));
+    g_shim_ctx = c;
+    r = fn(a);
+    g_shim_ctx = outer;
+    R32_SET(c, REG_EAX, r);
     R32_SET(c, REG_ESP, esp + 4 + 4 * (uint32_t)n);   /* stdcall: the shim's arguments are popped */
     c->ret = ret;
     return 1;
+}
+
+int recomp_in_shim(void)
+{
+    return g_shim_ctx != NULL;
+}
+
+uint32_t recomp_call_stdcall(uint32_t fn, int nargs, const uint32_t *args)
+{
+    static const unsigned keep[6] = { REG_ECX, REG_EDX, REG_EBX, REG_EBP, REG_ESI, REG_EDI };
+    RCtx *c = g_shim_ctx;
+    uint32_t esp, sp, saved[6], eax;
+    int k;
+    if (!c) {
+        if (g_rt_errors++ < 20)
+            log_printf("recomp: game function %08X called outside a shim", fn);
+        return 0;
+    }
+    esp = R32(c, REG_ESP);
+    for (k = 0; k < 6; k++)
+        saved[k] = R32(c, keep[k]);
+    /* below the shim caller's frame: its return address and arguments stay where they are */
+    sp = esp - 4 * (uint32_t)nargs - 4;
+    ST32(c, sp, 0);   /* the return address: rt_dispatch returns once the function does */
+    for (k = 0; k < nargs; k++)
+        ST32(c, sp + 4 + 4 * (uint32_t)k, args[k]);
+    R32_SET(c, REG_ESP, sp);
+    rt_dispatch(c, fn);
+    eax = R32(c, REG_EAX);
+    R32_SET(c, REG_ESP, esp);
+    for (k = 0; k < 6; k++)
+        R32_SET(c, keep[k], saved[k]);
+    return eax;
 }
 
 static int rt_direct_has(uint32_t target)
@@ -581,13 +620,39 @@ void recomp_census_tick(void)
         census_write();
 }
 
+static void stub_enter(void);
+
+/* target is the entry stub of one of our roots: the root's index, or -1 */
+static int stub_root(uint32_t target)
+{
+    const uint8_t *p = HPTR(target);
+    uint32_t id;
+    int32_t rel;
+    if (target - (uint32_t)(uintptr_t)g_exec >= EXEC_SIZE - 16 || p[0] != 0x68 || p[5] != 0xE9)
+        return -1;
+    memcpy(&id, p + 1, 4);
+    memcpy(&rel, p + 6, 4);
+    if (id >= (uint32_t)g_nroots || target + 10 + (uint32_t)rel != (uint32_t)(uintptr_t)stub_enter)
+        return -1;
+    return (int)id;
+}
+
 uint32_t rt_dispatch(RCtx *c, uint32_t target)
 {
     while (target) {
-        int i = find_func(target);
+        int i = find_func(target), r;
         g_recent[g_nrecent++ & 15] = target;
         if (i >= 0 && !g_rc_native[i]) {
             target = g_recomp_funcs[i].fn(c);
+            continue;
+        }
+        /* A function whose entry mml.dll may patch with a JMP checks for one and follows it. When
+           the mod left it alone (the intro detour without intro.mpg), the JMP there is our root's,
+           and following it would re-enter the same check: run the root's function past it. */
+        if (i < 0 && (r = stub_root(target)) >= 0) {
+            g_rt_bypass = g_recomp_funcs[g_roots[r].info].addr;
+            target = g_roots[r].fn(c);
+            g_rt_bypass = 0;
             continue;
         }
         if (g_census) {
@@ -839,7 +904,29 @@ void rt_call_native(RCtx *c, uint32_t target)
     uint32_t esp = R32(c, REG_ESP), ret = LD32(esp);
     uint8_t img[108];
     if (g_bdepth >= (int)(sizeof g_bs_main.sp / sizeof g_bs_main.sp[0]) - 1) {   /* machine code that never returns */
-        log_printf("recomp: native bridges nested %d deep (calling %08X), giving up", g_bdepth, target);
+        char what[160];
+        unsigned k;
+        cen_describe(target, what, sizeof what);
+        log_printf("recomp: native bridges nested %d deep (calling %08X %s, return %08X), giving up", g_bdepth, target,
+                   what, ret);
+        {
+            const uint8_t *b = HPTR(target);
+            log_printf("recomp:   stubs at %p; target bytes %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                       (void *)g_exec, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11]);
+            if (b[0] == 0x68) {
+                uint32_t id;
+                memcpy(&id, b + 1, 4);
+                if (id < (uint32_t)g_nroots)
+                    log_printf("recomp:   root %u: %s (%08X), trampoline %08X", id,
+                               g_recomp_funcs[g_roots[id].info].name, g_recomp_funcs[g_roots[id].info].addr,
+                               (uint32_t)g_roots[id].tramp);
+            }
+        }
+        for (k = 1; k <= 16; k++) {
+            uint32_t t = g_recent[(g_nrecent - k) & 15];
+            cen_describe(t, what, sizeof what);
+            log_printf("recomp:   recent target %08X %s", t, what);
+        }
         TerminateProcess(GetCurrentProcess(), 3);
     }
     *(uint32_t *)HPTR(esp) = (uint32_t)(uintptr_t)bridge_back;   /* it returns to us */

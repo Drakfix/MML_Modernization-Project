@@ -23,6 +23,7 @@ void shim_set_error(uint32_t e);
 void shims_install(const char *ini, const char *game_dir);
 void shim_kernel32_install(void);
 void shim_process_install(void);
+void shim_user32_install(void);   /* USER32 / GDI32: the window, messages, window procedure */
 
 /* memory the game can address, for what a shim hands it (strings, blocks): on 32-bit Windows
    any host memory is; the portable runtime takes it from its reserved guest block (M3 item 4) */

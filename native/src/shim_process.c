@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "log.h"
+#include "plat.h"
 #include "recomp_rt.h"
 #include "shim.h"
 
@@ -351,6 +352,12 @@ static uint32_t sh_get_full_path_name_a(const uint32_t *a)
     return n;
 }
 
+static uint32_t sh_get_tick_count(const uint32_t *a)
+{
+    (void)a;
+    return plat_ticks_ms();
+}
+
 static uint32_t sh_get_drive_type_a(const uint32_t *a)
 {
     (void)a;
@@ -402,6 +409,7 @@ void shim_process_install(void)
         { "GetCurrentDirectoryA", 2, sh_get_current_directory_a },
         { "GetFullPathNameA", 4, sh_get_full_path_name_a },
         { "GetDriveTypeA", 1, sh_get_drive_type_a },
+        { "GetTickCount", 0, sh_get_tick_count },
     };
     size_t k;
     for (k = 0; k < sizeof list / sizeof list[0]; k++)

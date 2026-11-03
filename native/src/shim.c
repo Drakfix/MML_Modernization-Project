@@ -82,6 +82,7 @@ int shim_find(uint32_t target, shim_fn *fn, int *nargs)
 
 static const uint8_t *g_exe;
 static const IMAGE_NT_HEADERS *g_nt;
+static uint32_t g_self_lo, g_self_hi;   /* mml.dll's image */
 
 /* the exe's import slot for dll!name, or 0 */
 static uint32_t import_slot(const char *dll, const char *name)
@@ -116,6 +117,12 @@ int shim_add(const char *dll, const char *name, int nargs, shim_fn fn)
         return 0;
     }
     real = *(const uint32_t *)(uintptr_t)slot;
+    if (real >= g_self_lo && real < g_self_hi) {
+        /* one of our mods replaced this import (GetTickCount: the frame pacing); its function
+           stays what the game calls */
+        log_printf("shims: %s!%s is hooked by mml.dll, left to the hook", dll, name);
+        return 0;
+    }
     put(real, fn, nargs);
     /* thunks in the code sections: JMP [slot] (FF 25 slot) */
     for (k = 0; k < g_nt->FileHeader.NumberOfSections; k++, sec++) {
@@ -144,10 +151,21 @@ void shims_install(const char *ini, const char *game_dir)
         GetCurrentDirectoryA(sizeof g_game_dir, g_game_dir);
     g_exe = (const uint8_t *)GetModuleHandleA(NULL);
     g_nt = (const IMAGE_NT_HEADERS *)(g_exe + ((const IMAGE_DOS_HEADER *)g_exe)->e_lfanew);
+    {
+        HMODULE self;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCSTR)shims_install, &self)) {
+            const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)((const uint8_t *)self +
+                                                                    ((const IMAGE_DOS_HEADER *)self)->e_lfanew);
+            g_self_lo = (uint32_t)(uintptr_t)self;
+            g_self_hi = g_self_lo + nt->OptionalHeader.SizeOfImage;
+        }
+    }
     shim_add("KERNEL32.dll", "GetLastError", 0, sh_get_last_error);
     shim_add("KERNEL32.dll", "SetLastError", 1, sh_set_last_error);
     shim_kernel32_install();
     shim_process_install();
+    shim_user32_install();
     shim_kernel32_log(GetPrivateProfileIntA("debug", "shim_log", 0, ini));
     log_printf("shims: %d call targets run our own Windows functions", g_nshims);
 }
