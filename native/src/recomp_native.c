@@ -35,6 +35,8 @@
 #include "recomp_int.h"
 #include "shim.h"
 
+void start_thunk(void);   /* recomp.c: onto the private stack, then the program runs recompiled */
+
 /* FNSAVE image: CW at 0, SW at 4, tag word at 8, ST0..ST7 (80-bit) from 28 */
 #define FS_SW 4
 #define FS_TW 8

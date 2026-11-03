@@ -38,6 +38,10 @@ void shim_sync_install(void);     /* events and waits */
 int shim_dsound_install(const char *ini, const char *game_dir);   /* DirectSound on SDL3 audio; 0 without SDL3 */
 int shim_dinput_install(void);    /* DirectInput: platform keyboard, SDL controller; 0 without SDL input */
 
+/* a Windows handle the game holds as 32 bits, back to the hosts: sign-extended, as 64-bit
+   Windows defines handles (INVALID_HANDLE_VALUE and the pseudo handles are negative) */
+#define HOST_HANDLE(v) ((HANDLE)(intptr_t)(int32_t)(v))
+
 /* events (shim_sync.c): our handles; set may be called from any thread */
 uint32_t shim_event_create(int manual, int initial);
 void shim_event_set(uint32_t h);

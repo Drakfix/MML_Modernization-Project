@@ -77,7 +77,7 @@ int shim_find(uint32_t target, shim_fn *fn, int *nargs)
 }
 
 static const uint8_t *g_exe;
-static const IMAGE_NT_HEADERS *g_nt;
+static const IMAGE_NT_HEADERS32 *g_nt;   /* the game's (32-bit, whatever we are) */
 #ifndef MML_RUNNER
 static uint32_t g_self_lo, g_self_hi;   /* mml.dll's image */
 #endif
@@ -244,7 +244,7 @@ void shims_install(const char *ini, const char *game_dir)
 #else
     g_exe = (const uint8_t *)GetModuleHandleA(NULL);
 #endif
-    g_nt = (const IMAGE_NT_HEADERS *)(g_exe + ((const IMAGE_DOS_HEADER *)g_exe)->e_lfanew);
+    g_nt = (const IMAGE_NT_HEADERS32 *)(g_exe + ((const IMAGE_DOS_HEADER *)g_exe)->e_lfanew);
 #ifndef MML_RUNNER
     {
         HMODULE self;

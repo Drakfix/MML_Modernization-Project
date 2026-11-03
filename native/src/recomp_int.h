@@ -33,7 +33,6 @@ void rt_dispatch_from(RCtx *c, uint32_t target);   /* rt_dispatch unless target 
 uint32_t flags_from_ctx(const RCtx *c);
 void flags_to_ctx(RCtx *c, uint32_t f);
 uint32_t guest_fs_base(void);
-void start_thunk(void);   /* onto the private stack, then the program runs recompiled (never returns) */
 double rt_f80_to_double(const uint8_t *p);   /* 80-bit x87 value -> double, as FLD tbyte + FSTP qword */
 void rt_double_to_f80(double v, uint8_t *p);
 

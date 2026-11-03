@@ -254,7 +254,7 @@ static __declspec(naked) void intro_detour(void)
 /* the same for the recompiled game (recomp.c): regs EAX ECX EDX EBX ESP EBP ESI EDI */
 static int intro_detour_c(const uint32_t regs[8])
 {
-    return intro_native((HWND)(uintptr_t)regs[2]);
+    return intro_native((HWND)(intptr_t)(int32_t)regs[2])   /* (sign-extended: a handle) */;
 }
 
 int intro_video_install(const char *game_dir)

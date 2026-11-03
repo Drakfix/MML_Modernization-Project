@@ -814,6 +814,8 @@ static __declspec(noreturn) void __cdecl recomp_start(void)
     ExitProcess(0);
 }
 
+#ifndef MML_RUNNER
+/* mml.dll: the exe's entry point jumps here (recomp_native.c, install_start) */
 __declspec(naked) void start_thunk(void)
 {
     __asm {
@@ -822,12 +824,28 @@ __declspec(naked) void start_thunk(void)
         call recomp_start
     }
 }
+#else
+static void start_on_stack(void *arg)
+{
+    (void)arg;
+    recomp_start();
+}
 
-/* the runner's start: the same, from C (never returns) */
+/* the runner's start: onto a 32 MB stack of our own (costack.h), then the game (never returns) */
 void recomp_run(void)
 {
-    start_thunk();
+    costack *s = costack_new(32u << 20, start_on_stack, NULL);
+    size_t lo, hi;
+    if (!s) {
+        log_printf("recomp: no memory for the private stack");
+        ExitProcess(1);
+    }
+    costack_bounds(s, &lo, &hi);
+    g_hs_lo = lo;
+    g_hs_hi = hi;
+    costack_switch(costack_main(), s);
 }
+#endif
 
 /* ---- the game's cooperative threads, on host stacks of their own (costack.h) ----
  *
@@ -1081,8 +1099,10 @@ static void self_range(void)
 void recomp_install(const char *ini)
 {
     char mode[32];
+#ifndef MML_RUNNER
     uint8_t *host_stack;
     const size_t host_size = 32u << 20;
+#endif
     GetPrivateProfileStringA("debug", "recomp", "off", mode, sizeof mode, ini);
     g_mode = _stricmp(mode, "diff") == 0 ? MODE_DIFF : _stricmp(mode, "replace") == 0 ? MODE_REPLACE : MODE_OFF;
 #ifdef MML_RUNNER
@@ -1108,7 +1128,7 @@ void recomp_install(const char *ini)
 #else
         const uint8_t *exe = (const uint8_t *)GetModuleHandleA(NULL);
 #endif
-        const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(exe + ((const IMAGE_DOS_HEADER *)exe)->e_lfanew);
+        const IMAGE_NT_HEADERS32 *nt = (const IMAGE_NT_HEADERS32 *)(exe + ((const IMAGE_DOS_HEADER *)exe)->e_lfanew);
         g_exe_lo = nt->OptionalHeader.ImageBase;
         g_exe_hi = g_exe_lo + nt->OptionalHeader.SizeOfImage;
     }
@@ -1117,6 +1137,7 @@ void recomp_install(const char *ini)
         log_printf("recomp: no memory for the function table");
         return;
     }
+#ifndef MML_RUNNER   /* (the runner's is a costack, recomp_run) */
     /* our private stack: 32 MB with a guard page at the bottom, so an overflow stops right there */
     host_stack = (uint8_t *)VirtualAlloc(NULL, host_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!host_stack) {
@@ -1130,6 +1151,7 @@ void recomp_install(const char *ini)
     g_host_free = ((uintptr_t)(host_stack + host_size) - 64) & ~(uintptr_t)15;
     g_hs_lo = (uintptr_t)host_stack;
     g_hs_hi = (uintptr_t)(host_stack + host_size);
+#endif
     AddVectoredExceptionHandler(0, on_crash);
     if (GetPrivateProfileIntA("debug", "recomp_watch_self", 0, ini)) {   /* who writes our thread table */
         char w[64];

@@ -143,7 +143,7 @@ static uint32_t sh_read_file(const uint32_t *a)
     size_t n;
     if (!f) {
         DWORD done = 0;
-        BOOL ok = ReadFile((HANDLE)(uintptr_t)a[0], HPTR(a[1]), a[2], &done, NULL);
+        BOOL ok = ReadFile(HOST_HANDLE(a[0]), HPTR(a[1]), a[2], &done, NULL);
         if (a[3])
             put32(a[3], done);
         shim_set_error(ok ? 0 : GetLastError());
@@ -167,7 +167,7 @@ static uint32_t sh_write_file(const uint32_t *a)
     size_t n;
     if (!f) {
         DWORD done = 0;
-        BOOL ok = WriteFile((HANDLE)(uintptr_t)a[0], HPTR(a[1]), a[2], &done, NULL);
+        BOOL ok = WriteFile(HOST_HANDLE(a[0]), HPTR(a[1]), a[2], &done, NULL);
         if (a[3])
             put32(a[3], done);
         shim_set_error(ok ? 0 : GetLastError());
@@ -193,7 +193,7 @@ static uint32_t sh_set_file_pointer(const uint32_t *a)
     int whence = a[3] == FILE_CURRENT ? SEEK_CUR : a[3] == FILE_END ? SEEK_END : SEEK_SET;
     if (!f) {
         LONG hi = a[2] ? *(LONG *)HPTR(a[2]) : 0;
-        DWORD r = SetFilePointer((HANDLE)(uintptr_t)a[0], (LONG)a[1], a[2] ? &hi : NULL, a[3]);
+        DWORD r = SetFilePointer(HOST_HANDLE(a[0]), (LONG)a[1], a[2] ? &hi : NULL, a[3]);
         if (a[2])
             memcpy(HPTR(a[2]), &hi, 4);
         shim_set_error(r == INVALID_SET_FILE_POINTER ? GetLastError() : 0);
@@ -231,7 +231,7 @@ static uint32_t sh_get_file_type(const uint32_t *a)
 {
     if (file_of(a[0]))
         return FILE_TYPE_DISK;
-    return GetFileType((HANDLE)(uintptr_t)a[0]);
+    return GetFileType(HOST_HANDLE(a[0]));
 }
 
 static uint32_t sh_close_handle(const uint32_t *a)
@@ -245,7 +245,7 @@ static uint32_t sh_close_handle(const uint32_t *a)
         g_files[(a[0] - HANDLE_BASE) / 4] = NULL;
         return 1;
     }
-    ok = CloseHandle((HANDLE)(uintptr_t)a[0]);
+    ok = CloseHandle(HOST_HANDLE(a[0]));
     shim_set_error(ok ? 0 : GetLastError());
     return (uint32_t)ok;
 }
@@ -255,7 +255,7 @@ static uint32_t sh_flush_file_buffers(const uint32_t *a)
     FILE *f = file_of(a[0]);
     if (f)
         return fflush(f) == 0;
-    return (uint32_t)FlushFileBuffers((HANDLE)(uintptr_t)a[0]);
+    return (uint32_t)FlushFileBuffers(HOST_HANDLE(a[0]));
 }
 
 static uint32_t sh_delete_file(const uint32_t *a)

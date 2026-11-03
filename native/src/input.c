@@ -89,7 +89,11 @@ static int load_sdl(void)
     slash = strrchr(path, '\\');
     if (!slash)
         return 0;
+#ifdef _WIN64
+    strcpy_s(slash + 1, sizeof path - (slash + 1 - path), "x64\\SDL3.dll");   /* the 64-bit build's */
+#else
     strcpy_s(slash + 1, sizeof path - (slash + 1 - path), "SDL3.dll");
+#endif
     if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES)
         return 0;
     g_sdl_dll = LoadLibraryA(path);

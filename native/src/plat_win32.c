@@ -10,6 +10,10 @@
 #include "log.h"
 #include "plat.h"
 
+/* a window id (a 32-bit HWND) back to the handle: sign-extended, as 64-bit Windows defines
+   handles (HWND_TOPMOST is -1) */
+#define HWND_OF(w) ((HWND)(intptr_t)(int32_t)(w))
+
 #define MAX_WINDOWS 8
 static struct {
     HWND hwnd;
@@ -130,27 +134,27 @@ uint32_t plat_window_create(const char *cls, const char *title, uint32_t style, 
 
 void plat_window_show(uint32_t win, int cmd)
 {
-    ShowWindow((HWND)(uintptr_t)win, cmd);
+    ShowWindow(HWND_OF(win), cmd);
 }
 
 void plat_window_update(uint32_t win)
 {
-    UpdateWindow((HWND)(uintptr_t)win);
+    UpdateWindow(HWND_OF(win));
 }
 
 void plat_window_set_pos(uint32_t win, uint32_t after, int x, int y, int w, int h, uint32_t flags)
 {
-    SetWindowPos((HWND)(uintptr_t)win, (HWND)(uintptr_t)after, x, y, w, h, flags);
+    SetWindowPos(HWND_OF(win), HWND_OF(after), x, y, w, h, flags);
 }
 
 uint32_t plat_window_set_long(uint32_t win, int index, uint32_t value)
 {
-    return (uint32_t)SetWindowLongA((HWND)(uintptr_t)win, index, (LONG)value);
+    return (uint32_t)SetWindowLongA(HWND_OF(win), index, (LONG)value);
 }
 
 uint32_t plat_window_focus(uint32_t win)
 {
-    return (uint32_t)(uintptr_t)SetFocus((HWND)(uintptr_t)win);
+    return (uint32_t)(uintptr_t)SetFocus(HWND_OF(win));
 }
 
 void plat_adjust_rect(int32_t rect[4], uint32_t style, uint32_t exstyle, int menu)

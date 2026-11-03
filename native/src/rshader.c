@@ -52,7 +52,11 @@ static int load_library(const char *game_dir)
 {
     char path[MAX_PATH];
     HMODULE m;
+#ifdef _WIN64
+    _snprintf_s(path, sizeof path, _TRUNCATE, "%s\\x64\\librashader.dll", game_dir);   /* the 64-bit build's */
+#else
     _snprintf_s(path, sizeof path, _TRUNCATE, "%s\\librashader.dll", game_dir);
+#endif
     m = LoadLibraryA(path);
     if (!m) {
         log_printf("shader: %s not found, shaders off", path);

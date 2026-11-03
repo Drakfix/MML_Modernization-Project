@@ -299,7 +299,7 @@ static uint32_t sh_set_window_pos(const uint32_t *a)
    subclass); the rest is the platform's */
 static uint32_t sh_set_window_long_a(const uint32_t *a)
 {
-    if ((int32_t)a[1] == GWL_WNDPROC) {
+    if ((int32_t)a[1] == -4) {   /* GWL_WNDPROC (only in 32-bit headers) */
         int k = win_index(a[0]);
         uint32_t old;
         if (k < 0)

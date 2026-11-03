@@ -94,7 +94,11 @@ static DWORD WINAPI sampler_thread(void *p)
             continue;
         c.ContextFlags = CONTEXT_CONTROL;
         if (GetThreadContext(g_target, &c))
+#ifdef _M_X64
+            count((uint32_t)c.Rip);   /* (our addresses only matter as module offsets) */
+#else
             count(c.Eip);
+#endif
         ResumeThread(g_target);
         if (++g_total == 5000)
             dump();

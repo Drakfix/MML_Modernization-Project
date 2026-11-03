@@ -3,15 +3,17 @@ rem Builds native\build\mml_run.exe: the standalone runner (src\runner.c, M3 ite
 rem sources as mml.dll with MML_RUNNER defined, and the recompiled code (build\gen, needed) built
 rem for the runner's guest memory block. Run build.bat once first (the shader headers).
 rem RECOMP_CLANG=path\to\clang-cl.exe compiles the generated code with clang, as in build.bat.
+rem build_runner.bat x64: the 64-bit runner, build\mml_run64.exe, all compiled with clang-cl
+rem (RECOMP_CLANG needed). It loads SDL3.dll and librashader.dll from x64\ in the game folder.
 setlocal
 set ROOT=%~dp0
+set "ARCH=x86"
+if /i "%~1"=="x64" set "ARCH=x64"
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 for /f "usebackq delims=" %%i in (`call "%VSWHERE%" -latest -products * -property installationPath`) do set "VSDIR=%%i"
 if not defined VSDIR goto novs
-call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" x86 >nul || exit /b 1
+call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" %ARCH% >nul || exit /b 1
 set "OUT=%ROOT%build"
-set "RUN=%OUT%\runner"
-set "GENRUN=%OUT%\gen_runner"
 if not exist "%OUT%\shaders\game_vs.h" (
   echo run build.bat first: the shader headers are missing
   exit /b 1
@@ -20,6 +22,10 @@ if not exist "%OUT%\gen\recomp_table.c" (
   echo no generated code in build\gen: the runner has nothing to run
   exit /b 1
 )
+if "%ARCH%"=="x64" goto x64
+
+set "RUN=%OUT%\runner"
+set "GENRUN=%OUT%\gen_runner"
 if not exist "%RUN%" mkdir "%RUN%"
 if not exist "%GENRUN%" mkdir "%GENRUN%"
 rem the generated code only changes with a regeneration: compiled again when its objects are gone
@@ -42,6 +48,30 @@ cl /nologo /O2 /MT /W4 /WX /wd4201 /GS- /DMML_RUNNER /I"%OUT%" /Fo"%RUN%\\" "%RO
 echo built %OUT%\mml_run.exe
 exit /b 0
 
+:x64
+if not defined RECOMP_CLANG (
+  echo the 64-bit runner needs RECOMP_CLANG=path\to\clang-cl.exe
+  exit /b 1
+)
+set "RUN=%OUT%\runner64"
+set "GENRUN=%OUT%\gen_runner64"
+if not exist "%RUN%" mkdir "%RUN%"
+if not exist "%GENRUN%" mkdir "%GENRUN%"
+if "%RUNNER_REGEN%"=="1" del /q "%GENRUN%\*.obj" 2>nul
+if not exist "%GENRUN%\recomp_table.obj" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%clang_gen.ps1" -Clang "%RECOMP_CLANG%" -Src "%ROOT%src" -Gen "%OUT%\gen" -Out "%GENRUN%" -Defs "/DMML_RUNNER" -Target "x86_64-pc-windows-msvc" || exit /b 1
+)
+rem one file at a time: clang-cl stops at the first file that fails
+del /q "%RUN%\*.obj" 2>nul
+for %%f in ("%ROOT%src\*.c") do (
+  "%RECOMP_CLANG%" --target=x86_64-pc-windows-msvc /c /O2 /MT /W3 /GS- /DMML_RUNNER /I"%OUT%" /I"%ROOT%src" /Fo"%RUN%\\" "%%f" || exit /b 1
+)
+link /nologo /OUT:"%OUT%\mml_run64.exe" /SUBSYSTEM:WINDOWS /INCREMENTAL:NO /MAP:"%OUT%\mml_run64.map" ^
+   "%RUN%\*.obj" "%GENRUN%\*.obj" ^
+   user32.lib kernel32.lib gdi32.lib d3d11.lib dxgi.lib ole32.lib windowscodecs.lib winmm.lib || exit /b 1
+echo built %OUT%\mml_run64.exe
+exit /b 0
+
 :novs
-echo Visual Studio Build Tools not found (need the C++ workload with x86 tools).
+echo Visual Studio Build Tools not found (need the C++ workload with x86 and x64 tools).
 exit /b 1

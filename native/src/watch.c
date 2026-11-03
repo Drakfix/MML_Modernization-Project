@@ -22,6 +22,11 @@ static struct { uintptr_t addr; int size; } g_w[MAX_WATCH];
 static int g_nw;
 static DWORD g_main_tid;
 static int g_armed;
+#ifdef _M_X64
+#define PC(ctx) ((ctx)->Rip)
+#else
+#define PC(ctx) ((ctx)->Eip)
+#endif
 static struct { uintptr_t eip; int slot; unsigned hits; } g_writers[MAX_WRITERS];
 static volatile LONG g_lock;
 
@@ -41,10 +46,10 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *ep)
             continue;
         /* data breakpoints trap after the write: Eip is the next instruction */
         for (k = 0; k < MAX_WRITERS && g_writers[k].eip; k++)
-            if (g_writers[k].eip == ep->ContextRecord->Eip && g_writers[k].slot == i)
+            if (g_writers[k].eip == PC(ep->ContextRecord) && g_writers[k].slot == i)
                 break;
         if (k < MAX_WRITERS) {
-            g_writers[k].eip = ep->ContextRecord->Eip;
+            g_writers[k].eip = PC(ep->ContextRecord);
             g_writers[k].slot = i;
             g_writers[k].hits++;
         }

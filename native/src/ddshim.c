@@ -2074,6 +2074,86 @@ typedef HRESULT(WINAPI *f_vpvvfv)(void **, DWORD, void *, DWORD, DWORD, float, D
     {                                                                                              \
         return (uint32_t)((ftype)vt_##iface[slot])(TH);                                            \
     }
+/* The game's DDSURFACEDESC / DDSURFACEDESC2 (108 / 124 bytes) and DDBLTFX hold pointers, whose size
+   and alignment move every later member in a 64-bit build: the adapters that pass them convert
+   (a plain copy where the layouts agree). lpSurface is a game address either way (s_lock). */
+#define DESC32_V1 108u
+#define DESC32_V2 124u
+#define DESC32_SURFACE 36u   /* lpSurface; the members before it are DWORDs, the ones after too */
+
+static uint32_t desc32_size(const uint8_t *g, uint32_t dflt)
+{
+    uint32_t size;
+    memcpy(&size, g, 4);
+    return size == DESC32_V1 || size == DESC32_V2 ? size : dflt;
+}
+
+static void desc_from_game(const uint8_t *g, uint32_t size, DDSURFACEDESC2 *h)
+{
+    uint32_t surf;
+    memset(h, 0, sizeof *h);
+    memcpy(h, g, DESC32_SURFACE);
+    memcpy(&surf, g + DESC32_SURFACE, 4);
+    h->lpSurface = (void *)(uintptr_t)surf;
+    memcpy(&h->ddckCKDestOverlay, g + DESC32_SURFACE + 4, size - DESC32_SURFACE - 4);
+    h->dwSize = size == DESC32_V2 ? sizeof(DDSURFACEDESC2) : sizeof(DDSURFACEDESC);
+}
+
+static void desc_to_game(const DDSURFACEDESC2 *h, uint32_t size, uint8_t *g)
+{
+    uint32_t surf = (uint32_t)(uintptr_t)h->lpSurface;
+    memcpy(g, h, DESC32_SURFACE);
+    memcpy(g, &size, 4);
+    memcpy(g + DESC32_SURFACE, &surf, 4);
+    memcpy(g + DESC32_SURFACE + 4, &h->ddckCKDestOverlay, size - DESC32_SURFACE - 4);
+}
+
+static uint32_t ad_dd4_SLOT_CreateSurface_desc(const uint32_t *a)
+{
+    DDSURFACEDESC2 d;
+    if (!a[1])
+        return (uint32_t)DDERR_INVALIDPARAMS;
+    desc_from_game((const uint8_t *)GUEST(a[1]), desc32_size((const uint8_t *)GUEST(a[1]), DESC32_V2), &d);
+    return (uint32_t)((f_ppp)vt_dd4[SLOT_CreateSurface])(TH, &d, AP(2), AR(3));
+}
+
+/* GetDisplayMode, GetSurfaceDesc (v1 and v4), Lock: a descriptor out (the game says which size) */
+static uint32_t desc_out(const uint32_t *a, uint32_t at, uint32_t dflt, HRESULT (*call)(const uint32_t *a, void *d))
+{
+    DDSURFACEDESC2 d;
+    uint32_t size;
+    HRESULT hr;
+    if (!a[at])
+        return (uint32_t)call(a, NULL);
+    size = desc32_size((const uint8_t *)GUEST(a[at]), dflt);
+    desc_from_game((const uint8_t *)GUEST(a[at]), size, &d);
+    hr = call(a, &d);
+    if (SUCCEEDED(hr))
+        desc_to_game(&d, size, (uint8_t *)GUEST(a[at]));
+    return (uint32_t)hr;
+}
+
+static HRESULT call_get_mode(const uint32_t *a, void *d) { return ((f_p)vt_dd4[SLOT_GetDisplayMode])(TH, d); }
+static HRESULT call_get_desc1(const uint32_t *a, void *d) { return ((f_p)vt_surf1[22])(TH, d); }
+static HRESULT call_get_desc4(const uint32_t *a, void *d) { return ((f_p)vt_surf4[22])(TH, d); }
+static HRESULT call_lock4(const uint32_t *a, void *d) { return ((f_ppvp)vt_surf4[25])(TH, AP(1), d, AV(3), AR(4)); }
+static uint32_t ad_dd4_SLOT_GetDisplayMode_desc(const uint32_t *a) { return desc_out(a, 1, DESC32_V2, call_get_mode); }
+static uint32_t ad_surf1_22_desc(const uint32_t *a) { return desc_out(a, 1, DESC32_V1, call_get_desc1); }
+static uint32_t ad_surf4_22_desc(const uint32_t *a) { return desc_out(a, 1, DESC32_V2, call_get_desc4); }
+static uint32_t ad_surf4_25_desc(const uint32_t *a) { return desc_out(a, 2, DESC32_V2, call_lock4); }
+
+/* Blt: s_blt reads the fill colour (DDBLTFX's 21st DWORD in the game's layout) */
+static uint32_t ad_surf4_5_fx(const uint32_t *a)
+{
+    DDBLTFX fx;
+    if (a[5]) {
+        memset(&fx, 0, sizeof fx);
+        fx.dwSize = sizeof fx;
+        fx.dwFillColor = GVAR(uint32_t, a[5] + 20 * 4);
+    }
+    return (uint32_t)((f_pppvp)vt_surf4[5])(TH, AP(1), AP(2), AP(3), AV(4), a[5] ? &fx : NULL);
+}
+
 #define QI_ADDREF_RELEASE(iface)                                                                   \
     AD(iface, 0, f_pp, AP(1), AP(2)) AD0(iface, 1, f_u) AD0(iface, 2, f_u)
 
@@ -2087,12 +2167,10 @@ AD(dd1, 21, f_vvv, AV(1), AV(2), AV(3))
 /* IDirectDraw4 */
 QI_ADDREF_RELEASE(dd4)
 AD(dd4, SLOT_CreateClipper, f_vpp, AV(1), AP(2), AR(3))
-AD(dd4, SLOT_CreateSurface, f_ppp, AP(1), AP(2), AR(3))
 AD0(dd4, SLOT_FlipToGDISurface, f_h)
 AD(dd4, SLOT_GetAvailableVidMem, f_ppp, AP(1), AP(2), AP(3))
 AD(dd4, SLOT_GetCaps, f_pp, AP(1), AP(2))
 AD(dd4, SLOT_GetDeviceIdentifier, f_pv, AP(1), AV(2))
-AD(dd4, SLOT_GetDisplayMode, f_p, AP(1))
 AD0(dd4, SLOT_RestoreAllSurfaces, f_h)
 AD0(dd4, SLOT_RestoreDisplayMode, f_h)
 AD(dd4, SLOT_SetCooperativeLevel, f_pv, AR(1), AV(2))
@@ -2112,14 +2190,12 @@ AD(surf1, 12, f_pp, AP(1), AP(2))
 AD(surf1, 14, f_p, AP(1))
 AD(surf1, 20, f_p, AR(1))
 AD(surf1, 21, f_p, AP(1))
-AD(surf1, 22, f_p, AP(1))
 AD0(surf1, 24, f_h)
 AD0(surf1, 27, f_h)
 AD(surf1, 32, f_p, AR(1))
 /* IDirectDrawSurface4 */
 QI_ADDREF_RELEASE(surf4)
 AD(surf4, 3, f_p, AP(1))
-AD(surf4, 5, f_pppvp, AP(1), AP(2), AP(3), AV(4), AP(5))
 AD(surf4, 7, f_vvppv, AV(1), AV(2), AP(3), AP(4), AV(5))
 AD(surf4, 11, f_pv, AP(1), AV(2))
 AD(surf4, 12, f_pp, AP(1), AP(2))
@@ -2130,9 +2206,7 @@ AD(surf4, 16, f_vp, AV(1), AP(2))
 AD(surf4, 18, f_p, AR(1))
 AD(surf4, 20, f_p, AR(1))
 AD(surf4, 21, f_p, AP(1))
-AD(surf4, 22, f_p, AP(1))
 AD0(surf4, 24, f_h)
-AD(surf4, 25, f_ppvp, AP(1), AP(2), AV(3), AR(4))
 AD0(surf4, 27, f_h)
 AD(surf4, 28, f_p, AR(1))
 AD(surf4, 29, f_vp, AV(1), AP(2))
@@ -2186,18 +2260,18 @@ typedef struct { int slot; shim_fn fn; } adapter;
 #define A(iface, slot) { slot, ad_##iface##_##slot }
 #define A_QAR(iface) A(iface, 0), A(iface, 1), A(iface, 2)
 static const adapter ad_dd1[] = { A_QAR(dd1), A(dd1, 4), A(dd1, 11), A(dd1, 19), A(dd1, 20), A(dd1, 21) };
-static const adapter ad_dd4[] = { A_QAR(dd4), A(dd4, SLOT_CreateClipper), A(dd4, SLOT_CreateSurface),
+static const adapter ad_dd4[] = { A_QAR(dd4), A(dd4, SLOT_CreateClipper), { SLOT_CreateSurface, ad_dd4_SLOT_CreateSurface_desc },
                                   A(dd4, SLOT_FlipToGDISurface), A(dd4, SLOT_GetAvailableVidMem), A(dd4, SLOT_GetCaps),
-                                  A(dd4, SLOT_GetDeviceIdentifier), A(dd4, SLOT_GetDisplayMode),
+                                  A(dd4, SLOT_GetDeviceIdentifier), { SLOT_GetDisplayMode, ad_dd4_SLOT_GetDisplayMode_desc },
                                   A(dd4, SLOT_RestoreAllSurfaces), A(dd4, SLOT_RestoreDisplayMode),
                                   A(dd4, SLOT_SetCooperativeLevel), A(dd4, SLOT_SetDisplayMode),
                                   A(dd4, SLOT_TestCooperativeLevel) };
 static const adapter ad_d3d3[] = { A_QAR(d3d3), A(d3d3, 3), A(d3d3, 5), A(d3d3, 6), A(d3d3, 8), A(d3d3, 10), A(d3d3, 11) };
-static const adapter ad_surf1[] = { A_QAR(surf1), A(surf1, 12), A(surf1, 14), A(surf1, 20), A(surf1, 21), A(surf1, 22),
+static const adapter ad_surf1[] = { A_QAR(surf1), A(surf1, 12), A(surf1, 14), A(surf1, 20), A(surf1, 21), { 22, ad_surf1_22_desc },
                                     A(surf1, 24), A(surf1, 27), A(surf1, 32) };
-static const adapter ad_surf4[] = { A_QAR(surf4), A(surf4, 3), A(surf4, 5), A(surf4, 7), A(surf4, 11), A(surf4, 12),
+static const adapter ad_surf4[] = { A_QAR(surf4), A(surf4, 3), { 5, ad_surf4_5_fx }, A(surf4, 7), A(surf4, 11), A(surf4, 12),
                                     A(surf4, 13), A(surf4, 14), A(surf4, 15), A(surf4, 16), A(surf4, 18), A(surf4, 20),
-                                    A(surf4, 21), A(surf4, 22), A(surf4, 24), A(surf4, 25), A(surf4, 27), A(surf4, 28),
+                                    A(surf4, 21), { 22, ad_surf4_22_desc }, A(surf4, 24), { 25, ad_surf4_25_desc }, A(surf4, 27), A(surf4, 28),
                                     A(surf4, 29), A(surf4, 32), A(surf4, 36), A(surf4, 37), A(surf4, 38), A(surf4, 43),
                                     A(surf4, 44) };
 static const adapter ad_tex2[] = { A_QAR(tex2), A(tex2, 3), A(tex2, 4), A(tex2, 5) };
