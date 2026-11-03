@@ -33,6 +33,7 @@
 #include "log.h"
 #include "recomp.h"
 #include "recomp_rt.h"
+#include "shim.h"
 #include "watch.h"
 
 #ifdef RECOMP_NONE
@@ -255,6 +256,23 @@ typedef uint32_t(__stdcall *std4)(uint32_t, uint32_t, uint32_t, uint32_t);
 typedef uint32_t(__stdcall *std5)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 typedef uint32_t(__stdcall *std6)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 
+/* returns 1 if target is a shimmed Windows import (and its shim has run) */
+static int rt_shim(RCtx *c, uint32_t target)
+{
+    shim_fn fn;
+    int n;
+    uint32_t esp, ret, a[8];
+    if (!shim_find(target, &fn, &n))
+        return 0;
+    esp = R32(c, REG_ESP);
+    ret = LD32(esp);
+    memcpy(a, HPTR(esp + 4), 4 * (size_t)n);
+    R32_SET(c, REG_EAX, fn(a));
+    R32_SET(c, REG_ESP, esp + 4 + 4 * (uint32_t)n);   /* stdcall: the shim's arguments are popped */
+    c->ret = ret;
+    return 1;
+}
+
 static int rt_direct_has(uint32_t target)
 {
     int k;
@@ -348,7 +366,7 @@ static unsigned g_nrecent;
  * recompiled code leaves to something else, every entry into it from machine code, with counts,
  * the first caller and where it lives. Written to recomp_census.txt in the game folder every few
  * seconds; an existing file is read back first, so the inventory grows over play sessions. */
-enum { CK_DIRECT, CK_IMPL, CK_HOST, CK_NATIVE, CK_MODDED, CK_ENTRY, CK_UNSUPPORTED, CK_HOOK, CK_KINDS };
+enum { CK_DIRECT, CK_IMPL, CK_HOST, CK_NATIVE, CK_MODDED, CK_ENTRY, CK_UNSUPPORTED, CK_HOOK, CK_SHIM, CK_KINDS };
 static const char *const g_ck_names[CK_KINDS] = {
     "direct",        /* our stdcall C function, called from C (recomp_register_stdcall) */
     "impl",          /* C version of one of our assembly routines (recomp_register_st0 / wrap) */
@@ -358,6 +376,7 @@ static const char *const g_ck_names[CK_KINDS] = {
     "entry",         /* machine code entering recompiled code (a hooked root) */
     "unsupported",   /* a function the recompiler couldn't translate */
     "hook",          /* one of mml.dll's hooks called from the generated code (C, regs_t) */
+    "shim",          /* a Windows import the game calls, run by our own version (shim.c) */
 };
 enum { CF_GAME = 1, CF_MML = 2, CF_OTHER = 4 };
 typedef struct {
@@ -573,8 +592,12 @@ uint32_t rt_dispatch(RCtx *c, uint32_t target)
         }
         if (g_census) {
             uint32_t caller = LD32(R32(c, REG_ESP));
+            shim_fn sf;
+            int sn;
             if (i >= 0)
                 census(CK_MODDED, target, caller);
+            else if (shim_find(target, &sf, &sn))
+                census(CK_SHIM, target, caller);
             else if (rt_direct_has(target))
                 census(CK_DIRECT, target, caller);
             else if (rt_impl_has(target))
@@ -592,7 +615,7 @@ uint32_t rt_dispatch(RCtx *c, uint32_t target)
         if (i < 0 && target >= g_recomp_funcs[0].lo && target < g_recomp_funcs[g_recomp_nfuncs - 1].hi &&
             g_rt_errors++ < 20)
             log_printf("recomp: jump to %08X, outside every recompiled function", target);
-        if (rt_direct(c, target) || rt_impl(c, target))
+        if (rt_shim(c, target) || rt_direct(c, target) || rt_impl(c, target))
             ;
         else if (host_callable(target))
             rt_host_call(c, target);
@@ -801,6 +824,7 @@ static void rt_host_call(RCtx *c, uint32_t target)
     hc_edx = R32(c, REG_EDX);
     g_bridge_ret = ret;
     host_call_asm();
+    shim_set_error(GetLastError());   /* (the game reads it through our GetLastError) */
     eax = hc_eax_out, edx = hc_edx_out, popped = hc_popped;
     g_bridge_ret = outer_ret;
     R32_SET(c, REG_EAX, eax);
@@ -828,6 +852,7 @@ void rt_call_native(RCtx *c, uint32_t target)
     b_ebp = R32(c, REG_EBP), b_esi = R32(c, REG_ESI), b_edi = R32(c, REG_EDI);
     g_bridge_ret = ret;
     bridge_go();
+    shim_set_error(GetLastError());
     g_bridge_ret = outer_ret;
     R32_SET(c, REG_EAX, b_eax), R32_SET(c, REG_ECX, b_ecx), R32_SET(c, REG_EDX, b_edx);
     R32_SET(c, REG_EBX, b_ebx), R32_SET(c, REG_EBP, b_ebp), R32_SET(c, REG_ESI, b_esi);
@@ -1258,11 +1283,12 @@ static int install_root(uint32_t addr)
     return install_root_fn(addr, NULL);
 }
 
+static int install_root_bytes(uint32_t addr, rfunc fn, int fi, unsigned steal, const uint8_t *entry_bytes);
+
 static int install_root_fn(uint32_t addr, rfunc fn)
 {
-    int fi = find_func(addr), r = g_nroots;
+    int fi = find_func(addr);
     const RFuncInfo *info;
-    uint8_t *stub, *tramp, patch[16];
     if (fi < 0 || g_nroots >= MAX_ROOTS) {
         log_printf("recomp: %08X isn't in the generated code", addr);
         return 0;
@@ -1272,6 +1298,32 @@ static int install_root_fn(uint32_t addr, rfunc fn)
         log_printf("recomp: can't hook %s (%08X)", info->name, addr);
         return 0;
     }
+    return install_root_bytes(addr, fn, fi, info->steal, info->entry_bytes);
+}
+
+/* The exe's entry point (Windows calls it, nothing CALLs it, so the generated table doesn't
+   offer it as a hook): JMP to the Watcom C runtime's startup. As a root, the whole program runs
+   recompiled from its first instruction, the C runtime's startup included. Replace mode only:
+   the trampoline (the original JMP, relative) is never run. */
+#define G_ENTRY      0x4FA900u
+#define G_CRT_START  0x4FFB41u
+static void install_entry_root(void)
+{
+    uint8_t jmp[5];
+    int fi = find_func(G_ENTRY);
+    jmp[0] = 0xE9;
+    *(int32_t *)(jmp + 1) = (int32_t)(G_CRT_START - (G_ENTRY + 5));
+    if (fi < 0 || !mem_expect(G_ENTRY, jmp, 5) || !install_root_bytes(G_ENTRY, NULL, fi, 5, jmp))
+        log_printf("recomp: the entry point isn't the expected JMP, the C runtime starts as machine code");
+}
+
+static int install_root_bytes(uint32_t addr, rfunc fn, int fi, unsigned steal, const uint8_t *entry_bytes)
+{
+    int r = g_nroots;
+    uint8_t *stub, *tramp, patch[16];
+    struct { unsigned steal; const uint8_t *entry_bytes; } x = { steal, entry_bytes }, *info = &x;
+    if (g_nroots >= MAX_ROOTS)
+        return 0;
     stub = exec_alloc(16);
     tramp = exec_alloc(32);
     if (!stub || !tramp)
@@ -1287,7 +1339,7 @@ static int install_root_fn(uint32_t addr, rfunc fn)
     *(int32_t *)(tramp + info->steal + 1) = (int32_t)((addr + info->steal) - ((uintptr_t)tramp + info->steal + 5));
     g_roots[r].info = fi;
     g_roots[r].tramp = (uint32_t)(uintptr_t)tramp;
-    g_roots[r].fn = fn ? fn : info->fn;
+    g_roots[r].fn = fn ? fn : g_recomp_funcs[fi].fn;
     memset(patch, 0x90, sizeof patch);
     patch[0] = 0xE9;
     *(int32_t *)(patch + 1) = (int32_t)((uintptr_t)stub - (addr + 5));
@@ -1295,7 +1347,7 @@ static int install_root_fn(uint32_t addr, rfunc fn)
         return 0;
     g_nroots++;
     if (g_mode == MODE_DIFF)
-        log_printf("recomp: %s (%08X) checked against the original", info->name, addr);
+        log_printf("recomp: %s (%08X) checked against the original", g_recomp_funcs[fi].name, addr);
     return 1;
 }
 
@@ -1645,6 +1697,8 @@ void recomp_install(const char *ini)
         log_printf("recomp: watching %s", w);
     }
     t_post_addr = (uint32_t)(uintptr_t)stub_post;
+    if (g_mode == MODE_REPLACE)
+        shims_install(ini, NULL);
     GetPrivateProfileStringA("debug", "recomp_roots", "", roots, sizeof roots, ini);
     mark_modded();
     if (g_mode == MODE_REPLACE) {   /* the threads run on fibers */
@@ -1654,7 +1708,8 @@ void recomp_install(const char *ini)
         };
         int k;
         for (k = 0; k < (int)(sizeof co / sizeof co[0]); k++)
-            install_root_fn(co[k].a, co[k].fn);
+            install_root_fn(co[k].a, co[k].fn);        if (GetPrivateProfileIntA("debug", "recomp_entry", 1, ini))
+            install_entry_root();
     }
     if (g_mode == MODE_REPLACE && g_modded && g_recomp_patch_aware) {
         memset(g_modded, 0, (size_t)g_recomp_nfuncs);   /* the recompiled code applies our patches itself */
