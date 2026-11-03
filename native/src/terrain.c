@@ -27,12 +27,12 @@
 #include <string.h>
 #include <math.h>
 
+#include "ddshim.h"
 #include "game.h"
 #include "guest.h"
 #include "hook.h"
 #include "log.h"
 #include "mml.h"
-#include "recomp.h"
 #include "terrain.h"
 
 /* software GTE state */
@@ -48,7 +48,6 @@
 #define G_CELL_W      0x559920u   /* s32[9]: SZ per grid slot of a subdivided cell */
 #define G_EMIT_HEADER 0x559944u   /* u32: packet header being emitted, top byte = opcode */
 #define G_CELL_TOPO   0x511744u   /* terrain_cell_topology: 4 quads then 4 triangles */
-#define G_D3D_DEVICE  0x551D10u   /* IDirect3DDevice3* */
 #define VT_DRAW_PRIMITIVE 28
 
 /* hook sites: right after the depth writer returns */
@@ -418,14 +417,13 @@ void terrain_frame(void)
 {
     int i;
     if (g_clip_on && !g_next_draw) {
-        void *dev = *(void **)G_D3D_DEVICE;
-        if (dev) {
+        void **vt = ddshim_device_vtable();
+        if (vt) {
             /* display.c hooks the same slot earlier in the frame, so ours runs
              * first and hands it the game's 640-wide coordinates */
-            void **vt = *(void ***)dev, *mine = (void *)clip_draw_prim;
+            void *mine = (void *)clip_draw_prim;
             g_next_draw = (draw_prim_t)vt[VT_DRAW_PRIMITIVE];
             mem_write((uintptr_t)&vt[VT_DRAW_PRIMITIVE], &mine, sizeof mine);
-            recomp_register_stdcall((void *)clip_draw_prim, 6);
             log_printf("terrain: DrawPrimitive hooked (vtable %p)", (void *)vt);
         }
     }

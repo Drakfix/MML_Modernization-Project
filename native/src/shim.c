@@ -133,6 +133,11 @@ uint32_t shim_method(int nargs, shim_fn fn)
     return a;
 }
 
+void shim_add_target(uint32_t addr, int nargs, shim_fn fn)
+{
+    put(addr, fn, nargs);
+}
+
 int shim_add(const char *dll, const char *name, int nargs, shim_fn fn)
 {
     const IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(g_nt);

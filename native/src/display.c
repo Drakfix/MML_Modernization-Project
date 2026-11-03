@@ -25,13 +25,13 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "ddshim.h"
 #include "display.h"
 #include "hook.h"
 #include "log.h"
 #include "packets.h"
 #include "toast.h"
 
-#define G_D3D_DEVICE        0x551D10u   /* IDirect3DDevice3* */
 #define G_SITE_MODE_WIDTH   0x4F7EF3u   /* push 0x280 -> SetDisplayMode width (flip-chain path) */
 #define G_SITE_VIEWPORT_W   0x4F81C1u   /* mov [esp+0xd8],0x280 -> D3DVIEWPORT2.dwWidth */
 #define G_SITE_CLEAR_W      0x4F7F8Du   /* mov eax,0x280 -> width of the Z-buffer FUN_004F134B creates */
@@ -194,21 +194,19 @@ void display_frame(void)
 {
     static unsigned frames;
     void **vt;
-    void *dev;
 
     if (!g_active)
         return;
     census_frame();
     packets_frame_start();
-    dev = *(void **)G_D3D_DEVICE;
-    if (dev && !g_draw_prim) {
+    vt = ddshim_device_vtable();
+    if (vt && !g_draw_prim) {
         void *mine1 = (void *)hooked_draw_prim, *mine2 = (void *)hooked_draw_indexed;
-        vt = *(void ***)dev;
         g_draw_prim = (draw_prim_t)vt[VT_DRAW_PRIMITIVE];
         g_draw_indexed = (draw_indexed_t)vt[VT_DRAW_INDEXED_PRIMITIVE];
         mem_write((uintptr_t)&vt[VT_DRAW_PRIMITIVE], &mine1, sizeof mine1);
         mem_write((uintptr_t)&vt[VT_DRAW_INDEXED_PRIMITIVE], &mine2, sizeof mine2);
-        log_printf("display: DrawPrimitive hooked (device %p, vtable %p)", dev, (void *)vt);
+        log_printf("display: DrawPrimitive hooked (vtable %p)", (void *)vt);
     }
     if (++frames == 600)
         log_printf("display: after 600 frames: DrawPrimitive %u, DrawIndexedPrimitive %u, non-XYZRHW %u",

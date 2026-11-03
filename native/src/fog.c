@@ -11,12 +11,11 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "ddshim.h"
 #include "fog.h"
 #include "hook.h"
 #include "log.h"
-#include "recomp.h"
 
-#define G_D3D_DEVICE        0x551D10u   /* IDirect3DDevice3* */
 #define VT_SET_RENDER_STATE 22
 #define RS_FOGENABLE        28
 #define RS_FOGTABLESTART    36
@@ -92,15 +91,14 @@ int fog_mode(void)
 
 void fog_frame(void)
 {
-    void *dev;
+    void **vt;
     if (g_next_set_rs)   /* hooked even for "original", so it can change in game */
         return;
-    dev = *(void **)G_D3D_DEVICE;
-    if (dev) {
-        void **vt = *(void ***)dev, *mine = (void *)fog_set_rs;
+    vt = ddshim_device_vtable();
+    if (vt) {
+        void *mine = (void *)fog_set_rs;
         g_next_set_rs = (set_rs_t)vt[VT_SET_RENDER_STATE];
         mem_write((uintptr_t)&vt[VT_SET_RENDER_STATE], &mine, sizeof mine);
-        recomp_register_stdcall((void *)fog_set_rs, 3);   /* called tens of thousands of times a frame */
         log_printf("fog: SetRenderState hooked (vtable %p)", (void *)vt);
     }
 }

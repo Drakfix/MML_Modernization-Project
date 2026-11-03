@@ -15,6 +15,9 @@ typedef uint32_t (*shim_fn)(const uint32_t *args);
    exe runs fn, with nargs arguments */
 int shim_add(const char *dll, const char *name, int nargs, shim_fn fn);
 
+/* an address the game calls (a function of ours a mod put in an import slot): runs fn */
+void shim_add_target(uint32_t addr, int nargs, shim_fn fn);
+
 /* a method of an object we hand the game (COM vtables): a guest address that only means "run
    fn" to the runtime (machine code calling it faults), stdcall with nargs arguments, this first */
 uint32_t shim_method(int nargs, shim_fn fn);

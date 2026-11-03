@@ -37,6 +37,7 @@ void recomp_register_stdcall(void *fn, int nargs);
    recompiled code on the game's stack below the shim caller's frame; returns its EAX. How the
    portable runtime calls game callbacks (the window procedure) without machine code. */
 uint32_t recomp_call_stdcall(uint32_t fn, int nargs, const uint32_t *args);
+int recomp_replacing(void);   /* the recompiled game runs ([debug] recomp=replace) */
 int recomp_in_shim(void);   /* recomp_call_stdcall / recomp_call_watcall can run now */
 /* The same for a game function with Watcom's register convention (EAX EDX EBX ECX, then nstack
    arguments on the stack, the callee pops them): from a shim, a registered stdcall function or

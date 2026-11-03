@@ -349,6 +349,11 @@ uint32_t recomp_callback(uint32_t fn, int nargs, const uint32_t *args)
     return call_stdcall(fn, nargs, args);
 }
 
+int recomp_replacing(void)
+{
+    return g_mode == MODE_REPLACE;
+}
+
 int recomp_in_shim(void)
 {
     return g_shim_ctx != NULL;

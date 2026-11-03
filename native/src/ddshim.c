@@ -39,6 +39,7 @@
 #include "log.h"
 #include "packets.h"
 #include "recomp.h"
+#include "shim.h"
 
 #define G_IAT_DIRECTDRAWCREATE    0x5083BCu
 #define G_IAT_DIRECTDRAWENUMERATE 0x5083C0u
@@ -155,12 +156,25 @@ enum { DD4_METHODS(SLOT_ENUM) DD4_SLOTS };
 #undef SLOT_ENUM
 #define SET(vt, slot, fn) ((vt)[slot] = (void *)(fn))
 
-/* the game's enumeration callbacks run as recompiled code in the recompiled game (recomp.h) */
-static HRESULT game_callback2(void *cb, void *a, void *b)
+/* what the game's callbacks read: a copy in guest memory (free it after the call) */
+static uint32_t guest_copy(const void *p, size_t n)
 {
-    uint32_t args[2];
-    args[0] = (uint32_t)(uintptr_t)a, args[1] = (uint32_t)(uintptr_t)b;
-    return (HRESULT)recomp_callback((uint32_t)(uintptr_t)cb, 2, args);
+    uint32_t g = guest_alloc(n);
+    if (g)
+        memcpy(GUEST(g), p, n);
+    return g;
+}
+
+/* the game's enumeration callbacks (pixel formats): recompiled code in the recompiled game
+   (recomp.h); cb and ctx are the game's own values */
+static HRESULT game_callback_pf(void *cb, const DDPIXELFORMAT *pf, void *ctx)
+{
+    uint32_t args[2], g = guest_copy(pf, sizeof *pf);
+    HRESULT r;
+    args[0] = g, args[1] = (uint32_t)(uintptr_t)ctx;
+    r = (HRESULT)recomp_callback((uint32_t)(uintptr_t)cb, 2, args);
+    guest_free(g);
+    return r;
 }
 
 /* argument counts (with this) per slot, from the same lists */
@@ -181,7 +195,7 @@ typedef struct viewport viewport;
 typedef struct material material;
 
 struct ddraw {
-    void **vt1, **vt4, **vt3d;
+    uint32_t vt1, vt4, vt3d;   /* the interfaces: vtable addresses the game reads (game addresses) */
     LONG ref;
     HWND hwnd;
     int mode_w, mode_h, mode_bpp;
@@ -190,7 +204,7 @@ struct ddraw {
 enum { K_PRIMARY, K_BACK, K_ZBUF, K_TEXTURE, K_OFFSCREEN };
 
 struct surface {
-    void **vt4, **vt1, **vtex;
+    uint32_t vt4, vt1, vtex;
     LONG ref;
     ddraw *dd;
     int kind;
@@ -222,7 +236,7 @@ static struct { uint8_t op, blend, src, dst; unsigned draws, verts; float z0, z1
 static unsigned g_iv_exact, g_iv_borrowed, g_iv_static;
 
 struct device {
-    void **vt;
+    uint32_t vt;
     LONG ref;
     ddraw *dd;
     surface *target;
@@ -233,24 +247,53 @@ struct device {
 };
 
 struct viewport {
-    void **vt;
+    uint32_t vt;
     LONG ref;
     D3DVIEWPORT2 v;
     D3DMATERIALHANDLE bg;
 };
 
 struct material {
-    void **vt;
+    uint32_t vt;
     LONG ref;
     D3DMATERIAL m;
 };
 
 typedef struct {
-    void **vt;
+    uint32_t vt;
     LONG ref;
 } clipper;
 
 #define FROM(type, field, p) ((type *)((uint8_t *)(p) - offsetof(type, field)))
+
+/* Our objects live in guest memory: the game holds pointers to their interfaces (the vtable
+   fields) and reads the vtables. Interface pointers going back to the game go into its memory as
+   game addresses. */
+static void *guest_new(size_t n)
+{
+    uint32_t g = guest_alloc(n);
+    return g ? GUEST(g) : NULL;
+}
+
+static void guest_delete(void *p)
+{
+    if (p)
+        guest_free(GADDR(p));
+}
+
+static void put_iface(void **out, const uint32_t *iface)
+{
+    *(uint32_t *)out = iface ? GADDR(iface) : 0;
+}
+
+static void *got_iface(void **out)
+{
+    uint32_t v = *(uint32_t *)out;
+    return v ? GUEST(v) : NULL;
+}
+
+static uint32_t vtable_of(void **host_vt);   /* the vtable the game sees for one of ours */
+static int g_have_device;   /* ddshim_device_vtable */
 
 static gfx_options g_opt;
 static int g_installed;
@@ -415,14 +458,14 @@ static HRESULT WINAPI surf_qi(surface *s, REFIID r, void **out)
     if (!out)
         return E_POINTER;
     if (IsEqualIID(r, &IID_IDirectDrawSurface4) || IsEqualIID(r, &IID_IUnknown))
-        *out = &s->vt4;
+        put_iface(out, &s->vt4);
     else if (IsEqualIID(r, &IID_IDirectDrawSurface) || IsEqualIID(r, &IID_IDirectDrawSurface2) ||
              IsEqualIID(r, &IID_IDirectDrawSurface3))
-        *out = &s->vt1;
+        put_iface(out, &s->vt1);
     else if (IsEqualIID(r, &IID_IDirect3DTexture2) || IsEqualIID(r, &IID_IDirect3DTexture))
-        *out = &s->vtex;
+        put_iface(out, &s->vtex);
     else {
-        *out = NULL;
+        put_iface(out, NULL);
         return E_NOINTERFACE;
     }
     add_ref(&s->ref);
@@ -442,8 +485,8 @@ static ULONG surf_release_obj(surface *s)
             g_surfaces = s->next;
         if (s->next)
             s->next->prev = s->prev;
-        free(s->mem);
-        free(s);
+        guest_delete(s->mem);
+        guest_delete(s);
     }
     return (ULONG)(n < 0 ? 0 : n);
 }
@@ -499,22 +542,22 @@ static HRESULT WINAPI s_get_attached(void **i, LPDDSCAPS2 caps, void **out)
     surface *s = FROM(surface, vt4, i), *a = s->attached;
     if (!out)
         return DDERR_INVALIDPARAMS;
-    *out = NULL;
+    put_iface(out, NULL);
     if (!caps || !a)
         return DDERR_NOTFOUND;
     if ((caps->dwCaps & DDSCAPS_BACKBUFFER) && a->kind == K_BACK) {
         add_ref(&a->ref);
-        *out = &a->vt4;
+        put_iface(out, &a->vt4);
         return DD_OK;
     }
     if ((caps->dwCaps & DDSCAPS_ZBUFFER) && a->kind == K_ZBUF) {
         add_ref(&a->ref);
-        *out = &a->vt4;
+        put_iface(out, &a->vt4);
         return DD_OK;
     }
     if (s->kind == K_PRIMARY && (caps->dwCaps & DDSCAPS_ZBUFFER) && a->attached) {
         add_ref(&a->attached->ref);
-        *out = &a->attached->vt4;
+        put_iface(out, &a->attached->vt4);
         return DD_OK;
     }
     return DDERR_NOTFOUND;
@@ -529,7 +572,7 @@ static HRESULT WINAPI s_get_attached_v1(void **i, LPDDSCAPS caps, void **out)
     c2.dwCaps = caps ? caps->dwCaps : 0;
     hr = s_get_attached((void **)&s->vt4, &c2, out);
     if (SUCCEEDED(hr))
-        *out = &FROM(surface, vt4, *out)->vt1;
+        put_iface(out, &FROM(surface, vt4, got_iface(out))->vt1);
     return hr;
 }
 
@@ -543,9 +586,9 @@ static HRESULT WINAPI s_lock(void **i, LPRECT rc, LPDDSURFACEDESC2 d, DWORD flag
         return DDERR_UNSUPPORTED;
     fill_desc(s, d);
     d->dwFlags |= DDSD_LPSURFACE;
-    d->lpSurface = s->mem;
+    d->lpSurface = (LPVOID)(uintptr_t)GADDR(s->mem);   /* the game's pointer */
     if (rc)
-        d->lpSurface = s->mem + (size_t)rc->top * s->pitch + (size_t)rc->left * (s->pf.dwRGBBitCount / 8);
+        d->lpSurface = (LPVOID)(uintptr_t)GADDR(s->mem + (size_t)rc->top * s->pitch + (size_t)rc->left * (s->pf.dwRGBBitCount / 8));
     return DD_OK;
 }
 
@@ -744,7 +787,7 @@ static HRESULT WINAPI s_get_dd(void **i, void **out)
     if (!out)
         return DDERR_INVALIDPARAMS;
     add_ref(&s->dd->ref);
-    *out = &s->dd->vt4;
+    put_iface(out, &s->dd->vt4);
     return DD_OK;
 }
 
@@ -755,7 +798,7 @@ static HRESULT WINAPI t2_get_handle(void **i, void *dev, LPD3DTEXTUREHANDLE h)
 {
     (void)dev;
     if (h)
-        *h = (D3DTEXTUREHANDLE)(uintptr_t)FROM(surface, vtex, i);
+        *h = (D3DTEXTUREHANDLE)GADDR(FROM(surface, vtex, i));
     return D3D_OK;
 }
 
@@ -771,16 +814,16 @@ static HRESULT WINAPI t2_load(void **i, void **srci)
 
 static surface *surf_new(ddraw *dd, int kind, int w, int h, const DDPIXELFORMAT *pf, DWORD caps, DWORD caps2)
 {
-    surface *s = (surface *)calloc(1, sizeof *s);
+    surface *s = (surface *)guest_new(sizeof *s);
     if (!s)
         return NULL;
     s->next = g_surfaces;
     if (g_surfaces)
         g_surfaces->prev = s;
     g_surfaces = s;
-    s->vt4 = vt_surf4;
-    s->vt1 = vt_surf1;
-    s->vtex = vt_tex2;
+    s->vt4 = vtable_of(vt_surf4);
+    s->vt1 = vtable_of(vt_surf1);
+    s->vtex = vtable_of(vt_tex2);
     s->ref = 1;
     s->dd = dd;
     s->kind = kind;
@@ -792,9 +835,9 @@ static surface *surf_new(ddraw *dd, int kind, int w, int h, const DDPIXELFORMAT 
         s->pf = *pf;
     s->pitch = (LONG)w * (s->pf.dwRGBBitCount ? s->pf.dwRGBBitCount / 8 : 2);
     if (kind == K_TEXTURE || kind == K_OFFSCREEN) {
-        s->mem = (uint8_t *)calloc((size_t)s->pitch, (size_t)h);
+        s->mem = (uint8_t *)guest_new((size_t)s->pitch * (size_t)h);
         if (!s->mem) {
-            free(s);
+            guest_delete(s);
             return NULL;
         }
         s->dirty = 1;
@@ -807,14 +850,14 @@ static surface *surf_new(ddraw *dd, int kind, int w, int h, const DDPIXELFORMAT 
 static material *g_materials[64];
 static int g_nmat;
 
-static HRESULT WINAPI vp_qi(void **i, REFIID r, void **o) { (void)r; *o = i; add_ref(&FROM(viewport, vt, i)->ref); return S_OK; }
+static HRESULT WINAPI vp_qi(void **i, REFIID r, void **o) { (void)r; put_iface(o, (const uint32_t *)i); add_ref(&FROM(viewport, vt, i)->ref); return S_OK; }
 static ULONG WINAPI vp_addref(void **i) { return add_ref(&FROM(viewport, vt, i)->ref); }
 static ULONG WINAPI vp_release(void **i)
 {
     viewport *v = FROM(viewport, vt, i);
     LONG n = InterlockedDecrement(&v->ref);
     if (n == 0)
-        free(v);
+        guest_delete(v);
     return (ULONG)(n < 0 ? 0 : n);
 }
 static HRESULT WINAPI vp_set_bg(void **i, D3DMATERIALHANDLE h) { FROM(viewport, vt, i)->bg = h; return D3D_OK; }
@@ -825,7 +868,7 @@ static uint32_t bg_color(viewport *v)
 {
     int k;
     for (k = 0; k < g_nmat; k++)
-        if ((D3DMATERIALHANDLE)(uintptr_t)g_materials[k] == v->bg) {
+        if ((D3DMATERIALHANDLE)GADDR(g_materials[k]) == v->bg) {
             D3DCOLORVALUE c = g_materials[k]->m.diffuse;
             return ((uint32_t)(c.r * 255) << 16) | ((uint32_t)(c.g * 255) << 8) | (uint32_t)(c.b * 255);
         }
@@ -847,7 +890,7 @@ static HRESULT WINAPI vp_clear2(void **i, DWORD n, LPD3DRECT rects, DWORD flags,
     return D3D_OK;
 }
 
-static HRESULT WINAPI mat_qi(void **i, REFIID r, void **o) { (void)r; *o = i; add_ref(&FROM(material, vt, i)->ref); return S_OK; }
+static HRESULT WINAPI mat_qi(void **i, REFIID r, void **o) { (void)r; put_iface(o, (const uint32_t *)i); add_ref(&FROM(material, vt, i)->ref); return S_OK; }
 static ULONG WINAPI mat_addref(void **i) { return add_ref(&FROM(material, vt, i)->ref); }
 static ULONG WINAPI mat_release(void **i) { LONG n = InterlockedDecrement(&FROM(material, vt, i)->ref); return (ULONG)(n < 0 ? 0 : n); }
 static HRESULT WINAPI mat_set(void **i, LPD3DMATERIAL m) { if (m) FROM(material, vt, i)->m = *m; return D3D_OK; }
@@ -856,25 +899,25 @@ static HRESULT WINAPI mat_handle(void **i, void *dev, LPD3DMATERIALHANDLE h)
 {
     (void)dev;
     if (h)
-        *h = (D3DMATERIALHANDLE)(uintptr_t)FROM(material, vt, i);
+        *h = (D3DMATERIALHANDLE)GADDR(FROM(material, vt, i));
     return D3D_OK;
 }
 
-static HRESULT WINAPI clip_qi(void **i, REFIID r, void **o) { (void)r; *o = i; add_ref(&FROM(clipper, vt, i)->ref); return S_OK; }
+static HRESULT WINAPI clip_qi(void **i, REFIID r, void **o) { (void)r; put_iface(o, (const uint32_t *)i); add_ref(&FROM(clipper, vt, i)->ref); return S_OK; }
 static ULONG WINAPI clip_addref(void **i) { return add_ref(&FROM(clipper, vt, i)->ref); }
 static ULONG WINAPI clip_release(void **i)
 {
     clipper *c = FROM(clipper, vt, i);
     LONG n = InterlockedDecrement(&c->ref);
     if (n == 0)
-        free(c);
+        guest_delete(c);
     return (ULONG)(n < 0 ? 0 : n);
 }
 static HRESULT WINAPI clip_set_hwnd(void **i, DWORD f, HWND w) { (void)i; (void)f; (void)w; return DD_OK; }
 
 /* ------------------------------------------------------------------ device */
 
-static HRESULT WINAPI dev_qi(void **i, REFIID r, void **o) { (void)r; *o = i; add_ref(&FROM(device, vt, i)->ref); return S_OK; }
+static HRESULT WINAPI dev_qi(void **i, REFIID r, void **o) { (void)r; put_iface(o, (const uint32_t *)i); add_ref(&FROM(device, vt, i)->ref); return S_OK; }
 static ULONG WINAPI dev_addref(void **i) { return add_ref(&FROM(device, vt, i)->ref); }
 static ULONG WINAPI dev_release(void **i) { LONG n = InterlockedDecrement(&FROM(device, vt, i)->ref); return (ULONG)(n < 0 ? 0 : n); }
 static HRESULT WINAPI dev_ok1(void **i) { (void)i; return D3D_OK; }
@@ -892,7 +935,7 @@ static HRESULT WINAPI dev_get_vp(void **i, void **vp)
     device *d = FROM(device, vt, i);
     if (!vp)
         return DDERR_INVALIDPARAMS;
-    *vp = d->vp ? &d->vp->vt : NULL;
+    put_iface(vp, d->vp ? &d->vp->vt : NULL);
     if (d->vp)
         add_ref(&d->vp->ref);
     return D3D_OK;
@@ -905,10 +948,10 @@ static HRESULT WINAPI dev_enum_tex_formats(void **i, LPD3DENUMPIXELFORMATSCALLBA
     if (!cb)
         return DDERR_INVALIDPARAMS;
     set_pf_1555(&pf);
-    if (game_callback2((void *)cb, &pf, ctx) == D3DENUMRET_CANCEL)
+    if (game_callback_pf((void *)cb, &pf, ctx) == D3DENUMRET_CANCEL)
         return D3D_OK;
     set_pf_565(&pf);
-    game_callback2((void *)cb, &pf, ctx);
+    game_callback_pf((void *)cb, &pf, ctx);
     return D3D_OK;
 }
 
@@ -918,7 +961,7 @@ static HRESULT WINAPI dev_get_d3d(void **i, void **out)
     if (!out)
         return DDERR_INVALIDPARAMS;
     add_ref(&d->dd->ref);
-    *out = &d->dd->vt3d;
+    put_iface(out, &d->dd->vt3d);
     return D3D_OK;
 }
 
@@ -963,8 +1006,8 @@ static HRESULT WINAPI dev_get_texture(void **i, DWORD stage, void **t)
     device *d = FROM(device, vt, i);
     if (!t)
         return DDERR_INVALIDPARAMS;
-    *t = (stage == 0 && d->tex) ? &d->tex->vtex : NULL;
-    if (*t)
+    put_iface(t, (stage == 0 && d->tex) ? &d->tex->vtex : NULL);
+    if (stage == 0 && d->tex)
         add_ref(&d->tex->ref);
     return D3D_OK;
 }
@@ -1633,38 +1676,42 @@ static HRESULT WINAPI d3_enum_devices(void **i, LPD3DENUMDEVICESCALLBACK cb, LPV
     fill_device_desc(&hw);
     fill_device_desc(&hel);
     {
+        static const char desc[] = "Direct3D HAL", name[] = "Modernization renderer";
         uint32_t a[6];
-        a[0] = (uint32_t)(uintptr_t)&IID_IDirect3DHALDevice, a[1] = (uint32_t)(uintptr_t)"Direct3D HAL";
-        a[2] = (uint32_t)(uintptr_t)"Modernization renderer", a[3] = (uint32_t)(uintptr_t)&hw;
-        a[4] = (uint32_t)(uintptr_t)&hel, a[5] = (uint32_t)(uintptr_t)ctx;
+        int k;
+        a[0] = guest_copy(&IID_IDirect3DHALDevice, sizeof(GUID)), a[1] = guest_copy(desc, sizeof desc);
+        a[2] = guest_copy(name, sizeof name), a[3] = guest_copy(&hw, sizeof hw);
+        a[4] = guest_copy(&hel, sizeof hel), a[5] = (uint32_t)(uintptr_t)ctx;
         recomp_callback((uint32_t)(uintptr_t)cb, 6, a);
+        for (k = 0; k < 5; k++)
+            guest_free(a[k]);
     }
     return D3D_OK;
 }
 
 static HRESULT WINAPI d3_create_material(void **i, void **out, IUnknown *u)
 {
-    material *m = (material *)calloc(1, sizeof *m);
+    material *m = (material *)guest_new(sizeof *m);
     (void)i; (void)u;
     if (!out || !m)
         return DDERR_OUTOFMEMORY;
-    m->vt = vt_mat3;
+    m->vt = vtable_of(vt_mat3);
     m->ref = 1;
     if (g_nmat < 64)
         g_materials[g_nmat++] = m;
-    *out = &m->vt;
+    put_iface(out, &m->vt);
     return D3D_OK;
 }
 
 static HRESULT WINAPI d3_create_viewport(void **i, void **out, IUnknown *u)
 {
-    viewport *v = (viewport *)calloc(1, sizeof *v);
+    viewport *v = (viewport *)guest_new(sizeof *v);
     (void)i; (void)u;
     if (!out || !v)
         return DDERR_OUTOFMEMORY;
-    v->vt = vt_vp3;
+    v->vt = vtable_of(vt_vp3);
     v->ref = 1;
-    *out = &v->vt;
+    put_iface(out, &v->vt);
     return D3D_OK;
 }
 
@@ -1675,10 +1722,10 @@ static HRESULT WINAPI d3_create_device(void **i, REFCLSID cls, void **target, vo
     (void)cls; (void)u;
     if (!out)
         return DDERR_INVALIDPARAMS;
-    d = (device *)calloc(1, sizeof *d);
+    d = (device *)guest_new(sizeof *d);
     if (!d)
         return DDERR_OUTOFMEMORY;
-    d->vt = vt_dev3;
+    d->vt = vtable_of(vt_dev3);
     d->ref = 1;
     d->dd = dd;
     d->target = target ? FROM(surface, vt4, target) : NULL;
@@ -1690,7 +1737,8 @@ static HRESULT WINAPI d3_create_device(void **i, REFCLSID cls, void **target, vo
     d->rs[D3DRENDERSTATE_DESTBLEND] = D3DBLEND_ZERO;
     d->rs[D3DRENDERSTATE_ALPHAFUNC] = D3DCMP_ALWAYS;
     ensure_gfx(dd);
-    *out = &d->vt;
+    g_have_device = 1;
+    put_iface(out, &d->vt);
     log_printf("ddshim: device created");
     return D3D_OK;
 }
@@ -1702,7 +1750,7 @@ static HRESULT WINAPI d3_enum_z(void **i, REFCLSID cls, LPD3DENUMPIXELFORMATSCAL
     if (!cb)
         return DDERR_INVALIDPARAMS;
     set_pf_z16(&pf);
-    game_callback2((void *)cb, &pf, ctx);
+    game_callback_pf((void *)cb, &pf, ctx);
     return D3D_OK;
 }
 
@@ -1715,13 +1763,13 @@ static HRESULT dd_qi(ddraw *dd, REFIID r, void **o)
     if (!o)
         return E_POINTER;
     if (IsEqualIID(r, &IID_IDirectDraw4))
-        *o = &dd->vt4;
+        put_iface(o, &dd->vt4);
     else if (IsEqualIID(r, &IID_IDirectDraw) || IsEqualIID(r, &IID_IUnknown))
-        *o = &dd->vt1;
+        put_iface(o, &dd->vt1);
     else if (IsEqualIID(r, &IID_IDirect3D3))
-        *o = &dd->vt3d;
+        put_iface(o, &dd->vt3d);
     else {
-        *o = NULL;
+        put_iface(o, NULL);
         return E_NOINTERFACE;
     }
     add_ref(&dd->ref);
@@ -1738,13 +1786,13 @@ static ULONG WINAPI d4_release(void **i) { LONG n = InterlockedDecrement(&FROM(d
 
 static HRESULT WINAPI d_create_clipper(void **i, DWORD f, void **out, IUnknown *u)
 {
-    clipper *c = (clipper *)calloc(1, sizeof *c);
+    clipper *c = (clipper *)guest_new(sizeof *c);
     (void)i; (void)f; (void)u;
     if (!out || !c)
         return DDERR_OUTOFMEMORY;
-    c->vt = vt_clip;
+    c->vt = vtable_of(vt_clip);
     c->ref = 1;
-    *out = &c->vt;
+    put_iface(out, &c->vt);
     return DD_OK;
 }
 
@@ -1844,7 +1892,7 @@ static HRESULT WINAPI d_create_surface(void **i, LPDDSURFACEDESC2 desc, void **o
     (void)u;
     if (!desc || !out)
         return DDERR_INVALIDPARAMS;
-    *out = NULL;
+    put_iface(out, NULL);
     w = (desc->dwFlags & DDSD_WIDTH) ? (int)desc->dwWidth : 0;
     h = (desc->dwFlags & DDSD_HEIGHT) ? (int)desc->dwHeight : 0;
 
@@ -1861,7 +1909,7 @@ static HRESULT WINAPI d_create_surface(void **i, LPDDSURFACEDESC2 desc, void **o
             s->attached = back;
         }
         ensure_gfx(dd);
-        *out = &s->vt4;
+        put_iface(out, &s->vt4);
         return DD_OK;
     }
     if (caps & DDSCAPS_ZBUFFER) {
@@ -1869,7 +1917,7 @@ static HRESULT WINAPI d_create_surface(void **i, LPDDSURFACEDESC2 desc, void **o
         s = surf_new(dd, K_ZBUF, w, h, &pf, caps, 0);
         if (!s)
             return DDERR_OUTOFMEMORY;
-        *out = &s->vt4;
+        put_iface(out, &s->vt4);
         return DD_OK;
     }
     if (caps & (DDSCAPS_TEXTURE | DDSCAPS_OFFSCREENPLAIN)) {
@@ -1887,7 +1935,7 @@ static HRESULT WINAPI d_create_surface(void **i, LPDDSURFACEDESC2 desc, void **o
             s->ck = desc->ddckCKSrcBlt;
             s->has_ck = 1;
         }
-        *out = &s->vt4;
+        put_iface(out, &s->vt4);
         return DD_OK;
     }
     log_printf("ddshim: CreateSurface with caps %08lX not supported", caps);
@@ -1971,11 +2019,250 @@ static void build_vtables(void)
     /* IDirectDrawClipper */
     SET(vt_clip, 0, clip_qi); SET(vt_clip, 1, clip_addref); SET(vt_clip, 2, clip_release);
     SET(vt_clip, 8, clip_set_hwnd);
-    /* every method, straight from the recompiled code (no stack-copying bridge) */
-#define REGISTER(iface)                                                                        {                                                                                              size_t k_;                                                                                 for (k_ = 0; k_ < sizeof nargs_##iface; k_++)                                                  recomp_register_stdcall(vt_##iface[k_], nargs_##iface[k_]);                        }
-    REGISTER(dd1) REGISTER(dd4) REGISTER(d3d3) REGISTER(surf1) REGISTER(surf4) REGISTER(dev3) REGISTER(vp3)
-    REGISTER(mat3) REGISTER(tex2) REGISTER(clip)
-#undef REGISTER
+}
+
+/* ------------------------------------------------------------------ the recompiled game's vtables
+ *
+ * The machine-code game calls our vtables (vt_*) directly. The recompiled game gets vtables of
+ * shim methods (shim.h) instead: per slot an adapter turns the game's 32-bit arguments into ours
+ * (pointers through GUEST with NULL kept; window handles, flags, values, the game's callbacks
+ * and their context as they are; a float from its bits) and calls that slot of our own vtable
+ * as it is now, so the hooks display.c, terrain.c and fog.c put there still run. Slots we don't
+ * implement go to their stub with the arguments unchanged (it ignores them). */
+
+#define AP(k) ((void *)(a[k] ? GUEST(a[k]) : NULL))
+#define AR(k) ((void *)(uintptr_t)a[k])
+#define AV(k) ((DWORD)a[k])
+#define TH ((void **)GUEST(a[0]))
+
+static float af(uint32_t v)
+{
+    float f;
+    memcpy(&f, &v, 4);
+    return f;
+}
+#define AF(k) af(a[k])
+
+typedef ULONG(WINAPI *f_u)(void **);
+typedef HRESULT(WINAPI *f_h)(void **);
+typedef HRESULT(WINAPI *f_p)(void **, void *);
+typedef HRESULT(WINAPI *f_v)(void **, DWORD);
+typedef HRESULT(WINAPI *f_pp)(void **, void *, void *);
+typedef HRESULT(WINAPI *f_vp)(void **, DWORD, void *);
+typedef HRESULT(WINAPI *f_pv)(void **, void *, DWORD);
+typedef HRESULT(WINAPI *f_vv)(void **, DWORD, DWORD);
+typedef HRESULT(WINAPI *f_ppp)(void **, void *, void *, void *);
+typedef HRESULT(WINAPI *f_vpp)(void **, DWORD, void *, void *);
+typedef HRESULT(WINAPI *f_vvp)(void **, DWORD, DWORD, void *);
+typedef HRESULT(WINAPI *f_vvv)(void **, DWORD, DWORD, DWORD);
+typedef HRESULT(WINAPI *f_vpv)(void **, DWORD, void *, DWORD);
+typedef HRESULT(WINAPI *f_pppp)(void **, void *, void *, void *, void *);
+typedef HRESULT(WINAPI *f_ppvp)(void **, void *, void *, DWORD, void *);
+typedef HRESULT(WINAPI *f_pppvp)(void **, void *, void *, void *, DWORD, void *);
+typedef HRESULT(WINAPI *f_vvppv)(void **, DWORD, DWORD, void *, void *, DWORD);
+typedef HRESULT(WINAPI *f_vvpvv)(void **, DWORD, DWORD, void *, DWORD, DWORD);
+typedef HRESULT(WINAPI *f_vvvvv)(void **, DWORD, DWORD, DWORD, DWORD, DWORD);
+typedef HRESULT(WINAPI *f_vpvvfv)(void **, DWORD, void *, DWORD, DWORD, float, DWORD);
+
+#define AD(iface, slot, ftype, ...)                                                                \
+    static uint32_t ad_##iface##_##slot(const uint32_t *a)                                         \
+    {                                                                                              \
+        return (uint32_t)((ftype)vt_##iface[slot])(TH, __VA_ARGS__);                               \
+    }
+#define AD0(iface, slot, ftype)                                                                    \
+    static uint32_t ad_##iface##_##slot(const uint32_t *a)                                         \
+    {                                                                                              \
+        return (uint32_t)((ftype)vt_##iface[slot])(TH);                                            \
+    }
+#define QI_ADDREF_RELEASE(iface)                                                                   \
+    AD(iface, 0, f_pp, AP(1), AP(2)) AD0(iface, 1, f_u) AD0(iface, 2, f_u)
+
+/* IDirectDraw */
+QI_ADDREF_RELEASE(dd1)
+AD(dd1, 4, f_vpp, AV(1), AP(2), AR(3))
+AD(dd1, 11, f_pp, AP(1), AP(2))
+AD0(dd1, 19, f_h)
+AD(dd1, 20, f_pv, AR(1), AV(2))
+AD(dd1, 21, f_vvv, AV(1), AV(2), AV(3))
+/* IDirectDraw4 */
+QI_ADDREF_RELEASE(dd4)
+AD(dd4, SLOT_CreateClipper, f_vpp, AV(1), AP(2), AR(3))
+AD(dd4, SLOT_CreateSurface, f_ppp, AP(1), AP(2), AR(3))
+AD0(dd4, SLOT_FlipToGDISurface, f_h)
+AD(dd4, SLOT_GetAvailableVidMem, f_ppp, AP(1), AP(2), AP(3))
+AD(dd4, SLOT_GetCaps, f_pp, AP(1), AP(2))
+AD(dd4, SLOT_GetDeviceIdentifier, f_pv, AP(1), AV(2))
+AD(dd4, SLOT_GetDisplayMode, f_p, AP(1))
+AD0(dd4, SLOT_RestoreAllSurfaces, f_h)
+AD0(dd4, SLOT_RestoreDisplayMode, f_h)
+AD(dd4, SLOT_SetCooperativeLevel, f_pv, AR(1), AV(2))
+AD(dd4, SLOT_SetDisplayMode, f_vvvvv, AV(1), AV(2), AV(3), AV(4), AV(5))
+AD0(dd4, SLOT_TestCooperativeLevel, f_h)
+/* IDirect3D3 */
+QI_ADDREF_RELEASE(d3d3)
+AD(d3d3, 3, f_pp, AR(1), AR(2))
+AD(d3d3, 5, f_pp, AP(1), AR(2))
+AD(d3d3, 6, f_pp, AP(1), AR(2))
+AD(d3d3, 8, f_pppp, AP(1), AP(2), AP(3), AR(4))
+AD(d3d3, 10, f_ppp, AP(1), AR(2), AR(3))
+AD0(d3d3, 11, f_h)
+/* IDirectDrawSurface */
+QI_ADDREF_RELEASE(surf1)
+AD(surf1, 12, f_pp, AP(1), AP(2))
+AD(surf1, 14, f_p, AP(1))
+AD(surf1, 20, f_p, AR(1))
+AD(surf1, 21, f_p, AP(1))
+AD(surf1, 22, f_p, AP(1))
+AD0(surf1, 24, f_h)
+AD0(surf1, 27, f_h)
+AD(surf1, 32, f_p, AR(1))
+/* IDirectDrawSurface4 */
+QI_ADDREF_RELEASE(surf4)
+AD(surf4, 3, f_p, AP(1))
+AD(surf4, 5, f_pppvp, AP(1), AP(2), AP(3), AV(4), AP(5))
+AD(surf4, 7, f_vvppv, AV(1), AV(2), AP(3), AP(4), AV(5))
+AD(surf4, 11, f_pv, AP(1), AV(2))
+AD(surf4, 12, f_pp, AP(1), AP(2))
+AD(surf4, 13, f_p, AR(1))
+AD(surf4, 14, f_p, AP(1))
+AD(surf4, 15, f_p, AR(1))
+AD(surf4, 16, f_vp, AV(1), AP(2))
+AD(surf4, 18, f_p, AR(1))
+AD(surf4, 20, f_p, AR(1))
+AD(surf4, 21, f_p, AP(1))
+AD(surf4, 22, f_p, AP(1))
+AD0(surf4, 24, f_h)
+AD(surf4, 25, f_ppvp, AP(1), AP(2), AV(3), AR(4))
+AD0(surf4, 27, f_h)
+AD(surf4, 28, f_p, AR(1))
+AD(surf4, 29, f_vp, AV(1), AP(2))
+AD(surf4, 32, f_p, AP(1))
+AD(surf4, 36, f_p, AP(1))
+AD(surf4, 37, f_p, AR(1))
+AD(surf4, 38, f_p, AR(1))
+AD(surf4, 43, f_p, AP(1))
+AD0(surf4, 44, f_h)
+/* IDirect3DTexture2 */
+QI_ADDREF_RELEASE(tex2)
+AD(tex2, 3, f_pp, AP(1), AP(2))
+AD(tex2, 4, f_vv, AV(1), AV(2))
+AD(tex2, 5, f_p, AP(1))
+/* IDirect3DDevice3 */
+QI_ADDREF_RELEASE(dev3)
+AD(dev3, 3, f_pp, AP(1), AP(2))
+AD(dev3, 5, f_p, AP(1))
+AD(dev3, 6, f_p, AP(1))
+AD(dev3, 8, f_pp, AR(1), AR(2))
+AD0(dev3, 9, f_h)
+AD0(dev3, 10, f_h)
+AD(dev3, 11, f_p, AP(1))
+AD(dev3, 12, f_p, AP(1))
+AD(dev3, 13, f_p, AP(1))
+AD(dev3, 21, f_vp, AV(1), AP(2))
+AD(dev3, 22, f_vv, AV(1), AV(2))
+AD(dev3, 28, f_vvpvv, AV(1), AV(2), AP(3), AV(4), AV(5))
+AD(dev3, 37, f_vp, AV(1), AP(2))
+AD(dev3, 38, f_vp, AV(1), AP(2))
+AD(dev3, 39, f_vvp, AV(1), AV(2), AP(3))
+AD(dev3, 40, f_vvv, AV(1), AV(2), AV(3))
+AD(dev3, 41, f_p, AP(1))
+/* IDirect3DViewport3 */
+QI_ADDREF_RELEASE(vp3)
+AD(vp3, 8, f_v, AV(1))
+AD(vp3, 12, f_vpv, AV(1), AP(2), AV(3))
+AD(vp3, 16, f_p, AP(1))
+AD(vp3, 17, f_p, AP(1))
+AD(vp3, 20, f_vpvvfv, AV(1), AP(2), AV(3), AV(4), AF(5), AV(6))
+/* IDirect3DMaterial3 */
+QI_ADDREF_RELEASE(mat3)
+AD(mat3, 3, f_p, AP(1))
+AD(mat3, 4, f_p, AP(1))
+AD(mat3, 5, f_pp, AP(1), AP(2))
+/* IDirectDrawClipper */
+QI_ADDREF_RELEASE(clip)
+AD(clip, 8, f_vp, AV(1), AR(2))
+
+typedef struct { int slot; shim_fn fn; } adapter;
+#define A(iface, slot) { slot, ad_##iface##_##slot }
+#define A_QAR(iface) A(iface, 0), A(iface, 1), A(iface, 2)
+static const adapter ad_dd1[] = { A_QAR(dd1), A(dd1, 4), A(dd1, 11), A(dd1, 19), A(dd1, 20), A(dd1, 21) };
+static const adapter ad_dd4[] = { A_QAR(dd4), A(dd4, SLOT_CreateClipper), A(dd4, SLOT_CreateSurface),
+                                  A(dd4, SLOT_FlipToGDISurface), A(dd4, SLOT_GetAvailableVidMem), A(dd4, SLOT_GetCaps),
+                                  A(dd4, SLOT_GetDeviceIdentifier), A(dd4, SLOT_GetDisplayMode),
+                                  A(dd4, SLOT_RestoreAllSurfaces), A(dd4, SLOT_RestoreDisplayMode),
+                                  A(dd4, SLOT_SetCooperativeLevel), A(dd4, SLOT_SetDisplayMode),
+                                  A(dd4, SLOT_TestCooperativeLevel) };
+static const adapter ad_d3d3[] = { A_QAR(d3d3), A(d3d3, 3), A(d3d3, 5), A(d3d3, 6), A(d3d3, 8), A(d3d3, 10), A(d3d3, 11) };
+static const adapter ad_surf1[] = { A_QAR(surf1), A(surf1, 12), A(surf1, 14), A(surf1, 20), A(surf1, 21), A(surf1, 22),
+                                    A(surf1, 24), A(surf1, 27), A(surf1, 32) };
+static const adapter ad_surf4[] = { A_QAR(surf4), A(surf4, 3), A(surf4, 5), A(surf4, 7), A(surf4, 11), A(surf4, 12),
+                                    A(surf4, 13), A(surf4, 14), A(surf4, 15), A(surf4, 16), A(surf4, 18), A(surf4, 20),
+                                    A(surf4, 21), A(surf4, 22), A(surf4, 24), A(surf4, 25), A(surf4, 27), A(surf4, 28),
+                                    A(surf4, 29), A(surf4, 32), A(surf4, 36), A(surf4, 37), A(surf4, 38), A(surf4, 43),
+                                    A(surf4, 44) };
+static const adapter ad_tex2[] = { A_QAR(tex2), A(tex2, 3), A(tex2, 4), A(tex2, 5) };
+static const adapter ad_dev3[] = { A_QAR(dev3), A(dev3, 3), A(dev3, 5), A(dev3, 6), A(dev3, 8), A(dev3, 9), A(dev3, 10),
+                                   A(dev3, 11), A(dev3, 12), A(dev3, 13), A(dev3, 21), A(dev3, 22), A(dev3, 28),
+                                   A(dev3, 37), A(dev3, 38), A(dev3, 39), A(dev3, 40), A(dev3, 41) };
+static const adapter ad_vp3[] = { A_QAR(vp3), A(vp3, 8), A(vp3, 12), A(vp3, 16), A(vp3, 17), A(vp3, 20) };
+static const adapter ad_mat3[] = { A_QAR(mat3), A(mat3, 3), A(mat3, 4), A(mat3, 5) };
+static const adapter ad_clip[] = { A_QAR(clip), A(clip, 8) };
+#undef A
+#undef A_QAR
+
+static struct {
+    void **host;
+    const uint8_t *nargs;
+    int nslots;
+    const adapter *ad;
+    int nad;
+    uint32_t guest;   /* the vtable the recompiled game sees */
+} g_ifaces[] = {
+#define IFACE(iface) { vt_##iface, nargs_##iface, (int)sizeof nargs_##iface, ad_##iface, (int)(sizeof ad_##iface / sizeof ad_##iface[0]), 0 }
+    IFACE(dd1), IFACE(dd4), IFACE(d3d3), IFACE(surf1), IFACE(surf4), IFACE(tex2), IFACE(dev3), IFACE(vp3), IFACE(mat3),
+    IFACE(clip),
+#undef IFACE
+};
+
+/* every slot without an adapter returns "unsupported" (what its stub does), once logged */
+static uint32_t unimplemented(const uint32_t *a)
+{
+    static volatile LONG once;
+    (void)a;
+    if (InterlockedExchange(&once, 1) == 0)
+        log_printf("ddshim: the recompiled game called a method we don't implement");
+    return (uint32_t)DDERR_UNSUPPORTED;
+}
+
+static uint32_t vtable_of(void **host_vt)
+{
+    size_t k;
+    int s, j;
+    if (!recomp_replacing())
+        return (uint32_t)(uintptr_t)host_vt;   /* the machine-code game: our own vtable (DLL only) */
+    for (k = 0; k < sizeof g_ifaces / sizeof g_ifaces[0]; k++) {
+        if (g_ifaces[k].host != host_vt)
+            continue;
+        if (!g_ifaces[k].guest) {
+            uint32_t vt = guest_alloc(4 * (size_t)g_ifaces[k].nslots);
+            for (s = 0; s < g_ifaces[k].nslots && vt; s++) {
+                shim_fn fn = unimplemented;
+                for (j = 0; j < g_ifaces[k].nad; j++)
+                    if (g_ifaces[k].ad[j].slot == s)
+                        fn = g_ifaces[k].ad[j].fn;
+                GVAR(uint32_t, vt + 4u * (uint32_t)s) = shim_method(g_ifaces[k].nargs[s], fn);
+            }
+            g_ifaces[k].guest = vt;
+        }
+        return g_ifaces[k].guest;
+    }
+    log_printf("ddshim: no guest vtable for %p", (void *)host_vt);
+    return (uint32_t)(uintptr_t)host_vt;
+}
+
+void **ddshim_device_vtable(void)
+{
+    return g_have_device ? vt_dev3 : NULL;
 }
 
 /* The intro video (CAPCOM.AVI) plays through MCI into the game window at a
@@ -2014,14 +2301,14 @@ static HRESULT WINAPI shim_direct_draw_create(GUID *guid, void **out, IUnknown *
     (void)guid; (void)u;
     if (!out)
         return DDERR_INVALIDPARAMS;
-    dd = (ddraw *)calloc(1, sizeof *dd);
+    dd = (ddraw *)guest_new(sizeof *dd);
     if (!dd)
         return DDERR_OUTOFMEMORY;
-    dd->vt1 = vt_dd1;
-    dd->vt4 = vt_dd4;
-    dd->vt3d = vt_d3d3;
+    dd->vt1 = vtable_of(vt_dd1);
+    dd->vt4 = vtable_of(vt_dd4);
+    dd->vt3d = vtable_of(vt_d3d3);
     dd->ref = 1;
-    *out = &dd->vt1;
+    put_iface(out, &dd->vt1);
     return DD_OK;
 }
 
@@ -2038,10 +2325,13 @@ static HRESULT WINAPI shim_direct_draw_enumerate(LPDDENUMCALLBACKA cb, LPVOID ct
         log_printf("ddshim: MEGAMAN.CFG asked for the game's windowed mode, using fullscreen (window mode is ours)");
     }
     if (cb) {
+        static const char desc[] = "Modernization renderer", name[] = "display";
         uint32_t a[4];
-        a[0] = 0, a[1] = (uint32_t)(uintptr_t)"Modernization renderer", a[2] = (uint32_t)(uintptr_t)"display";
+        a[0] = 0, a[1] = guest_copy(desc, sizeof desc), a[2] = guest_copy(name, sizeof name);
         a[3] = (uint32_t)(uintptr_t)ctx;
         recomp_callback((uint32_t)(uintptr_t)cb, 4, a);
+        guest_free(a[1]);
+        guest_free(a[2]);
     }
     return DD_OK;
 }
@@ -2062,6 +2352,22 @@ int ddshim_video_begin(HWND w)
     return 1;
 }
 
+/* the same three for the recompiled game (shim ABI) */
+static uint32_t sh_direct_draw_create(const uint32_t *a)
+{
+    return (uint32_t)shim_direct_draw_create((GUID *)AP(0), (void **)AP(1), (IUnknown *)AR(2));
+}
+
+static uint32_t sh_direct_draw_enumerate(const uint32_t *a)
+{
+    return (uint32_t)shim_direct_draw_enumerate((LPDDENUMCALLBACKA)AR(0), AR(1));
+}
+
+static uint32_t sh_mci_send_string(const uint32_t *a)
+{
+    return (uint32_t)shim_mci_send_string((LPCSTR)AP(0), (LPSTR)AP(1), (UINT)a[2], (HWND)AR(3));
+}
+
 int ddshim_install(const gfx_options *opt)
 {
     void *create = (void *)shim_direct_draw_create, *enumerate = (void *)shim_direct_draw_enumerate;
@@ -2070,9 +2376,9 @@ int ddshim_install(const gfx_options *opt)
     g_real_mci = *(MCIERROR(WINAPI **)(LPCSTR, LPSTR, UINT, HWND))G_IAT_MCISENDSTRINGA;
     mem_write(G_IAT_MCISENDSTRINGA, &mci, sizeof mci);
     build_vtables();
-    recomp_register_stdcall(create, 3);
-    recomp_register_stdcall(enumerate, 2);
-    recomp_register_stdcall(mci, 4);
+    shim_add_target((uint32_t)(uintptr_t)create, 3, sh_direct_draw_create);   /* the recompiled game's calls */
+    shim_add_target((uint32_t)(uintptr_t)enumerate, 2, sh_direct_draw_enumerate);
+    shim_add_target((uint32_t)(uintptr_t)mci, 4, sh_mci_send_string);
     if (!mem_write(G_IAT_DIRECTDRAWCREATE, &create, sizeof create) ||
         !mem_write(G_IAT_DIRECTDRAWENUMERATE, &enumerate, sizeof enumerate))
         return 0;
