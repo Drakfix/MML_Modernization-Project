@@ -2372,8 +2372,10 @@ static uint32_t sh_mci_send_string(const uint32_t *a)
 
 int ddshim_install(const gfx_options *opt)
 {
-    void *create = (void *)shim_direct_draw_create, *enumerate = (void *)shim_direct_draw_enumerate;
-    void *mci = (void *)shim_mci_send_string;
+    /* as the game knows them (recomp.h): our functions in mml.dll, keys in the runner */
+    uint32_t create = recomp_routine_address((void *)shim_direct_draw_create);
+    uint32_t enumerate = recomp_routine_address((void *)shim_direct_draw_enumerate);
+    uint32_t mci = recomp_routine_address((void *)shim_mci_send_string);
     g_opt = *opt;
 #ifdef MML_RUNNER
     g_real_mci = NULL;   /* no MCI: the game's own intro player can't play (ours does) */
@@ -2382,9 +2384,9 @@ int ddshim_install(const gfx_options *opt)
 #endif
     mem_write(G_IAT_MCISENDSTRINGA, &mci, sizeof mci);
     build_vtables();
-    shim_add_target((uint32_t)(uintptr_t)create, 3, sh_direct_draw_create);   /* the recompiled game's calls */
-    shim_add_target((uint32_t)(uintptr_t)enumerate, 2, sh_direct_draw_enumerate);
-    shim_add_target((uint32_t)(uintptr_t)mci, 4, sh_mci_send_string);
+    shim_add_target(create, 3, sh_direct_draw_create);   /* the recompiled game's calls */
+    shim_add_target(enumerate, 2, sh_direct_draw_enumerate);
+    shim_add_target(mci, 4, sh_mci_send_string);
     if (!mem_write(G_IAT_DIRECTDRAWCREATE, &create, sizeof create) ||
         !mem_write(G_IAT_DIRECTDRAWENUMERATE, &enumerate, sizeof enumerate))
         return 0;

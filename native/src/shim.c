@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "log.h"
+#include "recomp.h"
 #include "shim.h"
 
 #define SHIM_SLOTS 1024u
@@ -77,7 +78,20 @@ int shim_find(uint32_t target, shim_fn *fn, int *nargs)
 
 static const uint8_t *g_exe;
 static const IMAGE_NT_HEADERS *g_nt;
+#ifndef MML_RUNNER
 static uint32_t g_self_lo, g_self_hi;   /* mml.dll's image */
+#endif
+
+/* a slot holding one of our routines: a mod replaced the import (recomp.h: in mml.dll our own
+   address, in the runner a stand-in for it, never in our image's range) */
+static int ours(uint32_t a)
+{
+#ifdef MML_RUNNER
+    return recomp_routine_host(a) != NULL;
+#else
+    return a >= g_self_lo && a < g_self_hi;
+#endif
+}
 
 /* the exe's import slot for dll!name, or 0 */
 static uint32_t import_slot(const char *dll, const char *name)
@@ -138,7 +152,7 @@ int shim_add(const char *dll, const char *name, int nargs, shim_fn fn)
         return 0;
     }
     real = GVAR(uint32_t, slot);
-    if (real >= g_self_lo && real < g_self_hi) {
+    if (ours(real)) {
         /* one of our mods replaced this import (GetTickCount: the frame pacing); its function
            stays what the game calls */
         log_printf("shims: %s!%s is hooked by mml.dll, left to the hook", dll, name);
@@ -231,6 +245,7 @@ void shims_install(const char *ini, const char *game_dir)
     g_exe = (const uint8_t *)GetModuleHandleA(NULL);
 #endif
     g_nt = (const IMAGE_NT_HEADERS *)(g_exe + ((const IMAGE_DOS_HEADER *)g_exe)->e_lfanew);
+#ifndef MML_RUNNER
     {
         HMODULE self;
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -241,6 +256,7 @@ void shims_install(const char *ini, const char *game_dir)
             g_self_hi = g_self_lo + nt->OptionalHeader.SizeOfImage;
         }
     }
+#endif
     shim_add("KERNEL32.dll", "GetLastError", 0, sh_get_last_error);
     shim_add("KERNEL32.dll", "SetLastError", 1, sh_set_last_error);
     shim_kernel32_install();

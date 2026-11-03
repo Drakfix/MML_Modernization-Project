@@ -62,6 +62,7 @@ static const struct { uintptr_t at; uint8_t rel; } g_terrain[] = {
 #define G_NCLIP_TRUNC_CALL 0x4EFD6Bu   /* in gte_nclip: call 0x4F915C (round toward zero), then fistp */
 #define G_FPU_TRUNC        0x4F915Cu
 
+#ifndef MML_RUNNER
 static const uintptr_t g_fpu_trunc = G_FPU_TRUNC;
 
 /* st(0) = cross product in, rounded value out; preserves every register */
@@ -96,6 +97,7 @@ static __declspec(naked) void nclip_round(void)
         ret
     }
 }
+#endif
 
 /* the same for the recompiled game, on ST0 as a value; 0x4F915C truncates (FRNDINT with the
    rounding control set to "toward zero") */
@@ -151,16 +153,22 @@ int lod_no_subdiv(void)
 static int keep_small_triangles(void)
 {
     uint8_t expect[5] = { 0xE8 }, call[5] = { 0xE8 };
+    void *routine;
     int32_t rel = (int32_t)(G_FPU_TRUNC - (G_NCLIP_TRUNC_CALL + 5));
     memcpy(expect + 1, &rel, 4);
     if (!mem_expect(G_NCLIP_TRUNC_CALL, expect, sizeof expect)) {
         log_printf("lod: NCLIP code unexpected, small triangles left alone");
         return 0;
     }
-    rel = (int32_t)((uintptr_t)nclip_round - (G_NCLIP_TRUNC_CALL + 5));
+#ifndef MML_RUNNER
+    routine = (void *)nclip_round;
+#else
+    routine = (void *)nclip_round_c;   /* no machine code: the C version is all, known by this one */
+#endif
+    rel = (int32_t)(recomp_routine_address(routine) - (G_NCLIP_TRUNC_CALL + 5));
     memcpy(call + 1, &rel, 4);
     mem_write(G_NCLIP_TRUNC_CALL, call, sizeof call);
-    recomp_register_st0((void *)nclip_round, nclip_round_c);
+    recomp_register_st0(routine, nclip_round_c);
     log_printf("lod: sub-pixel triangles kept (NCLIP rounds away from 0)");
     return 1;
 }

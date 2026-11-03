@@ -11,7 +11,15 @@ void recomp_census_tick(void);
 /* Machine code that recompiled code calls returns to our bridge, so the return address it sees
    is the bridge's. Code that tells its callers apart by return address passes what it saw
    through this to get the game's own (anything else comes back unchanged). */
-uint32_t __cdecl recomp_return_address(uint32_t seen);
+uint32_t __cdecl recomp_return_address(uintptr_t seen);
+
+/* The address the game's code knows one of our routines by: the target of a JMP or CALL our
+   patches write into its code, a function pointer we put in its memory (an import slot). In
+   mml.dll the routine's own address (the machine code jumps there). In the runner a stand-in in
+   the game's address space (our addresses needn't fit in 32 bits): the key the dispatcher finds
+   the routine's registration by, never executed. recomp_routine_host gives the routine back. */
+uint32_t recomp_routine_address(void *routine);
+void *recomp_routine_host(uint32_t addr);
 
 /* Our assembly routines that the game's code CALLs or JMPs to (through our code patches) work on
    the game's registers and x87 stack, so in the recompiled game they would each need the full

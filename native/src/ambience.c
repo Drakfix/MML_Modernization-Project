@@ -53,6 +53,7 @@ static uint32_t bank_entry(uint32_t id)
     return 0;
 }
 
+#ifndef MML_RUNNER
 /* called as sound_stop_fn: cdecl (entry) -> watcall EAX = entry */
 typedef void(__cdecl *sound_stop_fn)(uint32_t entry);
 static __declspec(naked) void sound_stop_thunk(void)
@@ -66,6 +67,7 @@ static __declspec(naked) void sound_stop_thunk(void)
         ret
     }
 }
+#endif
 
 /* the room's sound is about to start (EDX = 0x77E784) */
 static void on_room_sound(regs_t *r)
@@ -85,7 +87,9 @@ static void on_room_sound(regs_t *r)
                 regs[0] = g_looping_entry, regs[1] = regs[2] = regs[3] = 0;
                 recomp_call_watcall(G_FN_SOUND_STOP, regs, 0, NULL);
             } else {
+#ifndef MML_RUNNER   /* (the runner always runs the game recompiled) */
                 ((sound_stop_fn)(void *)sound_stop_thunk)(g_looping_entry);
+#endif
             }
         }
         g_looping_entry = 0;

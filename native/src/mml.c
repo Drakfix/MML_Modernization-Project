@@ -333,7 +333,7 @@ static DWORD WINAPI rebased_gettickcount(void)
         return g_real_gettickcount() - g_tick_base;
     QueryPerformanceCounter(&now);
     ms = (double)(now.QuadPart - g_qpc_base.QuadPart) * 1000.0 / (double)g_qpc_freq.QuadPart;
-    if (recomp_return_address((uint32_t)(uintptr_t)_ReturnAddress()) == G_DRAW_RET) {
+    if (recomp_return_address((uintptr_t)_ReturnAddress()) == G_DRAW_RET) {
         static int skipped;
         perf_iteration(ms);
         double deadline = GVAR(float, G_FRAME_LIMITER_TH);
@@ -349,7 +349,7 @@ static DWORD WINAPI rebased_gettickcount(void)
         }
     }
     /* the game waits for its next frame by spinning on this call: sleep instead */
-    if (recomp_return_address((uint32_t)(uintptr_t)_ReturnAddress()) == G_SPIN_RET) {
+    if (recomp_return_address((uintptr_t)_ReturnAddress()) == G_SPIN_RET) {
         double left;
         if (g_perf_first_wait == 0.0)
             g_perf_first_wait = ms;
@@ -425,7 +425,9 @@ static void on_frame(regs_t *r)
     if (g_bglayer_on)
         bglayer_frame_end();
     watch_frame();
-    recomp_census_tick();
+#ifndef MML_RUNNER
+    recomp_census_tick();   /* (the census lists what reaches machine code: none in the runner) */
+#endif
     if (g_player_log) {
         /* dev: log every player state change (player struct 0x5F8364) */
         static uint32_t last = 0xFFFFFFFF;
@@ -485,7 +487,8 @@ static void install_timing(void)
         g_tick_base = g_real_gettickcount();
         QueryPerformanceFrequency(&g_qpc_freq);
         QueryPerformanceCounter(&g_qpc_base);
-        mem_write(G_IAT_GETTICKCOUNT, &mine, sizeof mine);
+        uint32_t at = recomp_routine_address(mine);
+        mem_write(G_IAT_GETTICKCOUNT, &at, sizeof at);
         recomp_register_stdcall(mine, 0);   /* the frame wait spins on it: no bridge */
         log_printf("timing: GetTickCount rebased");
     }

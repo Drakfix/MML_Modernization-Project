@@ -4,7 +4,9 @@
 #include "guest.h"
 #include "hook.h"
 #include "log.h"
+#include "recomp.h"
 
+#ifndef MML_RUNNER
 static uint8_t *g_stub_page;
 static size_t g_stub_used;
 
@@ -22,6 +24,7 @@ static uint8_t *stub_alloc(size_t n)
     g_stub_used += (n + 15) & ~(size_t)15;
     return p;
 }
+#endif
 
 int mem_expect(uintptr_t addr, const void *bytes, size_t n)
 {
@@ -95,23 +98,13 @@ static void put_rel32(uint8_t *at, uintptr_t from_next, uintptr_t target)
     memcpy(at, &rel, 4);
 }
 
-int hook_mid(uintptr_t site, size_t steal, const uint8_t *expect, hook_fn fn)
+#ifndef MML_RUNNER
+/* machine code: save the registers, call fn(regs), replay the stolen instructions, jump back */
+static uint8_t *make_stub(uintptr_t site, size_t steal, const uint8_t *expect, hook_fn fn)
 {
-    uint8_t *s, *p;
-    uint8_t jmp[16];
-    size_t i;
-
-    if (steal < 5 || steal > sizeof jmp) {
-        log_printf("hook %08X: bad steal size %u", (unsigned)site, (unsigned)steal);
-        return 0;
-    }
-    if (!mem_expect(site, expect, steal)) {
-        log_printf("hook %08X: unexpected bytes, not hooking", (unsigned)site);
-        return 0;
-    }
-    s = stub_alloc(32 + steal);
+    uint8_t *s = stub_alloc(32 + steal), *p;
     if (!s)
-        return 0;
+        return NULL;
 
     p = s;
     *p++ = 0x9C;                 /* pushfd */
@@ -130,7 +123,7 @@ int hook_mid(uintptr_t site, size_t steal, const uint8_t *expect, hook_fn fn)
         uintptr_t target;
         if (steal != 5) {
             log_printf("hook %08X: relative branch must be stolen alone", (unsigned)site);
-            return 0;
+            return NULL;
         }
         memcpy(&rel, expect + 1, 4);
         target = site + 5 + rel;
@@ -145,9 +138,39 @@ int hook_mid(uintptr_t site, size_t steal, const uint8_t *expect, hook_fn fn)
     put_rel32(p, (uintptr_t)p + 4, site + steal);
     p += 4;
     FlushInstructionCache(GetCurrentProcess(), s, (size_t)(p - s));
+    return s;
+}
+#endif
+
+int hook_mid(uintptr_t site, size_t steal, const uint8_t *expect, hook_fn fn)
+{
+    uint8_t jmp[16];
+    uint32_t target;
+    size_t i;
+
+    if (steal < 5 || steal > sizeof jmp) {
+        log_printf("hook %08X: bad steal size %u", (unsigned)site, (unsigned)steal);
+        return 0;
+    }
+    if (!mem_expect(site, expect, steal)) {
+        log_printf("hook %08X: unexpected bytes, not hooking", (unsigned)site);
+        return 0;
+    }
+#ifdef MML_RUNNER
+    /* no machine code runs: the recompiled game calls fn at the site itself (rt_hook), and the
+       JMP only marks the site (to a stand-in address for fn, recomp.h) */
+    target = recomp_routine_address((void *)fn);
+#else
+    {
+        uint8_t *s = make_stub(site, steal, expect, fn);
+        if (!s)
+            return 0;
+        target = (uint32_t)(uintptr_t)s;
+    }
+#endif
 
     jmp[0] = 0xE9;
-    put_rel32(jmp + 1, site + 5, (uintptr_t)s);
+    put_rel32(jmp + 1, site + 5, target);
     for (i = 5; i < steal; i++)
         jmp[i] = 0x90;
     if (g_nhooks < sizeof g_hooks / sizeof g_hooks[0]) {   /* recompiled code calls fn at the site itself */

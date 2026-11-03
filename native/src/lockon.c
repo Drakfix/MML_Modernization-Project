@@ -60,6 +60,7 @@ static int g_test_reticle;
 
 static int16_t PS16(uint32_t o) { return GVAR(int16_t, G_PLAYER + o); }
 
+#ifndef MML_RUNNER
 typedef uint32_t(__cdecl *obj_from_id_fn)(uint32_t id);
 static __declspec(naked) void obj_from_id_thunk(void)   /* called as obj_from_id_fn */
 {
@@ -82,6 +83,7 @@ static __declspec(naked) void obj_from_id_thunk(void)   /* called as obj_from_id
         ret
     }
 }
+#endif
 
 static void collect(void)
 {
@@ -229,7 +231,9 @@ static void on_target_store(regs_t *r)
         regs[0] = (uint32_t)g_lock_id, regs[1] = regs[2] = regs[3] = 0;
         r->eax = recomp_call_watcall(G_FN_OBJ_FROM_ID, regs, 0, NULL);
     } else {
+#ifndef MML_RUNNER   /* (the runner always runs the game recompiled) */
         r->eax = ((obj_from_id_fn)(void *)obj_from_id_thunk)((uint32_t)g_lock_id);
+#endif
     }
 }
 

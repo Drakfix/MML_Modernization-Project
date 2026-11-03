@@ -59,6 +59,7 @@ static void call_watcom0(uintptr_t fn)
         recomp_call_watcall((uint32_t)fn, none, 0, NULL);
         return;
     }
+#ifndef MML_RUNNER   /* the game's machine code (the runner has none: it always runs recompiled) */
     __asm {
         push ebx
         push esi
@@ -68,6 +69,7 @@ static void call_watcom0(uintptr_t fn)
         pop esi
         pop ebx
     }
+#endif
 }
 
 static uint64_t hash_bytes(const uint8_t *p, size_t n)

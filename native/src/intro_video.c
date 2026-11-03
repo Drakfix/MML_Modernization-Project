@@ -51,8 +51,10 @@ static struct {
 #define SDL_DEFAULT_PLAYBACK 0xFFFFFFFFu
 
 static char g_file[MAX_PATH];
-static volatile LONG g_handled;
+#ifndef MML_RUNNER
+static volatile LONG g_handled;   /* (intro_detour) */
 static uint8_t *g_trampoline;
+#endif
 
 /* per playback */
 static gfx_tex *g_tex;
@@ -229,6 +231,7 @@ done:
     return 1;
 }
 
+#ifndef MML_RUNNER
 /* entry detour on intro_play_avi: our player, or the original via the trampoline */
 static __declspec(naked) void intro_detour(void)
 {
@@ -246,6 +249,7 @@ static __declspec(naked) void intro_detour(void)
         ret
     }
 }
+#endif
 
 /* the same for the recompiled game (recomp.c): regs EAX ECX EDX EBX ESP EBP ESI EDI */
 static int intro_detour_c(const uint32_t regs[8])
@@ -258,6 +262,7 @@ int intro_video_install(const char *game_dir)
     static const uint8_t prologue[] = { 0x51, 0x56, 0x57, 0x83, 0xEC, 0x6C };   /* push ecx/esi/edi; sub esp,0x6c */
     uint8_t jmp[6] = { 0xE9, 0, 0, 0, 0, 0x90 };
     int32_t rel;
+    void *routine;
     snprintf(g_file, sizeof g_file, "%s\\Modernization\\intro.mpg", game_dir);
     if (GetFileAttributesA(g_file) == INVALID_FILE_ATTRIBUTES) {
         log_printf("intro: no %s, the original intro plays", g_file);
@@ -269,6 +274,7 @@ int intro_video_install(const char *game_dir)
         g_file[0] = 0;
         return 0;
     }
+#ifndef MML_RUNNER
     /* trampoline: the stolen prologue, then back into the original */
     g_trampoline = (uint8_t *)VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (!g_trampoline)
@@ -277,11 +283,15 @@ int intro_video_install(const char *game_dir)
     g_trampoline[6] = 0xE9;
     rel = (int32_t)((G_FN_INTRO_PLAY_AVI + sizeof prologue) - ((uintptr_t)g_trampoline + 11));
     memcpy(g_trampoline + 7, &rel, 4);
-    rel = (int32_t)((uintptr_t)intro_detour - (G_FN_INTRO_PLAY_AVI + 5));
+    routine = (void *)intro_detour;
+#else
+    routine = (void *)intro_detour_c;   /* no machine code: the C version is all, known by this one */
+#endif
+    rel = (int32_t)(recomp_routine_address(routine) - (G_FN_INTRO_PLAY_AVI + 5));
     memcpy(jmp + 1, &rel, 4);
     if (!mem_write(G_FN_INTRO_PLAY_AVI, jmp, sizeof jmp))
         return 0;
-    recomp_register_detour((void *)intro_detour, G_FN_INTRO_PLAY_AVI, intro_detour_c, 0);
+    recomp_register_detour(routine, G_FN_INTRO_PLAY_AVI, intro_detour_c, 0);
     log_printf("intro: native player ready (%s)", g_file);
     return 1;
 }

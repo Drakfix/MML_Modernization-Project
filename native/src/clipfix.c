@@ -53,7 +53,10 @@ static slot g_table[TABLE_SIZE];
 static uint32_t g_build_gen = 2, g_draw_gen = 1;
 static unsigned g_fixed, g_applied;
 
+#ifndef MML_RUNNER
 static uintptr_t g_tramp;
+#endif
+static int g_installed;
 static uint32_t g_a_verts, g_a_uvs, g_a_out, g_a_count, g_a_site;
 static int g_report;
 
@@ -139,6 +142,7 @@ static void __cdecl clip_post(int produced)
     }
 }
 
+#ifndef MML_RUNNER
 static __declspec(naked) void clip_detour(void)
 {
     __asm {
@@ -165,6 +169,7 @@ static __declspec(naked) void clip_detour(void)
         ret 4
     }
 }
+#endif
 
 /* the recompiled game runs the clipper as C, not through clip_detour (recomp.h) */
 static void clip_pre_c(const uint32_t regs[8])
@@ -184,24 +189,33 @@ static void clip_post_c(uint32_t eax)
 int clipfix_install(void)
 {
     static const uint8_t prologue[8] = { 0x56, 0x57, 0x55, 0x89, 0xE5, 0x83, 0xEC, 0x74 };
-    uint8_t jmp[5] = { 0xE9 }, *tr;
+    uint8_t jmp[5] = { 0xE9 };
     int32_t rel;
+    void *routine;
     if (!mem_expect(G_FN_NEAR_CLIP, prologue, sizeof prologue)) {
         log_printf("clipfix: near clipper unexpected, left alone");
         return 0;
     }
-    tr = (uint8_t *)VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!tr)
-        return 0;
-    memcpy(tr, prologue, sizeof prologue);
-    tr[8] = 0xE9;
-    rel = (int32_t)((G_FN_NEAR_CLIP + sizeof prologue) - ((uintptr_t)tr + 13));
-    memcpy(tr + 9, &rel, 4);
-    g_tramp = (uintptr_t)tr;
-    rel = (int32_t)((uintptr_t)clip_detour - (G_FN_NEAR_CLIP + 5));
+#ifndef MML_RUNNER
+    {
+        uint8_t *tr = (uint8_t *)VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        if (!tr)
+            return 0;
+        memcpy(tr, prologue, sizeof prologue);
+        tr[8] = 0xE9;
+        rel = (int32_t)((G_FN_NEAR_CLIP + sizeof prologue) - ((uintptr_t)tr + 13));
+        memcpy(tr + 9, &rel, 4);
+        g_tramp = (uintptr_t)tr;
+    }
+    routine = (void *)clip_detour;
+#else
+    routine = (void *)clip_pre_c;   /* no machine code: the C version is all, known by this one */
+#endif
+    rel = (int32_t)(recomp_routine_address(routine) - (G_FN_NEAR_CLIP + 5));
     memcpy(jmp + 1, &rel, 4);
     mem_write(G_FN_NEAR_CLIP, jmp, sizeof jmp);
-    recomp_register_wrap((void *)clip_detour, G_FN_NEAR_CLIP, clip_pre_c, clip_post_c);
+    recomp_register_wrap(routine, G_FN_NEAR_CLIP, clip_pre_c, clip_post_c);
+    g_installed = 1;
     log_printf("clipfix: exact texture coordinates where the near plane cuts models");
     return 1;
 }
@@ -236,7 +250,7 @@ const gfx_vertex *clipfix_apply(const gfx_vertex *v, const gfx_vertex *raw, unsi
     static gfx_vertex fixed[4096];
     unsigned k;
     int copied = 0;
-    if (!g_tramp || n > 4096)
+    if (!g_installed || n > 4096)
         return v;
     for (k = 0; k < n; k++) {
         slot *s = probe(key_of(raw[k].x * 0.5f, raw[k].y * 0.5f), g_draw_gen);

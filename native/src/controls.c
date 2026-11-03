@@ -370,6 +370,7 @@ static int face_toward(int x, int z)
  * despite the name, with p1 == p2 it tests one point (shorts x, y, z) against
  * the level's collision cells, walls and floor heights; 0 = free. The follow
  * camera calls it the same way (p3 0x5110B0, p4 0xFFFF). */
+#ifndef MML_RUNNER
 typedef uint32_t(__cdecl *world_collision_fn)(void *p1, void *p2, uint32_t p3, uint32_t p4);
 static __declspec(naked) void world_collision_thunk(void)   /* called as world_collision_fn */
 {
@@ -391,6 +392,7 @@ static __declspec(naked) void world_collision_thunk(void)   /* called as world_c
         ret
     }
 }
+#endif
 
 static uint32_t cam_probe(double x, double y, double z)
 {
@@ -406,7 +408,11 @@ static uint32_t cam_probe(double x, double y, double z)
         regs[0] = regs[1] = GADDR(pt), regs[2] = G_CAM_COLLISION_PARAMS, regs[3] = 0xFFFF;
         return recomp_call_watcall(G_FN_WORLD_COLLISION, regs, 0, NULL);
     }
+#ifndef MML_RUNNER
     return ((world_collision_fn)(void *)world_collision_thunk)(pt, pt, G_CAM_COLLISION_PARAMS, 0xFFFF);
+#else
+    return 0;   /* (never: the runner always runs the game recompiled) */
+#endif
 }
 
 /* Same placement as cam_apply_angles: camera = target - dist * dir(yaw, p4)
