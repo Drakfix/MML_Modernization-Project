@@ -35,6 +35,7 @@
 #include "input.h"
 #include "lockon.h"
 #include "log.h"
+#include "recomp.h"
 #include "toast.h"
 
 typedef struct {
@@ -397,6 +398,11 @@ static uint32_t cam_probe(double x, double y, double z)
     pt[1] = (int16_t)iround(y);
     pt[2] = (int16_t)iround(z);
     pt[3] = 0;
+    if (recomp_in_shim()) {   /* the recompiled game: its own world_line_collision, no machine code */
+        uint32_t regs[4];
+        regs[0] = regs[1] = (uint32_t)(uintptr_t)pt, regs[2] = G_CAM_COLLISION_PARAMS, regs[3] = 0xFFFF;
+        return recomp_call_watcall(G_FN_WORLD_COLLISION, regs, 0, NULL);
+    }
     return ((world_collision_fn)(void *)world_collision_thunk)(pt, pt, G_CAM_COLLISION_PARAMS, 0xFFFF);
 }
 

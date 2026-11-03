@@ -68,6 +68,7 @@ enum { MODE_OFF, MODE_DIFF, MODE_REPLACE };
 static uint32_t t_id, t_eax, t_ecx, t_edx, t_ebx, t_esp, t_ebp, t_esi, t_edi, t_efl;
 static uint32_t t_new_esp, t_target, t_post_addr;
 static uint32_t g_host_free;   /* our private stack is free below this */
+static uint32_t guest_fs_base(void);
 /* Our own stacks: the private one, and the running thread fiber's. A stub entered while ESP is
    already on one of them (our C code called a game function directly, e.g. from a hook handler)
    carries on 256 KB below ESP: the game code uses the stack from ESP down as its own (its
@@ -205,6 +206,8 @@ static struct {
     double (*st0)(double);
     void (*pre)(const uint32_t regs[8]);
     void (*post)(uint32_t eax);
+    int (*detour)(const uint32_t regs[8]);
+    int pops;
 } g_impl[8];
 static int g_nimpl;
 
@@ -231,6 +234,17 @@ void recomp_register_wrap(void *routine, uint32_t original, void (*pre)(const ui
 
 /* our stdcall C functions the game calls through pointers: address -> argument count */
 #define DIRECT_SLOTS 2048u
+void recomp_register_detour(void *routine, uint32_t original, int (*fn)(const uint32_t regs[8]), int pops)
+{
+    if (g_nimpl < 8) {
+        g_impl[g_nimpl].routine = (uint32_t)(uintptr_t)routine;
+        g_impl[g_nimpl].original = original;
+        g_impl[g_nimpl].detour = fn;
+        g_impl[g_nimpl].pops = pops;
+        g_nimpl++;
+    }
+}
+
 static struct {
     uint32_t fn;
     int nargs;
@@ -303,7 +317,8 @@ static uint32_t call_stdcall(uint32_t fn, int n, const uint32_t *a)
     }
 }
 
-static RCtx *g_shim_ctx;   /* the context of the shim running now (recomp_call_stdcall) */
+static RCtx *g_shim_ctx;   /* the recompiled game's context while our C code it called runs (a shim, a
+                              registered stdcall, a hook handler): recomp_call_stdcall / watcall */
 
 /* returns 1 if target is a shimmed Windows import (and its shim has run) */
 static int rt_shim(RCtx *c, uint32_t target)
@@ -366,6 +381,37 @@ uint32_t recomp_call_stdcall(uint32_t fn, int nargs, const uint32_t *args)
     return eax;
 }
 
+uint32_t recomp_call_watcall(uint32_t fn, const uint32_t regs[4], int nstack, const uint32_t *stack)
+{
+    static const unsigned keep[7] = { REG_EAX, REG_ECX, REG_EDX, REG_EBX, REG_EBP, REG_ESI, REG_EDI };
+    RCtx *c = g_shim_ctx;
+    uint32_t esp, sp, saved[7], eax;
+    int k;
+    if (!c) {
+        if (g_rt_errors++ < 20)
+            log_printf("recomp: game function %08X called outside the recompiled game", fn);
+        return 0;
+    }
+    esp = R32(c, REG_ESP);
+    for (k = 0; k < 7; k++)
+        saved[k] = R32(c, keep[k]);
+    sp = esp - 4 * (uint32_t)nstack - 4;
+    ST32(c, sp, 0);   /* the return address: rt_dispatch returns once the function does */
+    for (k = 0; k < nstack; k++)
+        ST32(c, sp + 4 + 4 * (uint32_t)k, stack[k]);
+    R32_SET(c, REG_ESP, sp);
+    R32_SET(c, REG_EAX, regs[0]);
+    R32_SET(c, REG_EDX, regs[1]);
+    R32_SET(c, REG_EBX, regs[2]);
+    R32_SET(c, REG_ECX, regs[3]);
+    rt_dispatch(c, fn);
+    eax = R32(c, REG_EAX);
+    R32_SET(c, REG_ESP, esp);
+    for (k = 0; k < 7; k++)
+        R32_SET(c, keep[k], saved[k]);
+    return eax;
+}
+
 static int rt_direct_has(uint32_t target)
 {
     return direct_nargs(target) >= 0;
@@ -424,13 +470,33 @@ static int rt_impl(RCtx *c, uint32_t target)
             static const unsigned off[8] = { REG_EAX, REG_ECX, REG_EDX, REG_EBX, REG_ESP, REG_EBP, REG_ESI, REG_EDI };
             uint32_t regs[8];
             int i;
+            RCtx *outer = g_shim_ctx;
             for (i = 0; i < 8; i++)
                 regs[i] = R32(c, off[i]);
+            if (g_impl[k].detour) {   /* handled: return to the caller; not: the original runs */
+                int handled;
+                g_shim_ctx = c;
+                handled = g_impl[k].detour(regs);
+                g_shim_ctx = outer;
+                if (handled) {
+                    c->ret = LD32(esp);
+                    R32_SET(c, REG_ESP, esp + 4 + (uint32_t)g_impl[k].pops);
+                    return 1;
+                }
+                g_rt_bypass = g_impl[k].original;
+                rt_dispatch(c, g_impl[k].original);
+                g_rt_bypass = 0;
+                return 1;
+            }
+            g_shim_ctx = c;
             g_impl[k].pre(regs);
+            g_shim_ctx = outer;
             g_rt_bypass = g_impl[k].original;
             rt_dispatch(c, g_impl[k].original);   /* it returns to our caller, as the routine would */
             g_rt_bypass = 0;
+            g_shim_ctx = c;
             g_impl[k].post(R32(c, REG_EAX));
+            g_shim_ctx = outer;
             return 1;
         }
     }
@@ -1040,7 +1106,12 @@ void rt_hook(RCtx *c, uint32_t site)
     r.ebp = R32(c, REG_EBP), r.esi = R32(c, REG_ESI), r.edi = R32(c, REG_EDI);
     r.esp = R32(c, REG_ESP) - 4;   /* as the stub's PUSHAD saw it (handlers use r->esp + 4) */
     r.eflags = flags_from_ctx(c);
-    fn(&r);
+    {
+        RCtx *outer = g_shim_ctx;
+        g_shim_ctx = c;   /* the handler may call the game (recomp_call_watcall) */
+        fn(&r);
+        g_shim_ctx = outer;
+    }
     R32_SET(c, REG_EAX, r.eax), R32_SET(c, REG_ECX, r.ecx), R32_SET(c, REG_EDX, r.edx);
     R32_SET(c, REG_EBX, r.ebx), R32_SET(c, REG_EBP, r.ebp), R32_SET(c, REG_ESI, r.esi);
     R32_SET(c, REG_EDI, r.edi);
@@ -1160,7 +1231,7 @@ static void ctx_from_cpu(RCtx *c)
     c->fdelta = 0;
     c->fsw0 = *(const uint16_t *)(t_fsave + FS_SW);
     c->fdepth0 = x87_depth(t_fsave);
-    R32_SET(c, REG_FS_BASE, (uint32_t)(uintptr_t)NtCurrentTeb());
+    R32_SET(c, REG_FS_BASE, guest_fs_base());
     R32_SET(c, REG_EAX, t_eax);
     R32_SET(c, REG_ECX, t_ecx);
     R32_SET(c, REG_EDX, t_edx);
@@ -1451,14 +1522,68 @@ static int install_root_fn(uint32_t addr, rfunc fn)
    the trampoline (the original JMP, relative) is never run. */
 #define G_ENTRY      0x4FA900u
 #define G_CRT_START  0x4FFB41u
-static void install_entry_root(void)
+/* ---- the program start, as the portable runtime will do it ----
+ * The exe's entry point (JMP to the Watcom C runtime start) jumps to start_thunk instead: onto our
+ * private host stack, then recomp_start never returns. The game gets a stack of its own (1 MB;
+ * the exe asks for 128 KB) and a thread block of its own for FS: (the C runtime keeps its
+ * exception frame chain at FS:[0] and finds its stack bounds with VirtualQuery). Every later
+ * context (coroutines, machine-code entries) uses the same thread block. */
+#define GUEST_STACK (1u << 20)
+static uint32_t g_guest_tib;
+
+static uint32_t guest_fs_base(void)
+{
+    return g_guest_tib ? g_guest_tib : (uint32_t)(uintptr_t)NtCurrentTeb();
+}
+
+static __declspec(noreturn) void __cdecl recomp_start(void)
+{
+    RCtx *c = (RCtx *)_alloca(sizeof(RCtx));
+    uint8_t *stack = (uint8_t *)VirtualAlloc(NULL, GUEST_STACK, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    uint32_t base = (uint32_t)(uintptr_t)stack, top = base + GUEST_STACK, tib = shim_guest_alloc(0x1000), esp;
+    if (!stack || !tib) {
+        log_printf("recomp: no memory for the game's stack");
+        ExitProcess(1);
+    }
+    memset(c, 0, sizeof *c);
+    g_host_free = (uint32_t)(uintptr_t)c - 256;   /* machine-code entries nest below us */
+    /* NT_TIB: exception list (none), stack base (top), stack limit, self */
+    ST32(c, tib, 0xFFFFFFFFu);
+    ST32(c, tib + 4, top);
+    ST32(c, tib + 8, base);
+    ST32(c, tib + 0x18, tib);
+    g_guest_tib = tib;
+    R32_SET(c, REG_FS_BASE, tib);
+    R16_SET(c, REG_FPUCW, 0x27F);   /* what Windows gives a new thread */
+    esp = top - 16;
+    ST32(c, esp, 0);   /* the entry point's return address: never used (ExitProcess) */
+    R32_SET(c, REG_ESP, esp);
+    log_printf("recomp: the game starts recompiled (stack %08X-%08X, thread block %08X)", base, top, tib);
+    rt_dispatch(c, G_CRT_START);
+    log_printf("recomp: the game's start returned");
+    ExitProcess(0);
+}
+
+static __declspec(naked) void start_thunk(void)
+{
+    __asm {
+        mov esp, g_host_free
+        and esp, 0xFFFFFFF0
+        call recomp_start
+    }
+}
+
+static void install_start(void)
 {
     uint8_t jmp[5];
-    int fi = find_func(G_ENTRY);
     jmp[0] = 0xE9;
     *(int32_t *)(jmp + 1) = (int32_t)(G_CRT_START - (G_ENTRY + 5));
-    if (fi < 0 || !mem_expect(G_ENTRY, jmp, 5) || !install_root_bytes(G_ENTRY, NULL, fi, 5, jmp))
+    if (!mem_expect(G_ENTRY, jmp, 5)) {
         log_printf("recomp: the entry point isn't the expected JMP, the C runtime starts as machine code");
+        return;
+    }
+    *(int32_t *)(jmp + 1) = (int32_t)((uint32_t)(uintptr_t)start_thunk - (G_ENTRY + 5));
+    mem_write(G_ENTRY, jmp, 5);
 }
 
 static int install_root_bytes(uint32_t addr, rfunc fn, int fi, unsigned steal, const uint8_t *entry_bytes)
@@ -1562,7 +1687,7 @@ static void CALLBACK co_fiber(void *param)
     }
     memset(c, 0, sizeof *c);
     R16_SET(c, REG_FPUCW, g_co_fpucw);
-    R32_SET(c, REG_FS_BASE, (uint32_t)(uintptr_t)NtCurrentTeb());
+    R32_SET(c, REG_FS_BASE, guest_fs_base());
     c->fsw0 = 0;
     c->fdepth0 = 0;
     if (fi >= 0 && !g_rc_native[fi]) {
@@ -1852,8 +1977,9 @@ void recomp_install(const char *ini)
         };
         int k;
         for (k = 0; k < (int)(sizeof co / sizeof co[0]); k++)
-            install_root_fn(co[k].a, co[k].fn);        if (GetPrivateProfileIntA("debug", "recomp_entry", 1, ini))
-            install_entry_root();
+            install_root_fn(co[k].a, co[k].fn);
+        if (GetPrivateProfileIntA("debug", "recomp_entry", 1, ini))
+            install_start();
     }
     if (g_mode == MODE_REPLACE && g_modded && g_recomp_patch_aware) {
         memset(g_modded, 0, (size_t)g_recomp_nfuncs);   /* the recompiled code applies our patches itself */

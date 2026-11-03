@@ -29,6 +29,7 @@
 #include "intro_video.h"
 #include "log.h"
 #include "mml.h"
+#include "recomp.h"
 
 #define G_FN_INTRO_PLAY_AVI  0x4F9933u   /* watcall EAX file name, EDX hwnd, EBX flag */
 #define G_INTRO_PLAYING_FLAG 0x551FA8u
@@ -245,6 +246,12 @@ static __declspec(naked) void intro_detour(void)
     }
 }
 
+/* the same for the recompiled game (recomp.c): regs EAX ECX EDX EBX ESP EBP ESI EDI */
+static int intro_detour_c(const uint32_t regs[8])
+{
+    return intro_native((HWND)(uintptr_t)regs[2]);
+}
+
 int intro_video_install(const char *game_dir)
 {
     static const uint8_t prologue[] = { 0x51, 0x56, 0x57, 0x83, 0xEC, 0x6C };   /* push ecx/esi/edi; sub esp,0x6c */
@@ -273,6 +280,7 @@ int intro_video_install(const char *game_dir)
     memcpy(jmp + 1, &rel, 4);
     if (!mem_write(G_FN_INTRO_PLAY_AVI, jmp, sizeof jmp))
         return 0;
+    recomp_register_detour((void *)intro_detour, G_FN_INTRO_PLAY_AVI, intro_detour_c, 0);
     log_printf("intro: native player ready (%s)", g_file);
     return 1;
 }
