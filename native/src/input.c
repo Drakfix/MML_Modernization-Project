@@ -25,6 +25,7 @@
 
 #include "controls.h"
 #include "game.h"
+#include "guest.h"
 #include "hook.h"
 #include "input.h"
 #include "menu.h"
@@ -74,7 +75,8 @@ static pad_t g_raw;
 static int g_connected;
 static int g_rescan;
 static uint16_t g_bits;         /* PS1 buttons to press this poll */
-static volatile uint32_t g_gate;   /* stands in for the joystick device pointer */
+/* stands in for the joystick device pointer; the patched check reads it: in guest memory */
+static volatile uint32_t *g_gate;
 static CRITICAL_SECTION g_cs;   /* the SDL thread's snapshot vs its readers */
 static pad_t g_snap;            /* latest controller state, written by the SDL thread */
 static int g_snap_connected;
@@ -267,8 +269,8 @@ static uint16_t ps1_bits(const pad_t *p)
 {
     static const WORD dinput_button[12] = { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LB, BTN_RB, 0, 0,
                                             BTN_BACK, BTN_START, BTN_L3, BTN_R3 };
-    const uint8_t *bind = (const uint8_t *)G_JOY_BINDINGS;
-    const uint16_t *mask = (const uint16_t *)G_PAD_MASKS;
+    const uint8_t *bind = (const uint8_t *)GUEST(G_JOY_BINDINGS);
+    const uint16_t *mask = (const uint16_t *)GUEST(G_PAD_MASKS);
     uint16_t out = 0;
     int k;
     if (p->sThumbLX > STICK_HALF) out |= mask[3];
@@ -299,17 +301,17 @@ static void on_poll_entry(regs_t *r)
     (void)r;
     controls_poll_idle();
     if (!g_active) {
-        g_gate = *(volatile uint32_t *)G_JOY_DEVICE;
+        *g_gate = GVAR(uint32_t, G_JOY_DEVICE);
         return;
     }
     if (!g_started)
         start_sdl();
     if (g_failed) {
-        g_gate = *(volatile uint32_t *)G_JOY_DEVICE;
+        *g_gate = GVAR(uint32_t, G_JOY_DEVICE);
         g_bits = 0;
         return;
     }
-    g_gate = 0;
+    *g_gate = 0;
     read_gamepad();
     p = g_raw;
     conn = controls_debug_overlay(&p, g_connected);
@@ -336,14 +338,14 @@ static void on_poll_keyboard(regs_t *r)
      * down (remapped keys can't double up); its binding loop stops at the first
      * empty slot, so blank slot 0 for this poll and put it back right after */
     if (controls_mute_game_keys() || menu_blocks_input()) {
-        g_kb_saved = *(volatile uint8_t *)G_KB_BINDINGS;
+        g_kb_saved = GVAR(uint8_t, G_KB_BINDINGS);
         if (g_kb_saved) {
-            *(volatile uint8_t *)G_KB_BINDINGS = 0;
+            GVAR(uint8_t, G_KB_BINDINGS) = 0;
             g_kb_muted = 1;
         }
     }
     if (g_active && g_bits) {
-        uint16_t *pad = (uint16_t *)(uintptr_t)(*(volatile uint32_t *)G_PAD_BUF_PTR + 2);
+        uint16_t *pad = (uint16_t *)GUEST(GVAR(uint32_t, G_PAD_BUF_PTR) + 2);
         *pad &= (uint16_t)~g_bits;
     }
 }
@@ -379,7 +381,7 @@ static void on_poll_done(regs_t *r)
 {
     (void)r;
     if (g_kb_muted) {
-        *(volatile uint8_t *)G_KB_BINDINGS = g_kb_saved;
+        GVAR(uint8_t, G_KB_BINDINGS) = g_kb_saved;
         g_kb_muted = 0;
     }
 }
@@ -416,19 +418,21 @@ int input_install(void)
     static const uint8_t gate_cmp[] = { 0x83, 0x3D, 0x40, 0x1F, 0x55, 0x00, 0x00 };
     static const uint8_t intro_call[] = { 0xE8, 0xB0, 0x29, 0x05, 0x00 };
     static const uint8_t after_poll[] = { 0xB8, 0xB4, 0x08, 0x57, 0x00 };   /* mov eax,0x5708B4 */
-    uint32_t gate_addr = (uint32_t)(uintptr_t)&g_gate;
+    uint32_t gate_addr;
 
     if (!load_sdl()) {
         log_printf("input: no SDL3.dll, controller goes through the DirectInput joystick (Xidi)");
         return 0;
     }
+    gate_addr = guest_alloc(4);
+    g_gate = (volatile uint32_t *)GUEST(gate_addr);
     if (!mem_expect(G_SITE_JOY_GATE, gate_cmp, sizeof gate_cmp) ||
         !hook_mid(G_FN_PAD_POLL, sizeof entry_bytes, entry_bytes, on_poll_entry) ||
         !hook_mid(G_SITE_PAD_POLL_KB, sizeof kb_bytes, kb_bytes, on_poll_keyboard)) {
         log_printf("input: pad poll hooks failed, SDL unused");
         return 0;
     }
-    g_gate = *(volatile uint32_t *)G_JOY_DEVICE;
+    *g_gate = GVAR(uint32_t, G_JOY_DEVICE);
     if (!mem_write(G_SITE_JOY_GATE + 2, &gate_addr, 4)) {
         log_printf("input: gate patch failed, SDL unused");
         return 0;

@@ -20,12 +20,12 @@ static int g_nshims;
 static uint32_t g_last_error;
 static char g_game_dir[MAX_PATH];
 
-uint32_t shim_guest_alloc(size_t n)
+uint32_t guest_alloc(size_t n)
 {
     return (uint32_t)(uintptr_t)calloc(1, n);
 }
 
-void shim_guest_free(uint32_t g)
+void guest_free(uint32_t g)
 {
     free((void *)(uintptr_t)g);
 }

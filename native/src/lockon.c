@@ -27,10 +27,12 @@
 
 #include "display.h"
 #include "game.h"
+#include "guest.h"
 #include "hook.h"
 #include "lockon.h"
 #include "log.h"
 #include "mml.h"
+#include "recomp.h"
 
 #define G_SITE_TARGET_STORE  0x4E041Du   /* mov [0x5505E8],eax right after target_pick_nearest */
 #define G_FN_OBJ_FROM_ID     0x4E1877u   /* object* FUN_004E1877(EAX = id) */
@@ -56,7 +58,7 @@ static int g_lx, g_ly, g_lz;
 static volatile LONG g_want, g_switch;
 static int g_test_reticle;
 
-static int16_t PS16(uint32_t o) { return *(volatile int16_t *)(uintptr_t)(G_PLAYER + o); }
+static int16_t PS16(uint32_t o) { return GVAR(int16_t, G_PLAYER + o); }
 
 typedef uint32_t(__cdecl *obj_from_id_fn)(uint32_t id);
 static __declspec(naked) void obj_from_id_thunk(void)   /* called as obj_from_id_fn */
@@ -83,14 +85,14 @@ static __declspec(naked) void obj_from_id_thunk(void)   /* called as obj_from_id
 
 static void collect(void)
 {
-    uint32_t n = *(volatile uint32_t *)(uintptr_t)G_VOLUME_COUNT, i;
-    uint8_t side = *(volatile uint8_t *)(uintptr_t)G_PLAYER_SIDE_MASK;
+    uint32_t n = GVAR(uint32_t, G_VOLUME_COUNT), i;
+    uint8_t side = GVAR(uint8_t, G_PLAYER_SIDE_MASK);
     int px = PS16(0x14), py = PS16(0x16), pz = PS16(0x18);
     g_ncand = 0;
     if (n > 512)
         return;
     for (i = 0; i < n && g_ncand < MAX_CAND; i++) {
-        const uint8_t *e = (const uint8_t *)(uintptr_t)(G_VOLUMES + 12 * i);
+        const uint8_t *e = (const uint8_t *)GUEST(G_VOLUMES + 12 * i);
         uint16_t fl = *(const uint16_t *)(e + 6);
         uint32_t own = *(const uint32_t *)(e + 8), rec = own & 0x7fffff, rflags;
         int id = (int)(own >> 24), x = *(const int16_t *)e, y = *(const int16_t *)(e + 2), z = *(const int16_t *)(e + 4);
@@ -106,7 +108,7 @@ static void collect(void)
         }
         if (!(((unsigned)side << (fl >> 13)) & 0x80) || id >= 0x80 || rec < 0x400000)
             continue;
-        rflags = *(const uint32_t *)(uintptr_t)(rec + 4);
+        rflags = GVAR(uint32_t, rec + 4);
         if ((rflags & 0x80) || !(rflags & 1))
             continue;
         dx = x - px; dy = y - py; dz = z - pz;
@@ -134,7 +136,7 @@ static void classify(void)
     /* the projector's space is 320 wide around OFX; native widescreen shows
      * more of it on both sides (display.c shifts the picture into the wider
      * surface) */
-    double cx = *(volatile int32_t *)(uintptr_t)G_GTE_OFX, h = 2.0 * *(volatile int32_t *)(uintptr_t)G_GTE_OFY;
+    double cx = GVAR(int32_t, G_GTE_OFX), h = 2.0 * GVAR(int32_t, G_GTE_OFY);
     double w = display_native_width() > 640 ? display_native_width() / 2.0 : 2.0 * cx, x0 = cx - w / 2;
     int k;
     for (k = 0; k < g_ncand; k++) {
@@ -222,7 +224,13 @@ static void on_target_store(regs_t *r)
     g_lx = g_cand[k].x;
     g_ly = g_cand[k].y;
     g_lz = g_cand[k].z;
-    r->eax = ((obj_from_id_fn)(void *)obj_from_id_thunk)((uint32_t)g_lock_id);
+    if (recomp_in_shim()) {   /* the recompiled game: its own function, no machine code */
+        uint32_t regs[4];
+        regs[0] = (uint32_t)g_lock_id, regs[1] = regs[2] = regs[3] = 0;
+        r->eax = recomp_call_watcall(G_FN_OBJ_FROM_ID, regs, 0, NULL);
+    } else {
+        r->eax = ((obj_from_id_fn)(void *)obj_from_id_thunk)((uint32_t)g_lock_id);
+    }
 }
 
 void lockon_want(int want)
@@ -262,7 +270,7 @@ void lockon_pos(int *x, int *y, int *z)
 #define RET_RIM      0       /* dark outline under the fill */
 #define RET_ALPHA    0x8C    /* see-through amount (renderer side, 0xFF = solid) */
 
-static __declspec(align(8)) uint8_t g_tri[2 * RET_TRIS][0x40];
+static uint8_t (*g_tri)[0x40];   /* packets the game's display walk reads: in guest memory */
 static unsigned g_spin;
 static int g_ret_rgb[3] = { 0xFF, 0xD8, 0x40 };   /* warm yellow; [controls] reticle_color */
 
@@ -270,37 +278,37 @@ static void put16(uint8_t *p, int off, double v) { *(int16_t *)(p + off) = (int1
 
 static void prepend_hud(uint8_t *pkt)
 {
-    uint8_t *ctx = *(uint8_t **)G_GFX_CUR_CTX;
+    uint8_t *ctx = (uint8_t *)GUEST(GVAR(uint32_t, G_GFX_CUR_CTX));
     uint32_t *bucket = (uint32_t *)(ctx + 0x78);
     *(uint32_t *)pkt = *bucket;
-    *bucket = (uint32_t)(uintptr_t)pkt;
+    *bucket = GADDR(pkt);
 }
 
 /* world point -> 320x240 game screen, the way cam_apply_angles framed it:
  * forward = (sin yaw cos p, sin p, cos yaw cos p) with p = -pitch */
 static int project(double wx, double wy, double wz, double *sx, double *sy)
 {
-    double yaw = (*(volatile uint16_t *)(uintptr_t)G_CAM_YAW_ANGLE & 0xfff) * (PI / 2048.0);
-    int pr = *(volatile uint16_t *)(uintptr_t)G_CAM_PITCH_ANGLE & 0xfff;
+    double yaw = (GVAR(uint16_t, G_CAM_YAW_ANGLE) & 0xfff) * (PI / 2048.0);
+    int pr = GVAR(uint16_t, G_CAM_PITCH_ANGLE) & 0xfff;
     double p = -(pr > 2048 ? pr - 4096 : pr) * (PI / 2048.0);
     double fx = sin(yaw) * cos(p), fy = sin(p), fz = cos(yaw) * cos(p);
     double rx = cos(yaw), rz = -sin(yaw);                       /* right, horizontal */
     double ux = fy * rz, uy = fz * rx - fx * rz, uz = -fy * rx;  /* f x r: screen down */
-    double dx = wx - *(volatile int32_t *)(uintptr_t)G_CAM_POS;
-    double dy = wy - *(volatile int32_t *)(uintptr_t)(G_CAM_POS + 4);
-    double dz = wz - *(volatile int32_t *)(uintptr_t)(G_CAM_POS + 8);
+    double dx = wx - GVAR(int32_t, G_CAM_POS);
+    double dy = wy - GVAR(int32_t, G_CAM_POS + 4);
+    double dz = wz - GVAR(int32_t, G_CAM_POS + 8);
     double cx = dx * rx + dz * rz, cy = dx * ux + dy * uy + dz * uz, cz = dx * fx + dy * fy + dz * fz;
     if (cz < 32.0)
         return 0;
-    *sx = *(volatile int32_t *)(uintptr_t)G_GTE_OFX + mml_h_x() * cx / cz;
-    *sy = *(volatile int32_t *)(uintptr_t)G_GTE_OFY + *(volatile float *)(uintptr_t)G_GTE_H * cy / cz;
+    *sx = GVAR(int32_t, G_GTE_OFX) + mml_h_x() * cx / cz;
+    *sy = GVAR(int32_t, G_GTE_OFY) + GVAR(float, G_GTE_H) * cy / cz;
     return 1;
 }
 
 int lockon_owns(const void *pkt)
 {
     const uint8_t *p = (const uint8_t *)pkt;
-    return p >= g_tri[0] && p < g_tri[0] + sizeof g_tri;
+    return g_tri && p >= g_tri[0] && p < g_tri[0] + 2 * RET_TRIS * 0x40;
 }
 
 /* one inward-pointing triangle of the reticle; outline = the same shape
@@ -335,8 +343,10 @@ void lockon_frame(void)
     double sx, sy, spin, pulse;
     int i, j;
     g_spin++;
-    if (!*(void **)G_GFX_CUR_CTX)
+    if (!GVAR(uint32_t, G_GFX_CUR_CTX))
         return;
+    if (!g_tri)
+        g_tri = (uint8_t (*)[0x40])GUEST(guest_alloc(2 * RET_TRIS * 0x40));
     if (g_test_reticle) {   /* dev: on Mega Man's chest, to check the projection */
         if (!project(PS16(0x14), PS16(0x16) - 100, PS16(0x18), &sx, &sy))
             return;

@@ -25,6 +25,7 @@
 #include "display.h"
 #include "game.h"
 #include "gfx_ui.h"
+#include "guest.h"
 #include "mml.h"
 #include "toast.h"
 #include "ui_style.h"
@@ -43,8 +44,9 @@
 #define FONT_PAGE 0x7f3c
 #define MAX_GLYPHS 24
 
-static __declspec(align(8)) uint8_t g_dot[0x40];
-static __declspec(align(8)) uint8_t g_glyph[MAX_GLYPHS][0x10];
+/* packets the game's display walk reads: in guest memory */
+static uint8_t *g_dot;
+static uint8_t (*g_glyph)[0x10];
 static volatile LONG g_frames_left;
 static char g_text[MAX_GLYPHS + 1];
 static uint8_t g_rgb[3];
@@ -60,10 +62,10 @@ static int sqx(int x)
 
 static void prepend_hud(uint8_t *pkt)
 {
-    uint8_t *ctx = *(uint8_t **)G_GFX_CUR_CTX;
+    uint8_t *ctx = (uint8_t *)GUEST(GVAR(uint32_t, G_GFX_CUR_CTX));
     uint32_t *bucket = (uint32_t *)(ctx + 0x78);
     *(uint32_t *)pkt = *bucket;
-    *bucket = (uint32_t)(uintptr_t)pkt;
+    *bucket = GADDR(pkt);   /* the packet is in guest memory (g_glyph) */
 }
 
 static int tile_of(char c)
@@ -76,7 +78,7 @@ static int tile_of(char c)
 int toast_owns(const void *pkt)
 {
     const uint8_t *p = (const uint8_t *)pkt;
-    return p == g_dot || (p >= g_glyph[0] && p < g_glyph[0] + sizeof g_glyph);
+    return g_dot && (p == g_dot || (p >= g_glyph[0] && p < g_glyph[0] + MAX_GLYPHS * 0x10));
 }
 
 static void legacy_message(const char *text, int r, int g, int b)
@@ -291,8 +293,12 @@ void toast_frame(void)
     const char *s;
     static const uint8_t w01[4] = { 0xCD, 0xCC, 0xCC, 0x3D };   /* 0.1f */
 
-    if (g_ui || left <= 0 || !*(void **)G_GFX_CUR_CTX)
+    if (g_ui || left <= 0 || !GVAR(uint32_t, G_GFX_CUR_CTX))
         return;
+    if (!g_dot) {
+        g_dot = (uint8_t *)GUEST(guest_alloc(0x40));
+        g_glyph = (uint8_t (*)[0x10])GUEST(guest_alloc(MAX_GLYPHS * 0x10));
+    }
     if (left > TOAST_DUR - TOAST_FADE)
         slide = (double)(left - (TOAST_DUR - TOAST_FADE)) / TOAST_FADE * TOAST_SLIDE;
     else if (left < TOAST_FADE)
@@ -326,7 +332,7 @@ void toast_frame(void)
         put16(g, 0x0c, tc);
         put16(g, 0x0e, FONT_PAGE);
         prepend_hud(g);
-        cx += *(uint8_t *)(G_FONT_WIDTHS + tc) + 1;
+        cx += GVAR(uint8_t, G_FONT_WIDTHS + tc) + 1;
     }
     g_frames_left = left - 1;
 }

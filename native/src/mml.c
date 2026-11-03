@@ -29,6 +29,7 @@
 #include "ddshim.h"
 #include "display.h"
 #include "game.h"
+#include "guest.h"
 #include "hook.h"
 #include "log.h"
 #include "mml.h"
@@ -84,25 +85,25 @@ float mml_hud_ratio(void)
 {
     return (g_widescreen_on && !g_native_wide) ? g_ratio : 1.0f;
 }
-static volatile float g_shadow_h_x;
+static volatile float *g_shadow_h_x;   /* the patched X sites read it: in guest memory */
 static int g_h_set_logs;
 
 float mml_h_x(void)
 {
-    return g_widescreen_on ? g_shadow_h_x : *(float *)G_GTE_H_FLOAT;
+    return g_widescreen_on ? *g_shadow_h_x : GVAR(float, G_GTE_H_FLOAT);
 }
 
 static void on_h_set(regs_t *r)
 {
-    float *h = (float *)G_GTE_H_FLOAT;
+    volatile float *h = &GVAR(float, G_GTE_H_FLOAT);
     float adj = *h * g_closer;
     (void)r;
     *h = adj;
-    g_shadow_h_x = adj * g_ratio;
+    *g_shadow_h_x = adj * g_ratio;
     if (g_h_set_logs < 8) {
         g_h_set_logs++;
         log_printf("widescreen: game set H %.3f -> H %.3f, shadow X %.3f",
-                   adj / g_closer, adj, (double)g_shadow_h_x);
+                   adj / g_closer, adj, (double)*g_shadow_h_x);
     }
 }
 
@@ -121,7 +122,7 @@ static void on_h_set(regs_t *r)
 static void on_near_written(regs_t *r)
 {
     (void)r;
-    *(float *)G_GTE_NEAR = *(float *)G_GTE_H_FLOAT * *(const float *)G_NEAR_FACTOR;
+    GVAR(float, G_GTE_NEAR) = GVAR(float, G_GTE_H_FLOAT) * GVAR(float, G_NEAR_FACTOR);
 }
 
 static void install_widescreen(void)
@@ -133,7 +134,7 @@ static void install_widescreen(void)
     static const uint8_t h_set_bytes[] = { 0xD8, 0x0D, 0x18, 0xA5, 0x50, 0x00 };
     uint8_t h_default_bytes[10];
     const uint32_t vanilla = G_GTE_H_FLOAT;
-    uint32_t shadow = (uint32_t)(uintptr_t)&g_shadow_h_x;
+    uint32_t shadow;
     int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
     size_t i;
 
@@ -141,6 +142,8 @@ static void install_widescreen(void)
         log_printf("widescreen: no screen size, skipped");
         return;
     }
+    shadow = guest_alloc(4);
+    g_shadow_h_x = (volatile float *)GUEST(shadow);
     /* native mode draws onto a real wide surface, so X isn't squeezed */
     g_ratio = g_native_wide ? 1.0f : (640.0f / 480.0f) / ((float)sw / (float)sh);
 
@@ -155,7 +158,7 @@ static void install_widescreen(void)
         log_printf("widescreen: H default site unexpected, skipped");
         return;
     }
-    memcpy(h_default_bytes, (const void *)G_SITE_H_DEFAULT, sizeof h_default_bytes);
+    memcpy(h_default_bytes, GUEST(G_SITE_H_DEFAULT), sizeof h_default_bytes);
     if (!hook_mid(G_SITE_H_DEFAULT, sizeof h_default_bytes, h_default_bytes, on_h_set) ||
         !hook_mid(G_SITE_H_SET, sizeof h_set_bytes, h_set_bytes, on_h_set)) {
         log_printf("widescreen: H setter hooks failed");
@@ -290,8 +293,8 @@ static void frame_drop_check(void)
     static uint32_t last_deadline;
     static unsigned walks_seen;
     static uint8_t last_parity;
-    uint32_t d = *(volatile uint32_t *)G_FRAME_LIMITER_TH;
-    volatile uint8_t *parity = (volatile uint8_t *)G_FRAME_PARITY;
+    uint32_t d = GVAR(uint32_t, G_FRAME_LIMITER_TH);
+    volatile uint8_t *parity = &GVAR(uint8_t, G_FRAME_PARITY);
     if (d == last_deadline)
         return;
     last_deadline = d;
@@ -299,7 +302,7 @@ static void frame_drop_check(void)
         static int slow = -1;
         if (slow < 0)
             slow = (int)GetPrivateProfileIntA("debug", "slow_logic_ms", 0, g_ini);
-        if (slow > 0 && *(volatile uint8_t *)0x6DD9BCu == 5) {
+        if (slow > 0 && GVAR(uint8_t, G_GAME_STATE) == 5) {
             LARGE_INTEGER a, b, f;
             QueryPerformanceFrequency(&f);
             QueryPerformanceCounter(&a);
@@ -313,7 +316,7 @@ static void frame_drop_check(void)
     last_parity = *parity;
     if (g_frames == walks_seen) {   /* either skip: that step's scene was never drawn */
         g_perf_skips++;
-        *(volatile uint32_t *)G_DEFERRED_COUNT = 0;
+        GVAR(uint32_t, G_DEFERRED_COUNT) = 0;
         if (g_bglayer_on)
             bglayer_frame_dropped();
         if (g_interp_on)
@@ -334,7 +337,7 @@ static DWORD WINAPI rebased_gettickcount(void)
     if (recomp_return_address((uint32_t)(uintptr_t)_ReturnAddress()) == G_DRAW_RET) {
         static int skipped;
         perf_iteration(ms);
-        double deadline = *(float *)G_FRAME_LIMITER_TH;
+        double deadline = GVAR(float, G_FRAME_LIMITER_TH);
         if (g_max_skipped < 0)
             g_max_skipped = (int)GetPrivateProfileIntA("debug", "max_skipped_draws", 2, g_ini);
         if (ms < deadline)
@@ -343,7 +346,7 @@ static DWORD WINAPI rebased_gettickcount(void)
             skipped++;
         else {
             skipped = 0;
-            *(float *)G_FRAME_LIMITER_TH = (float)(ms + 1.0);
+            GVAR(float, G_FRAME_LIMITER_TH) = (float)(ms + 1.0);
         }
     }
     /* the game waits for its next frame by spinning on this call: sleep instead */
@@ -352,7 +355,7 @@ static DWORD WINAPI rebased_gettickcount(void)
         if (g_perf_first_wait == 0.0)
             g_perf_first_wait = ms;
         frame_drop_check();
-        left = *(float *)G_FRAME_LIMITER_TH - ms;
+        left = GVAR(float, G_FRAME_LIMITER_TH) - ms;
         if (left > 1.5 && left < 200.0) {
             double before = ms;
             mml_sleep_ms(left - 1.0);
@@ -390,7 +393,7 @@ static void on_frame(regs_t *r)
         if (w)
             GetClientRect(w, &rc);
         log_printf("frame hook alive: 300 frames, limiter threshold %.1f ms, gfx path flags %08X, fg client %ldx%ld",
-                   *(float *)G_FRAME_LIMITER_TH, *(unsigned *)0x88787Cu, rc.right, rc.bottom);
+                   GVAR(float, G_FRAME_LIMITER_TH), GVAR(unsigned, 0x88787Cu), rc.right, rc.bottom);
         {
             static const char *shims[] = { "apphelp.dll", "AcLayers.dll", "AcGenral.dll", "AcXtrnal.dll",
                                            "AcSpecfc.dll", "ddraw.dll", "dxgi.dll", "d3d9.dll" };
@@ -409,7 +412,7 @@ static void on_frame(regs_t *r)
         static int slow = -1;
         if (slow < 0)
             slow = (int)GetPrivateProfileIntA("debug", "slow_ms", 0, g_ini);
-        if (slow > 0 && *(volatile uint8_t *)0x6DD9BCu == 5) {   /* in gameplay (menus would drop presses) */
+        if (slow > 0 && GVAR(uint8_t, G_GAME_STATE) == 5) {   /* in gameplay (menus would drop presses) */
             LARGE_INTEGER a, b, f;
             QueryPerformanceFrequency(&f);
             QueryPerformanceCounter(&a);
@@ -427,7 +430,7 @@ static void on_frame(regs_t *r)
     if (g_player_log) {
         /* dev: log every player state change (player struct 0x5F8364) */
         static uint32_t last = 0xFFFFFFFF;
-        const uint8_t *pl = (const uint8_t *)0x5F8364u;
+        const uint8_t *pl = (const uint8_t *)GUEST(G_PLAYER);
         uint32_t now = pl[9] | pl[10] << 8 | (uint32_t)pl[0xAC] << 16 | (uint32_t)pl[0x174] << 24;
         if (now != last) {
             log_printf("player: f%u state %d sub %d var %d anim %02X facing %03X pos %d,%d held %04X press %04X",
@@ -453,14 +456,14 @@ static void on_frame(regs_t *r)
 
 static void limiter_frame(void)
 {
-    float *th = (float *)G_FRAME_LIMITER_TH;
+    volatile float *th = &GVAR(float, G_FRAME_LIMITER_TH);
     double expected, game = *th;
     if (!g_limiter_init) {
         g_limiter_acc = game;
         g_limiter_init = 1;
         return;
     }
-    expected = g_limiter_acc + *(uint8_t *)G_FRAME_STEP * *(double *)G_FRAME_MS;
+    expected = g_limiter_acc + GVAR(uint8_t, G_FRAME_STEP) * GVAR(double, G_FRAME_MS);
     /* the game reset the threshold (level load, frame skip): follow it */
     g_limiter_acc = fabs(game - expected) > 8.0 ? game : expected;
     *th = (float)g_limiter_acc;

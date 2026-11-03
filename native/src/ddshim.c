@@ -33,6 +33,7 @@
 #include "bglayer.h"
 #include "mml.h"
 #include "gfx.h"
+#include "guest.h"
 #include "hook.h"
 #include "lockon.h"
 #include "log.h"
@@ -649,7 +650,7 @@ static HRESULT WINAPI s_flip(void **i, void **target, DWORD flags)
     (void)target; (void)flags;
     ensure_gfx(s->dd);
     /* with interpolation: in-between frame(s) first, the game's frame half a tick later */
-    rec_present(*(volatile uint8_t *)G_FRAME_STEP_ADDR);
+    rec_present(GVAR(uint8_t, G_FRAME_STEP_ADDR));
     return DD_OK;
 }
 
@@ -1088,7 +1089,7 @@ void ddshim_frame(void)
     if (g_blend_census && ++bc_frames % 60 == 0) {
         int k;
         log_printf("blend census: camera mode %d scripted %d distance %d pitch %d (60 frames)",
-                   *(uint8_t *)0x77E955u, *(uint8_t *)0x77E956u, *(int32_t *)0x77E95Cu, *(int32_t *)0x77E964u);
+                   GVAR(uint8_t, 0x77E955u), GVAR(uint8_t, 0x77E956u), GVAR(int32_t, 0x77E95Cu), GVAR(int32_t, 0x77E964u));
         for (k = 0; k < 32 && g_bc[k].draws; k++)
             log_printf("   world op %02X blend %d (%d,%d): %u draws %u verts z %.4f..%.4f", g_bc[k].op, g_bc[k].blend,
                        g_bc[k].src, g_bc[k].dst, g_bc[k].draws, g_bc[k].verts, g_bc[k].z0, g_bc[k].z1);
@@ -1185,8 +1186,8 @@ static const rec_prev *world_prevs(const gfx_vertex *raw, DWORD n)
     static rec_prev out[4096];
     static interp_vec3 cur[4096], prev[4096], res[4096];
     static unsigned char how[4096], has_res[4096];
-    float hx = mml_h_x(), hy = *(const float *)G_GTE_H_ADDR, near_z = *(const float *)G_GTE_NEAR_ADDR;
-    float ofx = (float)*(const int32_t *)G_GTE_OFX_ADDR, ofy = (float)*(const int32_t *)G_GTE_OFY_ADDR;
+    float hx = mml_h_x(), hy = GVAR(float, G_GTE_H_ADDR), near_z = GVAR(float, G_GTE_NEAR_ADDR);
+    float ofx = (float)GVAR(int32_t, G_GTE_OFX_ADDR), ofy = (float)GVAR(int32_t, G_GTE_OFY_ADDR);
     DWORD k, j;
     int exact = 0, little = 0, moves, rematched = 0, borrowed = 0, rebuilt = 0;
     if (n > sizeof out / sizeof out[0])
@@ -2032,8 +2033,8 @@ static HRESULT WINAPI shim_direct_draw_enumerate(LPDDENUMCALLBACKA cb, LPVOID ct
      * "Setup Texture Format Error!" (MEGAMAN.CFG line 1 = 0, e.g. the KuroFix
      * repack). Called from display init after the config is read and before
      * the flag is checked. */
-    if (*(volatile DWORD *)G_CFG_FULLSCREEN == 0) {
-        *(volatile DWORD *)G_CFG_FULLSCREEN = 1;
+    if (GVAR(DWORD, G_CFG_FULLSCREEN) == 0) {
+        GVAR(DWORD, G_CFG_FULLSCREEN) = 1;
         log_printf("ddshim: MEGAMAN.CFG asked for the game's windowed mode, using fullscreen (window mode is ours)");
     }
     if (cb) {

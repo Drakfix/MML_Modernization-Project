@@ -24,6 +24,7 @@
 #include "ddshim.h"
 #include "display.h"
 #include "gfx.h"
+#include "guest.h"
 #include "hook.h"
 #include "input.h"
 #include "intro_video.h"
@@ -168,7 +169,7 @@ static int __cdecl intro_native(HWND hwnd)
     log_printf("intro: playing %s (%dx%d, %.2f fps, %s)", g_file, g_vw, g_vh, plm_get_framerate(plm),
                g_stream ? "with sound" : "silent");
 
-    *(volatile uint8_t *)G_INTRO_PLAYING_FLAG = 1;
+    GVAR(uint8_t, G_INTRO_PLAYING_FLAG) = 1;
     QueryPerformanceFrequency(&f);
     QueryPerformanceCounter(&t0);
     while (!plm_has_ended(plm) && !skip) {
@@ -211,7 +212,7 @@ static int __cdecl intro_native(HWND hwnd)
         }
     }
     log_printf("intro: %s after %.1f s (%d frames drawn)", skip ? "skipped" : "finished", played, frames);
-    *(volatile uint8_t *)G_INTRO_PLAYING_FLAG = 0;
+    GVAR(uint8_t, G_INTRO_PLAYING_FLAG) = 0;
     /* leave a black frame behind for the game to take over from */
     g_have_frame = 0;
     draw_frame();

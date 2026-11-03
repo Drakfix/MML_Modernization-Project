@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "game.h"
+#include "guest.h"
 #include "hook.h"
 #include "log.h"
 #include "packets.h"
@@ -50,18 +51,18 @@ static unsigned g_recent_next;
 
 static void on_dispatch(regs_t *r)
 {
-    g_cur_pkt = *(const uint8_t **)(uintptr_t)(site_esp(r) + WALK_PKT_SLOT);
+    g_cur_pkt = (const uint8_t *)GUEST(GVAR(uint32_t, site_esp(r) + WALK_PKT_SLOT));
     g_recent_pkt[g_recent_next % RECENT] = (const void *)g_cur_pkt;
     g_recent_bucket[g_recent_next % RECENT] = (uint8_t)g_cur_bucket;
     g_recent_next++;
     if ((g_cur_pkt[7] & 0xFC) == 0x2C)
-        trace(2, (uint32_t)(uintptr_t)g_cur_pkt, g_cur_pkt[7] | ((uint32_t)g_cur_bucket << 8));
+        trace(2, GADDR(g_cur_pkt), g_cur_pkt[7] | ((uint32_t)g_cur_bucket << 8));
 }
 
 static void on_link(regs_t *r)
 {
-    uint32_t node = *(uint32_t *)(uintptr_t)(site_esp(r) + WALK_PKT_SLOT) & ~1u;
-    uint32_t root = *(uint32_t *)G_GFX_CUR_CTX + 0x70;
+    uint32_t node = GVAR(uint32_t, site_esp(r) + WALK_PKT_SLOT) & ~1u;
+    uint32_t root = GVAR(uint32_t, G_GFX_CUR_CTX) + 0x70;
     if (node >= root && node < root + 32)
         g_cur_bucket = (int)((node - root) / 4);
     if (node >= root && node < root + 32)
@@ -72,7 +73,7 @@ static void on_link(regs_t *r)
 
 static void on_deferred_draw(regs_t *r)
 {
-    const void *pkt = (const void *)(uintptr_t)r->eax;
+    const void *pkt = (const void *)GUEST(r->eax);
     unsigned i;
     g_cur_pkt = (const uint8_t *)pkt;
     g_cur_bucket = BUCKET_WORLD_DEFAULT;
@@ -95,7 +96,7 @@ static unsigned g_tag_next;
  * 4-vertex sprite: X at +8 (left) / +0x10 (right), Y at +0xA. */
 static void on_hud_emit_link(regs_t *r)
 {
-    const uint8_t *pkt = (const uint8_t *)(uintptr_t)r->edx;
+    const uint8_t *pkt = (const uint8_t *)GUEST(r->edx);
     int xl = *(const int16_t *)(pkt + 0x8), xr = *(const int16_t *)(pkt + 0x10);
     int y = *(const int16_t *)(pkt + 0xA);
     hud_tag_t *t;
@@ -103,7 +104,7 @@ static void on_hud_emit_link(regs_t *r)
         return;
     t = &g_tags[g_tag_next++ % HUD_TAGS];
     t->pkt = pkt;
-    t->ctx = *(uint32_t *)G_GFX_CUR_CTX;
+    t->ctx = GVAR(uint32_t, G_GFX_CUR_CTX);
     t->frame = g_frame;
     t->side = (xl + xr) / 2 < 160 ? HUD_SIDE_LEFT : HUD_SIDE_RIGHT;
 }
@@ -121,7 +122,7 @@ int hud_side_of(const void *pkt)
             if (logged < 6) {
                 logged++;
                 log_printf("packets: HUD tag %p (frame %u, now %u, built ctx %08X, walking ctx %08X) matched in bucket %d op %02X xy %d,%d, ignored",
-                           pkt, g_tags[i].frame, g_frame, g_tags[i].ctx, *(uint32_t *)G_GFX_CUR_CTX, g_cur_bucket,
+                           pkt, g_tags[i].frame, g_frame, g_tags[i].ctx, GVAR(uint32_t, G_GFX_CUR_CTX), g_cur_bucket,
                            ((const uint8_t *)pkt)[7], *(const int16_t *)((const uint8_t *)pkt + 8), *(const int16_t *)((const uint8_t *)pkt + 0xA));
             }
             return HUD_SIDE_NONE;

@@ -26,7 +26,7 @@ static void put32(uint32_t guest, uint32_t v)
 static uint32_t guest_str(const char *s)
 {
     size_t n = strlen(s) + 1;
-    uint32_t g = shim_guest_alloc(n);
+    uint32_t g = guest_alloc(n);
     if (g)
         memcpy(HPTR(g), s, n);
     return g;
@@ -35,7 +35,7 @@ static uint32_t guest_str(const char *s)
 static uint32_t guest_wstr(const char *s)
 {
     size_t n = strlen(s) + 1, k;
-    uint32_t g = shim_guest_alloc(2 * n);
+    uint32_t g = guest_alloc(2 * n);
     if (g)
         for (k = 0; k < n; k++) {
             uint16_t w = (uint8_t)s[k];
@@ -87,7 +87,7 @@ static uint32_t sh_get_environment_strings(const uint32_t *a)
     static uint32_t env;
     (void)a;
     if (!env)
-        env = shim_guest_alloc(2);   /* an empty block: two NULs */
+        env = guest_alloc(2);   /* an empty block: two NULs */
     return env;
 }
 

@@ -18,6 +18,7 @@
 
 #include "game.h"
 #include "gfx_ui.h"
+#include "guest.h"
 #include "hints.h"
 #include "log.h"
 #include "ui_style.h"
@@ -49,8 +50,8 @@ void hints_frame(void)
     uint8_t st, sub;
     if (!H.ready)
         return;
-    st = *(volatile uint8_t *)G_GAME_STATE;
-    sub = *(volatile uint8_t *)(G_GAME_STATE + 1);
+    st = GVAR(uint8_t, G_GAME_STATE);
+    sub = GVAR(uint8_t, G_GAME_STATE + 1);
     if (!H.shown) {
         if ((st == ST_TITLE && sub >= 3) || st == ST_TITLE_MENU) {
             H.shown = 1;

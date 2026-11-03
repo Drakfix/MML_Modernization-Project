@@ -154,7 +154,7 @@ static void unlock(void)
 /* a guest object: {vtable, our index} */
 static uint32_t new_object(uint32_t vt, uint32_t index)
 {
-    uint32_t o = shim_guest_alloc(8);
+    uint32_t o = guest_alloc(8);
     if (o) {
         put32(o, vt);
         put32(o + 4, index);
@@ -323,10 +323,10 @@ static void buf_free(dsbuf *b)
     b->used = 0;
     unlock();
     if (b->mem)
-        shim_guest_free(b->mem);
+        guest_free(b->mem);
     if (b->notify_obj)
-        shim_guest_free(b->notify_obj);
-    shim_guest_free(b->obj);
+        guest_free(b->notify_obj);
+    guest_free(b->obj);
     memset(b, 0, sizeof *b);
 }
 
@@ -635,7 +635,7 @@ static uint32_t d_create_sound_buffer(const uint32_t *a)
         }
         b->channels = ch, b->bits = bits, b->rate = (int)rate, b->align = align;
         b->size = bytes - bytes % align;
-        b->mem = shim_guest_alloc(b->size);
+        b->mem = guest_alloc(b->size);
         if (!b->mem)
             return DSERR_OUTOFMEMORY;
     }
@@ -698,7 +698,7 @@ static uint32_t sh_direct_sound_create(const uint32_t *a)
 
 static uint32_t vtable(const shim_fn *fn, const int *nargs, int n)
 {
-    uint32_t vt = shim_guest_alloc(4 * (size_t)n);
+    uint32_t vt = guest_alloc(4 * (size_t)n);
     int k;
     for (k = 0; k < n && vt; k++)
         put32(vt + 4 * (uint32_t)k, shim_method(nargs[k], fn[k]));

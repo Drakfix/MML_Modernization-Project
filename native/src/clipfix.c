@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include "clipfix.h"
+#include "guest.h"
 #include "hook.h"
 #include "interp.h"
 #include "log.h"
@@ -81,8 +82,8 @@ static slot *probe(uint64_t key, uint32_t gen)
 
 static void camera_space(const int16_t *sv, float out[3])
 {
-    const float *m = (const float *)G_GTE_ROT;
-    const int32_t *t = (const int32_t *)G_GTE_TRANS;
+    const float *m = (const float *)GUEST(G_GTE_ROT);
+    const int32_t *t = (const int32_t *)GUEST(G_GTE_TRANS);
     float x = sv[0], y = sv[1], z = sv[2];
     out[0] = x * m[0] + y * m[1] + z * m[2] + (float)t[0];
     out[1] = x * m[3] + y * m[4] + z * m[5] + (float)t[1];
@@ -93,11 +94,11 @@ static void camera_space(const int16_t *sv, float out[3])
 static void __cdecl clip_post(int produced)
 {
     static const int quad_order[5] = { 0, 1, 3, 2, 0 }, tri_order[4] = { 0, 1, 2, 0 };
-    const int16_t *verts = (const int16_t *)(uintptr_t)g_a_verts;
-    const uint8_t *uvs = (const uint8_t *)(uintptr_t)g_a_uvs;
-    const clip_rec *out = (const clip_rec *)(uintptr_t)g_a_out;
+    const int16_t *verts = (const int16_t *)GUEST(g_a_verts);
+    const uint8_t *uvs = (const uint8_t *)GUEST(g_a_uvs);
+    const clip_rec *out = (const clip_rec *)GUEST(g_a_out);
     const int *order;
-    float near_z = *(const float *)G_GTE_NEAR, c[5][3];
+    float near_z = GVAR(float, G_GTE_NEAR), c[5][3];
     int n = (int)g_a_count, i, k = 0;
 
     if ((n != 3 && n != 4) || produced <= 0 || produced > 8)
@@ -171,8 +172,8 @@ static void clip_pre_c(const uint32_t regs[8])
     g_a_verts = regs[0];
     g_a_uvs = regs[2];
     g_a_out = regs[3];
-    g_a_site = *(const uint32_t *)(uintptr_t)regs[4];         /* our caller: which drawer this is */
-    g_a_count = *(const uint32_t *)(uintptr_t)(regs[4] + 4);  /* the count, above the return address */
+    g_a_site = GVAR(uint32_t, regs[4]);                      /* our caller: which drawer this is */
+    g_a_count = GVAR(uint32_t, regs[4] + 4);                 /* the count, above the return address */
 }
 
 static void clip_post_c(uint32_t eax)

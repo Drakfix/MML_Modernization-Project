@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "bglayer.h"
+#include "guest.h"
 #include "hook.h"
 #include "log.h"
 
@@ -58,8 +59,8 @@ static double g_lost_x;            /* scroll the game's integer math dropped, fo
 static double lost_scroll(const uint8_t *layer, int w)
 {
     int32_t speed = *(const int32_t *)(layer + 0x1E) >> 16;
-    uint32_t drift = (uint32_t)(speed * *(const int32_t *)G_LAYER_COUNTER);
-    int32_t par = *(const int32_t *)G_LAYER_PARALLAX, w2 = w * w;
+    uint32_t drift = (uint32_t)(speed * GVAR(int32_t, G_LAYER_COUNTER));
+    int32_t par = GVAR(int32_t, G_LAYER_PARALLAX), w2 = w * w;
     double units8;
     if (layer[1] != 0 || w2 <= 0)
         return 0.0;   /* self-scrolling layers keep their own exact position */
@@ -69,7 +70,7 @@ static double lost_scroll(const uint8_t *layer, int w)
 
 static void on_layer_tiles(regs_t *r)
 {
-    uint8_t *layer = (uint8_t *)(uintptr_t)r->ebp;
+    uint8_t *layer = (uint8_t *)GUEST(r->ebp);
     int w = *(int32_t *)(layer + 0x22) >> 16, h = *(int32_t *)(layer + 0x24) >> 16;
     int16_t *xi = (int16_t *)(layer + 0xC), *yi = (int16_t *)(layer + 0xE);
     g_open = NULL;
@@ -86,7 +87,7 @@ static void on_layer_tiles(regs_t *r)
 
 static void on_layer_link(regs_t *r)
 {
-    uint8_t *layer = (uint8_t *)(uintptr_t)r->ebp;
+    uint8_t *layer = (uint8_t *)GUEST(r->ebp);
     layer_rec *e;
     if (layer != g_open)
         return;
@@ -96,9 +97,9 @@ static void on_layer_link(regs_t *r)
     if (g_n[g_build] >= MAX_LAYERS)
         return;
     e = &g_recs[g_build][g_n[g_build]++];
-    e->first = (const uint8_t *)(uintptr_t)r->edx;
-    e->last = (const uint8_t *)(uintptr_t)r->ebx;
-    e->slot = (int)(((uintptr_t)layer - LAYER_POOL) / LAYER_SIZE);
+    e->first = (const uint8_t *)GUEST(r->edx);
+    e->last = (const uint8_t *)GUEST(r->ebx);
+    e->slot = (int)((GADDR(layer) - LAYER_POOL) / LAYER_SIZE);
     e->x = (double)*(int32_t *)(layer + 4) / 65536.0 + g_lost_x;
     e->xi = g_saved_x;
     e->yi = g_saved_y;
@@ -122,10 +123,10 @@ void bglayer_frame_end(void)
         int i;
         for (i = 0; i < g_n[g_build] && i < 2; i++)
         {
-            const uint8_t *L = (const uint8_t *)(LAYER_POOL + g_recs[g_build][i].slot * LAYER_SIZE);
+            const uint8_t *L = (const uint8_t *)GUEST(LAYER_POOL + g_recs[g_build][i].slot * LAYER_SIZE);
             log_printf("bglayer: slot %d x %.4f yaw %d ea78 %d ea70 %d speed %d base %d w %d auto %d",
-                       g_recs[g_build][i].slot, g_recs[g_build][i].x, (int)*(int16_t *)0x77EA0Au,
-                       *(int32_t *)0x77EA78u, *(int32_t *)0x77EA70u, *(int32_t *)(L + 0x1e) >> 16,
+                       g_recs[g_build][i].slot, g_recs[g_build][i].x, (int)GVAR(int16_t, 0x77EA0Au),
+                       GVAR(int32_t, 0x77EA78u), GVAR(int32_t, 0x77EA70u), *(int32_t *)(L + 0x1e) >> 16,
                        *(int32_t *)(L + 0x1a) >> 16, *(int32_t *)(L + 0x22) >> 16, L[1]);
         }
     }

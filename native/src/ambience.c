@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "ambience.h"
+#include "guest.h"
 #include "hook.h"
 #include "log.h"
 
@@ -30,18 +31,18 @@ static uint32_t g_looping_entry, g_looping_id, g_looping_part;
 
 static uint32_t rd32(uint32_t a)
 {
-    return *(volatile uint32_t *)(uintptr_t)a;
+    return GVAR(uint32_t, a);
 }
 
 static void wr32(uint32_t a, uint32_t v)
 {
-    *(volatile uint32_t *)(uintptr_t)a = v;
+    GVAR(uint32_t, a) = v;
 }
 
 /* the bank entry of a sound-bank ID, or 0 when its bank isn't loaded */
 static uint32_t bank_entry(uint32_t id)
 {
-    const uint8_t *info = (const uint8_t *)(uintptr_t)(G_SOUND_INFO + (id - 0x80) * 4);
+    const uint8_t *info = (const uint8_t *)GUEST(G_SOUND_INFO + (id - 0x80) * 4);
     int b;
     if (id < 0x80 || id >= 0x80 + 0x200)
         return 0;

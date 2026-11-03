@@ -7,6 +7,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "guest.h"
+
 typedef uint32_t (*shim_fn)(const uint32_t *args);
 
 /* the import dll!name (case-insensitive dll; "#n" for one imported by ordinal) of the game's
@@ -38,10 +40,6 @@ uint32_t shim_event_create(int manual, int initial);
 void shim_event_set(uint32_t h);
 int shim_event_close(uint32_t h);   /* 1 if h was one of ours */
 
-/* memory the game can address, for what a shim hands it (strings, blocks): on 32-bit Windows
-   any host memory is; the portable runtime takes it from its reserved guest block (M3 item 4) */
-uint32_t shim_guest_alloc(size_t n);   /* zeroed */
-void shim_guest_free(uint32_t g);
 /* the game folder (the current directory the game runs in) */
 const char *shim_game_dir(void);
 void shim_kernel32_log(int on);   /* [debug] shim_log=1: log every file the game opens */

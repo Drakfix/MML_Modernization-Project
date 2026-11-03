@@ -28,6 +28,7 @@
 #include <math.h>
 
 #include "game.h"
+#include "guest.h"
 #include "hook.h"
 #include "log.h"
 #include "mml.h"
@@ -103,9 +104,9 @@ static int g_cur_site;
 
 static void tag_packet(uint8_t *pkt, int n, const short (*v)[3], const int *sz)
 {
-    const float *m = (const float *)G_GTE_ROT;
-    const int32_t *t = (const int32_t *)G_GTE_TRANS;
-    float near_z = *(const float *)G_GTE_NEAR * g_near_scale;
+    const float *m = (const float *)GUEST(G_GTE_ROT);
+    const int32_t *t = (const int32_t *)GUEST(G_GTE_TRANS);
+    float near_z = GVAR(float, G_GTE_NEAR) * g_near_scale;
     float c[4][3];
     uint32_t tag;
     int i, near_count = 0;
@@ -138,9 +139,9 @@ static void tag_packet(uint8_t *pkt, int n, const short (*v)[3], const int *sz)
             e->sz[i] = sz[i];
         e->near_z = near_z;
         e->hx = mml_h_x();
-        e->hy = *(const float *)G_GTE_H_FLOAT;
-        e->ofx = (float)*(const int32_t *)G_GTE_OFX;
-        e->ofy = (float)*(const int32_t *)G_GTE_OFY;
+        e->hy = GVAR(float, G_GTE_H_FLOAT);
+        e->ofx = (float)GVAR(int32_t, G_GTE_OFX);
+        e->ofy = (float)GVAR(int32_t, G_GTE_OFY);
         e->x0 = *(const float *)(pkt + (n == 4 ? 0x28 : 0x20));
         e->site = g_cur_site;
         g_site_tagged[g_cur_site]++;
@@ -154,9 +155,9 @@ static void tag_packet(uint8_t *pkt, int n, const short (*v)[3], const int *sz)
 /* emitters 0x4346C6 / 0x434D25: one quad or triangle from the cell's corners */
 static void on_emit_cell(regs_t *r)
 {
-    const short *sv = (const short *)G_CELL_SVEC;
-    const int32_t *fifo = (const int32_t *)G_GTE_SZ;
-    int op = (int)((*(const uint32_t *)G_EMIT_HEADER >> 24) & 0xFC);
+    const short *sv = (const short *)GUEST(G_CELL_SVEC);
+    const int32_t *fifo = (const int32_t *)GUEST(G_GTE_SZ);
+    int op = (int)((GVAR(uint32_t, G_EMIT_HEADER) >> 24) & 0xFC);
     short v[4][3];
     int sz[4], n, i;
 
@@ -174,7 +175,7 @@ static void on_emit_cell(regs_t *r)
         v[i][1] = sv[4 * i + 1];
         v[i][2] = sv[4 * i + 2];
     }
-    tag_packet((uint8_t *)(uintptr_t)r->edi, n, (const short (*)[3])v, sz);
+    tag_packet((uint8_t *)GUEST(r->edi), n, (const short (*)[3])v, sz);
 }
 
 static void on_emit_cell_a(regs_t *r) { g_cur_site = 0; on_emit_cell(r); }
@@ -185,7 +186,7 @@ static void on_emit_cell_b(regs_t *r) { g_cur_site = 1; on_emit_cell(r); }
  * integer halving the game uses (0x43530E). */
 static void grid_slot(int slot, short out[3])
 {
-    const short *sv = (const short *)G_CELL_SVEC;
+    const short *sv = (const short *)GUEST(G_CELL_SVEC);
     const short *v0 = sv, *v1 = sv + 4, *v2 = sv + 8, *v3 = sv + 12;
     short b[3], c[3];
     int k;
@@ -212,7 +213,7 @@ static void grid_slot(int slot, short out[3])
 
 static void tag_grid_poly(uint8_t *pkt, int n, const int *slots)
 {
-    const int32_t *w = (const int32_t *)G_CELL_W;
+    const int32_t *w = (const int32_t *)GUEST(G_CELL_W);
     short v[4][3];
     int sz[4], i;
     for (i = 0; i < n; i++) {
@@ -226,27 +227,27 @@ static void tag_grid_poly(uint8_t *pkt, int n, const int *slots)
 
 static void on_emit_sub_quad(regs_t *r)
 {
-    const uint8_t *esp = (const uint8_t *)(uintptr_t)(r->esp + 4);
+    const uint8_t *esp = (const uint8_t *)GUEST(r->esp + 4);
     int next = *(const int *)(esp + 0x48);   /* topology index, already advanced by 4 */
-    const uint8_t *topo = (const uint8_t *)G_CELL_TOPO + next - 4;
+    const uint8_t *topo = (const uint8_t *)GUEST(G_CELL_TOPO) + next - 4;
     int slots[4], i;
     if (next < 4 || next > 0x10)
         return;
     for (i = 0; i < 4; i++)
         slots[i] = topo[i];
     g_cur_site = 2;
-    tag_grid_poly((uint8_t *)(uintptr_t)r->ebp, 4, slots);
+    tag_grid_poly((uint8_t *)GUEST(r->ebp), 4, slots);
 }
 
 static void on_emit_sub_tri(regs_t *r)
 {
-    const uint8_t *esp = (const uint8_t *)(uintptr_t)(r->esp + 4);
+    const uint8_t *esp = (const uint8_t *)GUEST(r->esp + 4);
     int slots[3];
     slots[0] = *(const int *)(esp + 0x40);
     slots[1] = *(const int *)(esp + 0x44);
     slots[2] = *(const int *)(esp + 0x38) >> 3;
     g_cur_site = 3;
-    tag_grid_poly((uint8_t *)(uintptr_t)r->ebp, 3, slots);
+    tag_grid_poly((uint8_t *)GUEST(r->ebp), 3, slots);
 }
 
 /* ---- draw time ---- */
@@ -387,7 +388,7 @@ static void count(regs_t *r, int quad)
 {
     /* the writers have no prologue: [esp] is the return address
      * (r->esp is taken after the stub's pushfd) */
-    uint32_t ret = *(uint32_t *)(uintptr_t)(r->esp + 4);
+    uint32_t ret = GVAR(uint32_t, r->esp + 4);
     int i;
     for (i = 0; i < MAX_SITES && g_sites[i].ret && g_sites[i].ret != ret; i++)
         ;

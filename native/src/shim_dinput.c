@@ -61,7 +61,7 @@ static void put32(uint32_t g, uint32_t v)
 
 static uint32_t new_object(uint32_t vt, uint32_t kind)
 {
-    uint32_t o = shim_guest_alloc(8);
+    uint32_t o = guest_alloc(8);
     if (o) {
         put32(o, vt);
         put32(o + 4, kind);
@@ -211,7 +211,7 @@ static uint32_t i_enum_devices(const uint32_t *a)
     uint32_t inst, args[2];
     if (a[1] != 0 && a[1] != DIDEVTYPE_JOYSTICK_)
         return DI_OK_;
-    inst = shim_guest_alloc(0x244);   /* DIDEVICEINSTANCEA */
+    inst = guest_alloc(0x244);   /* DIDEVICEINSTANCEA */
     if (!inst)
         return DI_OK_;
     put32(inst, 0x244);
@@ -222,7 +222,7 @@ static uint32_t i_enum_devices(const uint32_t *a)
     strcpy_s((char *)HPTR(inst + 300), 260, "Controller (SDL)");
     args[0] = inst, args[1] = a[3];   /* the instance, the caller's ref */
     recomp_call_stdcall(a[2], 2, args);
-    shim_guest_free(inst);
+    guest_free(inst);
     return DI_OK_;
 }
 
@@ -237,7 +237,7 @@ static uint32_t sh_direct_input_create_a(const uint32_t *a)
 
 static uint32_t vtable(const shim_fn *fn, const int *nargs, int n)
 {
-    uint32_t vt = shim_guest_alloc(4 * (size_t)n);
+    uint32_t vt = guest_alloc(4 * (size_t)n);
     int k;
     for (k = 0; k < n && vt; k++)
         put32(vt + 4 * (uint32_t)k, shim_method(nargs[k], fn[k]));

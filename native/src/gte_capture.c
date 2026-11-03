@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "gte_capture.h"
+#include "guest.h"
 #include "hook.h"
 #include "interp.h"
 #include "log.h"
@@ -40,7 +41,7 @@ static int g_census;
 #define SITES 64
 static struct { uint32_t ret; unsigned n; } g_site_counts[SITES];
 
-static void report(uint32_t ret, uintptr_t v, uintptr_t sxy)
+static void report(uint32_t ret, uint32_t v, uint32_t sxy)
 {
     if (g_census) {
         int i;
@@ -54,25 +55,25 @@ static void report(uint32_t ret, uintptr_t v, uintptr_t sxy)
     if (!g_build_start.QuadPart)
         QueryPerformanceCounter(&g_build_start);
     if (ret >= TERRAIN_CODE_LO && ret < TERRAIN_CODE_HI) {
-        const int32_t *t = (const int32_t *)G_GTE_TRANS;
+        const int32_t *t = (const int32_t *)GUEST(G_GTE_TRANS);
         float tf[3];
         tf[0] = (float)t[0];
         tf[1] = (float)t[1];
         tf[2] = (float)t[2];
-        interp_camera((const float *)G_GTE_ROT, tf);
+        interp_camera((const float *)GUEST(G_GTE_ROT), tf);
         /* the ground never moves: its exact position is all the blend needs */
-        interp_vertex_static((const float *)G_GTE_CAM, *(const float *)sxy, *(const float *)(sxy + 4));
+        interp_vertex_static((const float *)GUEST(G_GTE_CAM), GVAR(float, sxy), GVAR(float, sxy + 4));
         return;
     }
-    interp_vertex(ret, (const int16_t *)v, (const float *)G_GTE_CAM,
-                  *(const float *)sxy, *(const float *)(sxy + 4));
+    interp_vertex(ret, (const int16_t *)GUEST(v), (const float *)GUEST(G_GTE_CAM),
+                  GVAR(float, sxy), GVAR(float, sxy + 4));
 }
 
 /* r->esp is the game's esp minus 4 (the stub's pushfd) */
-static void on_rtps(regs_t *r)    { report(*(uint32_t *)(uintptr_t)(r->esp + 4 + 16), G_GTE_V0, G_GTE_SXY2); }
-static void on_rtpt_v0(regs_t *r) { report(*(uint32_t *)(uintptr_t)(r->esp + 4 + 8), G_GTE_V0, G_GTE_SXY0); }
-static void on_rtpt_v1(regs_t *r) { report(*(uint32_t *)(uintptr_t)(r->esp + 4 + 8), G_GTE_V1, G_GTE_SXY1); }
-static void on_rtpt_v2(regs_t *r) { report(*(uint32_t *)(uintptr_t)(r->esp + 4 + 8), G_GTE_V2, G_GTE_SXY2); }
+static void on_rtps(regs_t *r)    { report(GVAR(uint32_t, r->esp + 4 + 16), G_GTE_V0, G_GTE_SXY2); }
+static void on_rtpt_v0(regs_t *r) { report(GVAR(uint32_t, r->esp + 4 + 8), G_GTE_V0, G_GTE_SXY0); }
+static void on_rtpt_v1(regs_t *r) { report(GVAR(uint32_t, r->esp + 4 + 8), G_GTE_V1, G_GTE_SXY1); }
+static void on_rtpt_v2(regs_t *r) { report(GVAR(uint32_t, r->esp + 4 + 8), G_GTE_V2, G_GTE_SXY2); }
 
 int gte_capture_install(int census)
 {

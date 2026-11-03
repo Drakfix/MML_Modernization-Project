@@ -29,6 +29,7 @@
 
 #include "controls.h"
 #include "game.h"
+#include "guest.h"
 #include "hook.h"
 #include "iat.h"
 #include "kbm.h"
@@ -77,14 +78,14 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 
 #define PI 3.14159265358979323846
 
-#define RD16(a) (*(volatile uint16_t *)(uintptr_t)(a))
-#define RD32(a) (*(volatile int32_t *)(uintptr_t)(a))
-#define WR32(a, v) (*(volatile int32_t *)(uintptr_t)(a) = (int32_t)(v))
+#define RD16(a) GVAR(uint16_t, a)
+#define RD32(a) GVAR(int32_t, a)
+#define WR32(a, v) (GVAR(int32_t, a) = (int32_t)(v))
 #define PL(o)   (G_PLAYER + (o))
-#define P8(o)   (*(volatile uint8_t *)PL(o))
-#define P16(o)  (*(volatile uint16_t *)PL(o))
-#define S16(o)  (*(volatile int16_t *)PL(o))
-#define RIG8(o) (*(volatile uint8_t *)(uintptr_t)(G_CAM_RIG + (o)))
+#define P8(o)   GVAR(uint8_t, PL(o))
+#define P16(o)  GVAR(uint16_t, PL(o))
+#define S16(o)  GVAR(int16_t, PL(o))
+#define RIG8(o) GVAR(uint8_t, G_CAM_RIG + (o))
 
 static int g_modern;
 
@@ -210,7 +211,7 @@ static int st_allowed = 1, flick_armed = 1;
 /* launcher Controls tab: camera speed (signed: negative = inverted) and deadzone */
 static double g_yaw_speed = YAW_SPEED, g_pitch_speed = PITCH_SPEED, g_stick_dz = STICK_DZ;
 static double cam_dist_cur = -1;
-static int32_t g_view_target[4];
+static int32_t *g_view_target;   /* handed to the game (EAX): in guest memory */
 static int st_active, prev_key, prev_click;
 static LARGE_INTEGER qpc_last, qpc_freq;
 
@@ -393,14 +394,16 @@ static __declspec(naked) void world_collision_thunk(void)   /* called as world_c
 
 static uint32_t cam_probe(double x, double y, double z)
 {
-    int16_t pt[4];
+    static int16_t *pt;   /* the point the game reads: in guest memory */
+    if (!pt)
+        pt = (int16_t *)GUEST(guest_alloc(8));
     pt[0] = (int16_t)iround(x);
     pt[1] = (int16_t)iround(y);
     pt[2] = (int16_t)iround(z);
     pt[3] = 0;
     if (recomp_in_shim()) {   /* the recompiled game: its own world_line_collision, no machine code */
         uint32_t regs[4];
-        regs[0] = regs[1] = (uint32_t)(uintptr_t)pt, regs[2] = G_CAM_COLLISION_PARAMS, regs[3] = 0xFFFF;
+        regs[0] = regs[1] = GADDR(pt), regs[2] = G_CAM_COLLISION_PARAMS, regs[3] = 0xFFFF;
         return recomp_call_watcall(G_FN_WORLD_COLLISION, regs, 0, NULL);
     }
     return ((world_collision_fn)(void *)world_collision_thunk)(pt, pt, G_CAM_COLLISION_PARAMS, 0xFFFF);
@@ -505,15 +508,15 @@ static void input_update(void)
         /* a lock starts only where the game allows targeting (combat HUD up);
          * once it happened, the hold stays a lock-on hold until aim is released */
         lockon_want(hold && (lockon_had() || g_lock_test ||
-                             (*(volatile uint8_t *)(uintptr_t)G_TARGET_FLAGS & 2)));
+                             (GVAR(uint8_t, G_TARGET_FLAGS) & 2)));
         lock_active = hold && (lockon_locked() || g_lock_test);
         lock_free = hold && !lock_active && lockon_had();
         if (lock_active) {
             int tx, ty, tz;
             double want, d;
             if (g_lock_test) {
-                tx = *(volatile int16_t *)(uintptr_t)(G_SUPPORT_OBJ + 0x14);
-                tz = *(volatile int16_t *)(uintptr_t)(G_SUPPORT_OBJ + 0x18);
+                tx = GVAR(int16_t, G_SUPPORT_OBJ + 0x14);
+                tz = GVAR(int16_t, G_SUPPORT_OBJ + 0x18);
             } else {
                 lockon_pos(&tx, &ty, &tz);
             }
@@ -622,7 +625,7 @@ static void true_orbit(void)
 static void place_camera(regs_t *r, int yaw, int pitch, int mode)
 {
     static int last_mode = -1;
-    const int32_t *t = (const int32_t *)(uintptr_t)r->eax;
+    const int32_t *t = (const int32_t *)GUEST(r->eax);
     int orbit = pitch > LOOK_ORBIT_MAX ? LOOK_ORBIT_MAX : pitch;
     int want, d;
     if (mode != last_mode)
@@ -643,11 +646,13 @@ static void place_camera(regs_t *r, int yaw, int pitch, int mode)
         double a = (yaw & 0xfff) * (PI / 2048.0);
         double bo = -orbit * (PI / 2048.0), bv = -pitch * (PI / 2048.0);
         double cx = t[0] - d * sin(a) * cos(bo), cy = t[1] - d * sin(bo), cz = t[2] - d * cos(a) * cos(bo);
+        if (!g_view_target)
+            g_view_target = (int32_t *)GUEST(guest_alloc(16));
         g_view_target[0] = iround(cx + d * sin(a) * cos(bv));
         g_view_target[1] = iround(cy + d * sin(bv));
         g_view_target[2] = iround(cz + d * cos(a) * cos(bv));
         g_view_target[3] = t[3];
-        r->eax = (uint32_t)(uintptr_t)g_view_target;
+        r->eax = GADDR(g_view_target);
     }
 }
 
@@ -662,7 +667,7 @@ static void on_cam_apply(regs_t *r)
         /* only the gameplay camera (camera_update's common tail) is "the game's
          * camera"; cam_follow_lookat & co. also come through here every frame
          * with angles of their own */
-        uint32_t ret = *(uint32_t *)(uintptr_t)(r->esp + 4);
+        uint32_t ret = GVAR(uint32_t, r->esp + 4);
         is_gameplay_cam = ret == G_RET_CAM_COMMON_BLEND || ret == G_RET_CAM_COMMON;
         if (is_gameplay_cam) {
             g_game_yaw = (int)r->ebx;
@@ -932,7 +937,7 @@ static void on_player_update(regs_t *r)
 
     /* analog walk: a light tilt adds the walk modifier (Triangle) to what the
      * player holds, so the game picks its own walk state */
-    if (walk_injected && !(*(volatile uint16_t *)G_PAD_HELD & P16(PL_MASK_WALK)))
+    if (walk_injected && !(GVAR(uint16_t, G_PAD_HELD) & P16(PL_MASK_WALK)))
         P16(PL_HELD) &= (uint16_t)~P16(PL_MASK_WALK);   /* in case held wasn't refreshed yet */
     walk_injected = 0;
     /* locked on, a light tilt walks too (sidestep / backstep facing the target),
@@ -944,7 +949,7 @@ static void on_player_update(regs_t *r)
         P16(PL_HELD) |= walk;
         /* walk and talk share a button: an injected walk must not open a
          * conversation with whoever stands in front (the real button still does) */
-        if (!(*(volatile uint16_t *)G_PAD_HELD & walk) && (P16(PL_MASK_TALK) & walk)) {
+        if (!(GVAR(uint16_t, G_PAD_HELD) & walk) && (P16(PL_MASK_TALK) & walk)) {
             talk_saved = P16(PL_MASK_TALK);
             P16(PL_MASK_TALK) = (uint16_t)(talk_saved & ~walk);
             talk_hidden = 1;
@@ -1157,7 +1162,7 @@ static DWORD WINAPI intro_skip_thread(LPVOID unused)
     int i, seen = 0;
     (void)unused;
     for (i = 0; i < 60 * 20; i++) {   /* 60 s */
-        int playing = *(volatile uint8_t *)G_INTRO_PLAYING;
+        int playing = GVAR(uint8_t, G_INTRO_PLAYING);
         Sleep(50);
         if (seen && !playing)
             return 0;
@@ -1173,7 +1178,7 @@ static DWORD WINAPI intro_skip_thread(LPVOID unused)
                        (s.pad.wButtons || s.pad.bLeftTrigger > TRIG_ON || s.pad.bRightTrigger > TRIG_ON);
             }
             if (down) {
-                *(volatile uint8_t *)G_INTRO_PLAYING = 0;
+                GVAR(uint8_t, G_INTRO_PLAYING) = 0;
                 log_printf("intro: skipped by gamepad");
                 return 0;
             }

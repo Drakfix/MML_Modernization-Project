@@ -1541,7 +1541,7 @@ static __declspec(noreturn) void __cdecl recomp_start(void)
 {
     RCtx *c = (RCtx *)_alloca(sizeof(RCtx));
     uint8_t *stack = (uint8_t *)VirtualAlloc(NULL, GUEST_STACK, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    uint32_t base = (uint32_t)(uintptr_t)stack, top = base + GUEST_STACK, tib = shim_guest_alloc(0x1000), esp;
+    uint32_t base = (uint32_t)(uintptr_t)stack, top = base + GUEST_STACK, tib = guest_alloc(0x1000), esp;
     if (!stack || !tib) {
         log_printf("recomp: no memory for the game's stack");
         ExitProcess(1);

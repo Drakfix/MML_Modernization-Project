@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "controls.h"
+#include "guest.h"
 #include "kbm.h"
 #include "log.h"
 #include "menu.h"
@@ -95,8 +96,8 @@ static int slot_is_ours(void)
 
 static void quick_save(void)
 {
-    volatile uint8_t *slot = (volatile uint8_t *)G_SAVE_SLOT;
-    const uint8_t *block = (const uint8_t *)G_SAVE_BLOCK;
+    volatile uint8_t *slot = (volatile uint8_t *)GUEST(G_SAVE_SLOT);
+    const uint8_t *block = (const uint8_t *)GUEST(G_SAVE_BLOCK);
     uint8_t old_slot;
     FILE *f = NULL;
 
@@ -141,8 +142,8 @@ static void label_slot(void)
 {
     static const uint8_t no_data[13] = { 0x22, 0x3D, 0x0A, 0x32, 0x2F, 0x42, 0x2F, 0x0D, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A };
     static const uint8_t quick[13] = { 0x25, 0x43, 0x37, 0x31, 0x39, 0x0A, 0x41, 0x2F, 0x44, 0x33, 0x0A, 0x0A, 0x0A };
-    uint8_t *label = (uint8_t *)G_SLOT_LABEL(QUICK_SLOT);
-    const uint8_t *hdr = (const uint8_t *)G_SLOT_HEADER(QUICK_SLOT);
+    uint8_t *label = (uint8_t *)GUEST(G_SLOT_LABEL(QUICK_SLOT));
+    const uint8_t *hdr = (const uint8_t *)GUEST(G_SLOT_HEADER(QUICK_SLOT));
     if (hdr[0x109] == 0 && hdr[0x100] == 0 && memcmp(label, no_data, sizeof no_data) == 0)
         memcpy(label, quick, sizeof quick);
 }
