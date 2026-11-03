@@ -2277,6 +2277,8 @@ static MCIERROR WINAPI shim_mci_send_string(LPCSTR cmd, LPSTR ret, UINT retlen, 
     RECT rc;
     /* the intro setup resizes the window to 640x480 after SetCooperativeLevel,
      * so place it again right before the video gets its rectangle */
+    if (!g_real_mci)
+        return 263;   /* MCIERR_DEVICE_NOT_INSTALLED: the runner has no MCI */
     if (cmd && _strnicmp(cmd, prefix, sizeof prefix - 1) == 0 && g_game_hwnd)
         prepare_window(g_game_hwnd);
     if (cmd && _strnicmp(cmd, prefix, sizeof prefix - 1) == 0 && g_game_hwnd && GetClientRect(g_game_hwnd, &rc) &&
@@ -2373,7 +2375,11 @@ int ddshim_install(const gfx_options *opt)
     void *create = (void *)shim_direct_draw_create, *enumerate = (void *)shim_direct_draw_enumerate;
     void *mci = (void *)shim_mci_send_string;
     g_opt = *opt;
-    g_real_mci = *(MCIERROR(WINAPI **)(LPCSTR, LPSTR, UINT, HWND))G_IAT_MCISENDSTRINGA;
+#ifdef MML_RUNNER
+    g_real_mci = NULL;   /* no MCI: the game's own intro player can't play (ours does) */
+#else
+    g_real_mci = (MCIERROR(WINAPI *)(LPCSTR, LPSTR, UINT, HWND))(uintptr_t)GVAR(uint32_t, G_IAT_MCISENDSTRINGA);
+#endif
     mem_write(G_IAT_MCISENDSTRINGA, &mci, sizeof mci);
     build_vtables();
     shim_add_target((uint32_t)(uintptr_t)create, 3, sh_direct_draw_create);   /* the recompiled game's calls */

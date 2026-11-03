@@ -1,0 +1,103 @@
+/* mml_run.exe: the game without its exe running. The runner reserves the game's memory
+ * (guest_mem.c), copies the game's exe file into it at the exe's own addresses, installs every
+ * mod as the DLL would (mml_init: hooks become registrations the recompiled code calls, imports
+ * are our shims), and starts the recompiled game at its entry point (recomp_run). Nothing of the
+ * game runs as machine code and nothing reaches it at a host address: the step before the
+ * portable runtime (M3 item 4). Built by build_runner.bat with MML_RUNNER defined; it goes in
+ * the game folder and loads MEGAMAN_NATIVE.EXE (else MEGAMAN.EXE) from there. */
+#ifdef MML_RUNNER
+#include <windows.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "guest.h"
+#include "log.h"
+#include "mml.h"
+#include "recomp.h"
+
+/* the exe file into guest memory at its image base: headers, then each section */
+static int load_image(const char *path)
+{
+    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    DWORD size, got = 0;
+    uint8_t *file;
+    const IMAGE_DOS_HEADER *dos;
+    const IMAGE_NT_HEADERS32 *nt;
+    const IMAGE_SECTION_HEADER *sec;
+    uint32_t base;
+    int k;
+    if (f == INVALID_HANDLE_VALUE)
+        return 0;
+    size = GetFileSize(f, NULL);
+    file = (uint8_t *)malloc(size);
+    if (!file || !ReadFile(f, file, size, &got, NULL) || got != size) {
+        CloseHandle(f);
+        free(file);
+        return 0;
+    }
+    CloseHandle(f);
+    dos = (const IMAGE_DOS_HEADER *)file;
+    nt = (const IMAGE_NT_HEADERS32 *)(file + dos->e_lfanew);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386) {
+        log_printf("runner: %s isn't a 32-bit x86 exe", path);
+        free(file);
+        return 0;
+    }
+    base = nt->OptionalHeader.ImageBase;
+    if (base != 0x400000 || guest_pages(base, nt->OptionalHeader.SizeOfImage, 1) != base) {
+        log_printf("runner: can't place the image at %08X", base);
+        free(file);
+        return 0;
+    }
+    memcpy(GUEST(base), file, nt->OptionalHeader.SizeOfHeaders);
+    sec = IMAGE_FIRST_SECTION(nt);
+    for (k = 0; k < nt->FileHeader.NumberOfSections; k++, sec++) {
+        DWORD n = sec->SizeOfRawData;
+        /* no file data (.bss: raw pointer 0, though it states a raw size): stays zero, as
+           Windows maps it; copying "file offset 0" filled the game's zeroed globals with the
+           exe's own header and code */
+        if (!sec->PointerToRawData || (sec->Characteristics & IMAGE_SCN_CNT_UNINITIALIZED_DATA))
+            continue;
+        if (sec->PointerToRawData + n > size)
+            n = size > sec->PointerToRawData ? size - sec->PointerToRawData : 0;
+        if (n)
+            memcpy(GUEST(base + sec->VirtualAddress), file + sec->PointerToRawData, n);
+    }
+    log_printf("runner: %s loaded at %08X (%u KB, %d sections)", path, base, nt->OptionalHeader.SizeOfImage >> 10,
+               nt->FileHeader.NumberOfSections);
+    free(file);
+    return 1;
+}
+
+int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
+{
+    char dir[MAX_PATH], exe[MAX_PATH], *slash;
+    (void)inst; (void)prev; (void)cmd; (void)show;
+    GetModuleFileNameA(NULL, dir, sizeof dir);
+    slash = strrchr(dir, '\\');
+    if (slash)
+        *slash = 0;
+    SetCurrentDirectoryA(dir);
+    log_open(dir);
+    log_printf("mml_run %s in %s", MML_NATIVE_BUILD, dir);
+    if (!guest_init())
+        return 1;
+    _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\MEGAMAN_NATIVE.EXE", dir);
+    if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES)
+        _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\MEGAMAN.EXE", dir);
+    if (!load_image(exe)) {
+        log_printf("runner: no game exe in %s", dir);
+        MessageBoxA(NULL, "MEGAMAN_NATIVE.EXE or MEGAMAN.EXE wasn't found next to mml_run.exe.", "mml_run",
+                    MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    mml_init();
+    recomp_run();
+    return 0;
+}
+#else
+typedef int runner_unused;   /* the DLL build: nothing here (an empty file would warn) */
+#endif

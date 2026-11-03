@@ -3,6 +3,8 @@
 
 /* Recompiled game code harness ([debug] recomp=diff|replace, see recomp.c). */
 void recomp_install(const char *ini);
+/* the standalone runner: start the recompiled game from its entry point (never returns) */
+void recomp_run(void);
 /* [debug] recomp_census=1: once per game frame (writes recomp_census.txt now and then) */
 void recomp_census_tick(void);
 

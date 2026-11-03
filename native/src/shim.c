@@ -20,16 +20,6 @@ static int g_nshims;
 static uint32_t g_last_error;
 static char g_game_dir[MAX_PATH];
 
-uint32_t guest_alloc(size_t n)
-{
-    return (uint32_t)(uintptr_t)calloc(1, n);
-}
-
-void guest_free(uint32_t g)
-{
-    free((void *)(uintptr_t)g);
-}
-
 const char *shim_game_dir(void)
 {
     return g_game_dir;
@@ -104,12 +94,12 @@ static uint32_t import_slot(const char *dll, const char *name)
             const IMAGE_IMPORT_BY_NAME *ibn;
             if (IMAGE_SNAP_BY_ORDINAL32(names->u1.Ordinal)) {
                 if (name[0] == '#' && (uint32_t)atoi(name + 1) == IMAGE_ORDINAL32(names->u1.Ordinal))
-                    return (uint32_t)(uintptr_t)&slots->u1.Function;
+                    return GADDR(&slots->u1.Function);
                 continue;
             }
             ibn = (const IMAGE_IMPORT_BY_NAME *)(g_exe + names->u1.AddressOfData);
             if (strcmp((const char *)ibn->Name, name) == 0)
-                return (uint32_t)(uintptr_t)&slots->u1.Function;
+                return GADDR(&slots->u1.Function);
         }
     }
     return 0;
@@ -123,7 +113,7 @@ uint32_t shim_method(int nargs, shim_fn fn)
 {
     uint32_t a;
     if (!g_method_base)
-        g_method_base = (uint32_t)(uintptr_t)VirtualAlloc(NULL, METHOD_SPACE, MEM_RESERVE, PAGE_NOACCESS);
+        g_method_base = guest_pages(0, METHOD_SPACE, 0);   /* reserved, never touched: only a key */
     if (!g_method_base || g_methods >= METHOD_SPACE / 4) {
         log_printf("shims: no room for another method");
         return 0;
@@ -147,14 +137,18 @@ int shim_add(const char *dll, const char *name, int nargs, shim_fn fn)
         log_printf("shims: the game doesn't import %s!%s", dll, name);
         return 0;
     }
-    real = *(const uint32_t *)(uintptr_t)slot;
+    real = GVAR(uint32_t, slot);
     if (real >= g_self_lo && real < g_self_hi) {
         /* one of our mods replaced this import (GetTickCount: the frame pacing); its function
            stays what the game calls */
         log_printf("shims: %s!%s is hooked by mml.dll, left to the hook", dll, name);
         return 0;
     }
+#ifdef MML_RUNNER
+    GVAR(uint32_t, slot) = shim_method(nargs, fn);   /* nothing bound the import: ours is the function */
+#else
     put(real, fn, nargs);
+#endif
     /* thunks in the code sections: JMP [slot] (FF 25 slot) */
     for (k = 0; k < g_nt->FileHeader.NumberOfSections; k++, sec++) {
         const uint8_t *p, *end;
@@ -165,10 +159,60 @@ int shim_add(const char *dll, const char *name, int nargs, shim_fn fn)
         end = p + (sec->Misc.VirtualSize > sec->SizeOfRawData ? sec->Misc.VirtualSize : sec->SizeOfRawData) - 6;
         for (; p < end; p++)
             if (p[0] == 0xFF && p[1] == 0x25 && *(const uint32_t *)(p + 2) == slot)
-                put((uint32_t)(uintptr_t)p, fn, nargs);
+                put(GADDR(p), fn, nargs);
     }
     return 1;
 }
+
+#ifdef MML_RUNNER
+static uint32_t sh_missing(const uint32_t *a)
+{
+    static int logged;
+    (void)a;
+    if (logged++ < 10)
+        log_printf("shims: the game called an import we don't have (see the list at start)");
+    shim_set_error(ERROR_CALL_NOT_IMPLEMENTED);
+    return 0;
+}
+
+static uint32_t sh_missing_com(const uint32_t *a)   /* the DirectX entry points return an HRESULT */
+{
+    sh_missing(a);
+    return 0x80004005u;   /* E_FAIL */
+}
+
+/* every import nothing bound (still the loader's name reference) goes to sh_missing */
+static void bind_missing(void)
+{
+    const IMAGE_DATA_DIRECTORY *dir = &g_nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    const IMAGE_IMPORT_DESCRIPTOR *d;
+    int n = 0;
+    for (d = (const IMAGE_IMPORT_DESCRIPTOR *)(g_exe + dir->VirtualAddress); d->Name; d++) {
+        const IMAGE_THUNK_DATA32 *names = (const IMAGE_THUNK_DATA32 *)(g_exe + d->OriginalFirstThunk);
+        IMAGE_THUNK_DATA32 *slots = (IMAGE_THUNK_DATA32 *)(g_exe + d->FirstThunk);
+        for (; names->u1.AddressOfData; names++, slots++) {
+            int dummy_n;
+            shim_fn dummy;
+            if (slots->u1.Function != names->u1.AddressOfData || shim_find(slots->u1.Function, &dummy, &dummy_n))
+                continue;   /* bound */
+            /* stdcall argument count unknown: the stub pops none (none of these is expected) */
+            {
+                const char *dll = (const char *)(g_exe + d->Name);
+                int com = _strnicmp(dll, "DSOUND", 6) == 0 || _strnicmp(dll, "DINPUT", 6) == 0 ||
+                          _strnicmp(dll, "DDRAW", 5) == 0;
+                slots->u1.Function = shim_method(0, com ? sh_missing_com : sh_missing);
+            }
+            if (IMAGE_SNAP_BY_ORDINAL32(names->u1.Ordinal))
+                log_printf("shims: no %s!#%u", (const char *)(g_exe + d->Name), IMAGE_ORDINAL32(names->u1.Ordinal));
+            else
+                log_printf("shims: no %s!%s", (const char *)(g_exe + d->Name),
+                           (const char *)((const IMAGE_IMPORT_BY_NAME *)(g_exe + names->u1.AddressOfData))->Name);
+            n++;
+        }
+    }
+    log_printf("shims: %d imports have no version of ours", n);
+}
+#endif
 
 void shims_install(const char *ini, const char *game_dir)
 {
@@ -181,7 +225,11 @@ void shims_install(const char *ini, const char *game_dir)
         strcpy_s(g_game_dir, sizeof g_game_dir, game_dir);
     else
         GetCurrentDirectoryA(sizeof g_game_dir, g_game_dir);
+#ifdef MML_RUNNER
+    g_exe = (const uint8_t *)GUEST(0x400000);   /* the image the runner loaded */
+#else
     g_exe = (const uint8_t *)GetModuleHandleA(NULL);
+#endif
     g_nt = (const IMAGE_NT_HEADERS *)(g_exe + ((const IMAGE_DOS_HEADER *)g_exe)->e_lfanew);
     {
         HMODULE self;
@@ -206,5 +254,8 @@ void shims_install(const char *ini, const char *game_dir)
     if (GetPrivateProfileIntA("debug", "shim_dinput", 1, ini) && shim_dinput_install())
         log_printf("shims: DirectInput is ours (keyboard, SDL controller)");
     shim_kernel32_log(GetPrivateProfileIntA("debug", "shim_log", 0, ini));
+#ifdef MML_RUNNER
+    bind_missing();
+#endif
     log_printf("shims: %d call targets run our own Windows functions", g_nshims);
 }

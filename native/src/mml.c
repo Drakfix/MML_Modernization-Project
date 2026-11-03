@@ -50,7 +50,6 @@
 #include "bglayer.h"
 #include "watch.h"
 
-#define MML_NATIVE_BUILD "0.5.0-beta"
 
 static char g_game_dir[MAX_PATH];
 static char g_ini[MAX_PATH];
@@ -472,12 +471,15 @@ static void limiter_frame(void)
 static void install_timing(void)
 {
     static const uint8_t walker_call[] = { 0xE8, 0x96, 0x05, 0x05, 0x00 };   /* call 0x4F7680 */
-    void **slot = (void **)G_IAT_GETTICKCOUNT;
+    uint32_t slot = GVAR(uint32_t, G_IAT_GETTICKCOUNT);
     void *real = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetTickCount");
     void *mine = (void *)rebased_gettickcount;
 
-    if (*slot != real) {
-        log_printf("timing: GetTickCount import slot holds %p (expected %p), skipped", *slot, real);
+#ifdef MML_RUNNER
+    slot = (uint32_t)(uintptr_t)real;   /* nothing bound the import: ours goes in */
+#endif
+    if (slot != (uint32_t)(uintptr_t)real) {
+        log_printf("timing: GetTickCount import slot holds %08X (expected %p), skipped", slot, real);
     } else {
         g_real_gettickcount = (DWORD(WINAPI *)(void))real;
         g_tick_base = g_real_gettickcount();
@@ -537,7 +539,7 @@ static void disable_dev_keys(void)
 
 /* ---- entry ---- */
 
-static void init(void)
+void mml_init(void)
 {
     char aspect[16], controls[16], mode[16];
     char *slash;
@@ -549,8 +551,10 @@ static void init(void)
         *slash = 0;
     strcpy_s(g_ini, sizeof g_ini, g_game_dir);
     strcat_s(g_ini, sizeof g_ini, "\\mml.ini");
+#ifndef MML_RUNNER
     log_open(g_game_dir);
     log_printf("mml.dll %s loaded into %s", MML_NATIVE_BUILD, g_game_dir);
+#endif
 
     ini_string("video", "aspect", "16:9", aspect, sizeof aspect);
     g_closer = ini_float("video", "closer_factor", g_closer);
@@ -739,6 +743,7 @@ static void init(void)
     log_printf("init done");
 }
 
+#ifndef MML_RUNNER
 /* Referenced by the exe's import entry so the loader pulls us in. */
 __declspec(dllexport) void mml_entry(void) {}
 
@@ -747,7 +752,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(inst);
-        init();
+        mml_init();
     }
     return TRUE;
 }
+#endif

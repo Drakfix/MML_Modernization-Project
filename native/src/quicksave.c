@@ -26,6 +26,7 @@
 #include "log.h"
 #include "menu.h"
 #include "quicksave.h"
+#include "recomp.h"
 #include "toast.h"
 
 #define G_FN_SAVE_GATHER 0x42AE02u
@@ -53,6 +54,11 @@ static int g_stable, g_key_was;
  * pushes are only belt and braces for the ones MSVC expects kept */
 static void call_watcom0(uintptr_t fn)
 {
+    if (recomp_in_shim()) {   /* the recompiled game: its own functions, no machine code */
+        static const uint32_t none[4] = { 0, 0, 0, 0 };
+        recomp_call_watcall((uint32_t)fn, none, 0, NULL);
+        return;
+    }
     __asm {
         push ebx
         push esi

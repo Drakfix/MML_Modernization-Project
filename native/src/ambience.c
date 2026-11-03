@@ -18,6 +18,7 @@
 #include "guest.h"
 #include "hook.h"
 #include "log.h"
+#include "recomp.h"
 
 #define G_SITE_ROOM_SOUND   0x4D889Bu   /* FUN_004D8875: xor eax,eax; xor ebx,ebx; mov ecx,[edx+4d] */
 #define G_ROOM_STATE        0x77E784u   /* +0x4D: stage (high byte), +0x4E: room (high byte) */
@@ -78,8 +79,15 @@ static void on_room_sound(regs_t *r)
     if (g_looping_entry && id != g_looping_id) {
         /* still that sample in that bank entry (a stage change frees and reloads banks) */
         if (bank_entry(g_looping_id) == g_looping_entry && rd32(g_looping_entry + 4) == g_looping_part &&
-            rd32(g_looping_entry + 12))
-            ((sound_stop_fn)(void *)sound_stop_thunk)(g_looping_entry);
+            rd32(g_looping_entry + 12)) {
+            if (recomp_in_shim()) {   /* the recompiled game: its own function, no machine code */
+                uint32_t regs[4];
+                regs[0] = g_looping_entry, regs[1] = regs[2] = regs[3] = 0;
+                recomp_call_watcall(G_FN_SOUND_STOP, regs, 0, NULL);
+            } else {
+                ((sound_stop_fn)(void *)sound_stop_thunk)(g_looping_entry);
+            }
+        }
         g_looping_entry = 0;
     }
     if (id & 0x80000000u)

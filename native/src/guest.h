@@ -11,6 +11,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef MML_RUNNER
+extern uintptr_t g_membase;   /* guest_mem.c */
+#define G_MEMBASE g_membase
+#endif
 #ifndef G_MEMBASE
 #define G_MEMBASE ((uintptr_t)0)
 #endif
@@ -21,6 +25,16 @@
 
 /* memory the game can address, for what we hand it (strings, structures, display packets),
    zeroed; as a game address. In the DLL any host memory is; the standalone runtime takes it from
-   the guest block. (shim.c) */
+   the guest block. (guest_mem.c) */
 uint32_t guest_alloc(size_t n);
 void guest_free(uint32_t g);
+/* a page region of n bytes at game address `at` (0: anywhere), committed if asked */
+uint32_t guest_pages(uint32_t at, size_t n, int commit);
+#ifdef MML_RUNNER
+int guest_init(void);   /* reserve the block (the runner's first step) */
+/* the game's VirtualAlloc / VirtualFree / VirtualQuery on its own memory */
+uint32_t guest_virtual_alloc(uint32_t at, uint32_t n, uint32_t type);
+int guest_virtual_free(uint32_t at, uint32_t n, uint32_t type);
+uint32_t guest_virtual_query(uint32_t at, uint32_t out, uint32_t len);
+void guest_dump(void);   /* log the regions (crash reports) */
+#endif

@@ -29,6 +29,10 @@ typedef struct RCtx {
     int fdepth0;         /* x87 stack depth at entry (absolute depth = fdepth0 + fdelta) */
 } RCtx;
 
+#ifdef MML_RUNNER
+extern uintptr_t g_membase;   /* guest_mem.c: the standalone runtime's block */
+#define G_MEMBASE g_membase
+#endif
 #ifndef G_MEMBASE
 #define G_MEMBASE ((uintptr_t)0)
 #endif

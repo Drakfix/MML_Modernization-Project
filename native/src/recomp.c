@@ -1545,13 +1545,18 @@ static uint32_t guest_fs_base(void)
 static __declspec(noreturn) void __cdecl recomp_start(void)
 {
     RCtx *c = (RCtx *)_alloca(sizeof(RCtx));
-    uint8_t *stack = (uint8_t *)VirtualAlloc(NULL, GUEST_STACK, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    uint32_t base = (uint32_t)(uintptr_t)stack, top = base + GUEST_STACK, tib = guest_alloc(0x1000), esp;
-    if (!stack || !tib) {
+    uint32_t base = guest_pages(0, GUEST_STACK, 1), top = base + GUEST_STACK, tib = guest_alloc(0x1000), esp;
+    if (!base || !tib) {
         log_printf("recomp: no memory for the game's stack");
         ExitProcess(1);
     }
     memset(c, 0, sizeof *c);
+    {   /* the thread runs on our private stack now: exception dispatch checks handler frames
+           against the thread block's stack bounds (C++ exceptions inside drivers went unhandled) */
+        NT_TIB *t = (NT_TIB *)NtCurrentTeb();
+        t->StackBase = (void *)(uintptr_t)g_hs_hi;
+        t->StackLimit = (void *)(uintptr_t)(g_hs_lo + 4096);   /* above the guard page */
+    }
     g_host_free = (uint32_t)(uintptr_t)c - 256;   /* machine-code entries nest below us */
     /* NT_TIB: exception list (none), stack base (top), stack limit, self */
     ST32(c, tib, 0xFFFFFFFFu);
@@ -1577,6 +1582,12 @@ static __declspec(naked) void start_thunk(void)
         and esp, 0xFFFFFFF0
         call recomp_start
     }
+}
+
+/* the runner's start: the same, from C (never returns) */
+void recomp_run(void)
+{
+    start_thunk();
 }
 
 static void install_start(void)
@@ -1875,17 +1886,17 @@ static LONG CALLBACK on_crash(EXCEPTION_POINTERS *ep)
         {   /* return addresses into mml.dll near the top of the stack (map them with mml.map) */
             HMODULE self = NULL;
             const uint32_t *sp = (const uint32_t *)(uintptr_t)ep->ContextRecord->Esp;
-            char buf[256];
+            char buf[1024];
             size_t k, len = 0;
             GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                                (LPCSTR)(uintptr_t)on_crash, &self);
             buf[0] = 0;
-            for (k = 0; k < 256 && len < sizeof buf - 16; k++) {
+            for (k = 0; k < 400 && len < sizeof buf - 16; k++) {
                 uint32_t v;
                 if (IsBadReadPtr(sp + k, 4))
                     break;
                 v = sp[k] - (uint32_t)(uintptr_t)self;
-                if (v < 0x800000u)
+                if (v < g_mml_hi - g_mml_lo)
                     len += (size_t)_snprintf_s(buf + len, sizeof buf - len, _TRUNCATE, " %X", v);
             }
             log_printf("recomp: stack (mml.dll offsets):%s", buf);
@@ -1898,6 +1909,13 @@ static LONG CALLBACK on_crash(EXCEPTION_POINTERS *ep)
                 len += (size_t)_snprintf_s(buf + len, sizeof buf - len, _TRUNCATE, " %08X",
                                            g_recent[(g_nrecent - 1 - k) & 15]);
             log_printf("recomp: recent indirect targets (newest first):%s", buf);
+#ifdef MML_RUNNER
+            if (eip >= g_exe_lo && eip < g_exe_hi)   /* nothing of the game exists as machine code here */
+                log_printf("recomp: our code called the game's %08X as machine code (from %08X: mml_run.map); "
+                           "it needs recomp_call_watcall / recomp_callback", eip,
+                           *(const uint32_t *)(uintptr_t)ep->ContextRecord->Esp);
+            guest_dump();
+#endif
         }
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -1911,6 +1929,9 @@ void recomp_install(const char *ini)
     const size_t host_size = 32u << 20;
     GetPrivateProfileStringA("debug", "recomp", "off", mode, sizeof mode, ini);
     g_mode = _stricmp(mode, "diff") == 0 ? MODE_DIFF : _stricmp(mode, "replace") == 0 ? MODE_REPLACE : MODE_OFF;
+#ifdef MML_RUNNER
+    g_mode = MODE_REPLACE;   /* there is no machine code to run */
+#endif
     if (g_mode == MODE_OFF)
         return;
 #ifndef RECOMP_DIFF
@@ -1925,10 +1946,14 @@ void recomp_install(const char *ini)
     }
     build_func_index();
     host_call_setup();
-    {
+    {   /* the game's image, in game addresses */
+#ifdef MML_RUNNER
+        const uint8_t *exe = HPTR(0x400000);
+#else
         const uint8_t *exe = (const uint8_t *)GetModuleHandleA(NULL);
+#endif
         const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(exe + ((const IMAGE_DOS_HEADER *)exe)->e_lfanew);
-        g_exe_lo = (uint32_t)(uintptr_t)exe;
+        g_exe_lo = nt->OptionalHeader.ImageBase;
         g_exe_hi = g_exe_lo + nt->OptionalHeader.SizeOfImage;
     }
     if (GetPrivateProfileIntA("debug", "recomp_census", 0, ini)) {
@@ -1970,6 +1995,9 @@ void recomp_install(const char *ini)
     if (g_mode == MODE_REPLACE)
         shims_install(ini, NULL);
     GetPrivateProfileStringA("debug", "recomp_roots", "", roots, sizeof roots, ini);
+#ifdef MML_RUNNER
+    roots[0] = 0;   /* nothing enters from machine code; the runner calls recomp_run */
+#endif
     mark_modded();
     if (g_mode == MODE_REPLACE) {   /* the game's threads run on our stack switch */
         static const struct { uint32_t a; rfunc fn; } co[] = {
@@ -1977,10 +2005,15 @@ void recomp_install(const char *ini)
             { 0x4EEDCA, co_exec_root }, { 0x4EEDFD, co_exit_root },
         };
         int k;
+#ifndef MML_RUNNER
         for (k = 0; k < (int)(sizeof co / sizeof co[0]); k++)
             install_root_fn(co[k].a, co[k].fn);
         if (GetPrivateProfileIntA("debug", "recomp_entry", 1, ini))
             install_start();
+#else
+        (void)k;
+        (void)co;
+#endif
     }
     if (g_mode == MODE_REPLACE && g_modded && g_recomp_patch_aware) {
         memset(g_modded, 0, (size_t)g_recomp_nfuncs);   /* the recompiled code applies our patches itself */

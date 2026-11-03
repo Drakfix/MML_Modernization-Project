@@ -297,21 +297,35 @@ static uint32_t sh_get_file_attributes(const uint32_t *a)
    the portable runtime allocates inside its reserved guest block instead (M3 item 4) */
 static uint32_t sh_virtual_alloc(const uint32_t *a)
 {
+#ifdef MML_RUNNER
+    uint32_t g = guest_virtual_alloc(a[0], a[1], a[2]);
+    shim_set_error(g ? 0 : ERROR_NOT_ENOUGH_MEMORY);
+    return g;
+#else
     void *p = VirtualAlloc((void *)(uintptr_t)a[0], a[1], a[2], a[3]);
     shim_set_error(p ? 0 : GetLastError());
     return (uint32_t)(uintptr_t)p;
+#endif
 }
 
 static uint32_t sh_virtual_free(const uint32_t *a)
 {
+#ifdef MML_RUNNER
+    BOOL ok = guest_virtual_free(a[0], a[1], a[2]);
+#else
     BOOL ok = VirtualFree((void *)(uintptr_t)a[0], a[1], a[2]);
+#endif
     shim_set_error(ok ? 0 : GetLastError());
     return (uint32_t)ok;
 }
 
 static uint32_t sh_virtual_query(const uint32_t *a)
 {
+#ifdef MML_RUNNER
+    return guest_virtual_query(a[0], a[1], a[2]);
+#else
     return (uint32_t)VirtualQuery((const void *)(uintptr_t)a[0], (MEMORY_BASIC_INFORMATION *)HPTR(a[1]), a[2]);
+#endif
 }
 
 void shim_kernel32_install(void)
