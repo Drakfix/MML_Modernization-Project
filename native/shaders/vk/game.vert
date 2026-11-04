@@ -4,7 +4,6 @@
 
 layout(location = 0) in vec4 in_pos;        // x, y in pixels, z in 0..1, rhw
 layout(location = 1) in vec4 in_diffuse;    // 0xAARRGGBB read as R8G8B8A8: .bgra is r, g, b, a
-layout(location = 2) in vec4 in_specular;
 layout(location = 3) in vec2 in_uv;
 
 layout(location = 0) out vec4 v_color;

@@ -3,7 +3,7 @@
 #include "draw.glsl"
 
 layout(set = 0, binding = 0) uniform sampler smp;
-layout(set = 1, binding = 1) uniform texture2D tex;
+layout(set = 1, binding = 0) uniform texture2D tex;
 
 layout(location = 0) in vec4 v_color;
 layout(location = 1) flat in vec4 v_flat;

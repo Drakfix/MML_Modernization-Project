@@ -170,7 +170,7 @@ static struct {
     frame fr[FRAMES];
     int fi;                            /* the frame being recorded */
     int pass_open;                     /* the scene pass of tg[cur] is open */
-    VkDescriptorSetLayout set_layout;
+    VkDescriptorSetLayout smp_layout, img_layout;   /* set 0: a sampler; set 1: an image */
     VkPipelineLayout layout;
     VkDescriptorPool dpool;
     VkPipelineCache pcache;
@@ -324,7 +324,7 @@ static VkDescriptorSet image_set(VkImageView view)
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = v.dpool;
     ai.descriptorSetCount = 1;
-    ai.pSetLayouts = &v.set_layout;
+    ai.pSetLayouts = &v.img_layout;
     if (vkAllocateDescriptorSets(v.dev, &ai, &s) != VK_SUCCESS)
         return VK_NULL_HANDLE;
     memset(&ii, 0, sizeof ii);
@@ -333,7 +333,7 @@ static VkDescriptorSet image_set(VkImageView view)
     memset(&w, 0, sizeof w);
     w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     w.dstSet = s;
-    w.dstBinding = 1;
+    w.dstBinding = 0;
     w.descriptorCount = 1;
     w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     w.pImageInfo = &ii;
@@ -351,7 +351,7 @@ static VkDescriptorSet sampler_set(VkSampler smp)
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = v.dpool;
     ai.descriptorSetCount = 1;
-    ai.pSetLayouts = &v.set_layout;
+    ai.pSetLayouts = &v.smp_layout;
     if (vkAllocateDescriptorSets(v.dev, &ai, &s) != VK_SUCCESS)
         return VK_NULL_HANDLE;
     memset(&ii, 0, sizeof ii);
@@ -475,7 +475,7 @@ static void open_scene(void)
     rb.framebuffer = t->fb;
     rb.renderArea.extent.width = (uint32_t)v.scene_w;
     rb.renderArea.extent.height = (uint32_t)v.scene_h;
-    rb.clearValueCount = 2;
+    rb.clearValueCount = t->fresh ? 2 : 0;
     rb.pClearValues = clr;
     vkCmdBeginRenderPass(c, &rb, VK_SUBPASS_CONTENTS_INLINE);
     t->fresh = 0;
@@ -655,12 +655,15 @@ static void release_swap(void)
 static VkPresentModeKHR present_mode(void)
 {
     VkPresentModeKHR modes[16], want[3];
-    uint32_t n = 16, i, k, nw = 0;
+    uint32_t n = 0, i, k, nw = 0;
     if (v.opt.vsync)
         return VK_PRESENT_MODE_FIFO_KHR;
     /* DXGI's flip model with sync interval 0 shows the newest frame without tearing: mailbox */
     want[nw++] = VK_PRESENT_MODE_MAILBOX_KHR;
     want[nw++] = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(v.phys, v.surface, &n, NULL);
+    if (n > 16)
+        n = 16;
     if (vkGetPhysicalDeviceSurfacePresentModesKHR(v.phys, v.surface, &n, modes) < 0)
         return VK_PRESENT_MODE_FIFO_KHR;
     for (k = 0; k < nw; k++)
@@ -800,11 +803,10 @@ static VkPipeline make_pipe(int kind, const gfx_state *s, VkBlendFactor src, VkB
         vb.stride = sizeof(gfx_vertex);
         va[0].location = 0, va[0].format = VK_FORMAT_R32G32B32A32_SFLOAT, va[0].offset = 0;
         va[1].location = 1, va[1].format = VK_FORMAT_R8G8B8A8_UNORM, va[1].offset = 16;
-        va[2].location = 2, va[2].format = VK_FORMAT_R8G8B8A8_UNORM, va[2].offset = 20;
-        va[3].location = 3, va[3].format = VK_FORMAT_R32G32_SFLOAT, va[3].offset = 24;
+        va[2].location = 3, va[2].format = VK_FORMAT_R32G32_SFLOAT, va[2].offset = 24;   /* (specular unused) */
         vin.vertexBindingDescriptionCount = 1;
         vin.pVertexBindingDescriptions = &vb;
-        vin.vertexAttributeDescriptionCount = 4;
+        vin.vertexAttributeDescriptionCount = 3;
         vin.pVertexAttributeDescriptions = va;
     } else if (kind == P_UI) {
         vb.stride = sizeof(gfx_ui_vert);
@@ -953,9 +955,32 @@ static int has_layer(const char *name)
     return 0;
 }
 
+/* MML_VK_VALIDATION=1 with the Vulkan SDK installed: the Khronos validation layer checks every
+   call; each distinct warning or error goes to the log (the first few of each kind) */
+static VKAPI_ATTR VkBool32 VKAPI_CALL on_validation(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
+                                                     VkDebugUtilsMessageTypeFlagsEXT type,
+                                                     const VkDebugUtilsMessengerCallbackDataEXT *d, void *user)
+{
+    static struct { int32_t id; int n; } seen[256];
+    static int nseen, total;
+    int k;
+    (void)type; (void)user;
+    if (!(sev & (VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)))
+        return VK_FALSE;
+    for (k = 0; k < nseen && seen[k].id != d->messageIdNumber; k++)
+        ;
+    if (k == nseen && nseen < 256)
+        seen[nseen].id = d->messageIdNumber, seen[nseen].n = 0, nseen++;
+    if (k < 256 && seen[k].n++ < 3 && total++ < 300)
+        log_printf("vk %s: %s", sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT ? "ERROR" : "warning",
+                   d->pMessage ? d->pMessage : "?");
+    return VK_FALSE;
+}
+
 static int make_instance(void)
 {
-    static const char *const ext[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
+    static const char *const ext[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+                                       VK_EXT_DEBUG_UTILS_EXTENSION_NAME };
     static const char *const layer = "VK_LAYER_KHRONOS_validation";
     VkApplicationInfo ai;
     VkInstanceCreateInfo ii;
@@ -973,11 +998,26 @@ static int make_instance(void)
     if (validate) {
         ii.enabledLayerCount = 1;
         ii.ppEnabledLayerNames = &layer;
+        ii.enabledExtensionCount = 3;   /* + debug utils, for the messages */
         log_printf("gfx: Vulkan validation layer on");
     }
     if (vkCreateInstance(&ii, NULL, &v.inst) != VK_SUCCESS) {
         log_printf("gfx: vkCreateInstance failed");
         return 0;
+    }
+    if (validate) {
+        PFN_vkCreateDebugUtilsMessengerEXT make =
+            (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(v.inst, "vkCreateDebugUtilsMessengerEXT");
+        VkDebugUtilsMessengerCreateInfoEXT mi;
+        VkDebugUtilsMessengerEXT m;
+        memset(&mi, 0, sizeof mi);
+        mi.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        mi.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        mi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                         VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        mi.pfnUserCallback = on_validation;
+        if (make)
+            make(v.inst, &mi, NULL, &m);
     }
 #define VK_LOAD_INSTANCE(name) name = (PFN_##name)vkGetInstanceProcAddr(v.inst, #name);
     VK_INSTANCE(VK_LOAD_INSTANCE)
@@ -994,8 +1034,11 @@ static int pick_device(void)
     for (i = 0; i < n; i++) {
         VkPhysicalDeviceProperties p;
         VkQueueFamilyProperties qf[16];
-        uint32_t nq = 16, q, score;
+        uint32_t nq = 0, q, score;
         vkGetPhysicalDeviceProperties(devs[i], &p);
+        vkGetPhysicalDeviceQueueFamilyProperties(devs[i], &nq, NULL);
+        if (nq > 16)
+            nq = 16;
         vkGetPhysicalDeviceQueueFamilyProperties(devs[i], &nq, qf);
         for (q = 0; q < nq; q++) {
             VkBool32 present = VK_FALSE;
@@ -1064,7 +1107,10 @@ static int make_device(void)
 static VkFormat pick_swap_format(void)
 {
     VkSurfaceFormatKHR f[64];
-    uint32_t n = 64, i;
+    uint32_t n = 0, i;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(v.phys, v.surface, &n, NULL);
+    if (n > 64)
+        n = 64;
     if (vkGetPhysicalDeviceSurfaceFormatsKHR(v.phys, v.surface, &n, f) < 0 || !n)
         return VK_FORMAT_B8G8R8A8_UNORM;
     for (i = 0; i < n; i++)   /* plain 8-bit UNORM, as the D3D11 swap chain (no sRGB conversion) */
@@ -1146,24 +1192,26 @@ static int make_layouts(void)
     VkDescriptorPoolCreateInfo dpi;
     VkPipelineCacheCreateInfo ci;
     VkDescriptorSetLayout sets[2];
-    /* one layout for both sets: binding 0 a sampler (set 0), binding 1 an image (set 1); each set
-       fills only its own binding */
+    /* set 0 holds a sampler, set 1 an image: a texture's set takes one image descriptor, and the
+       filter (point / linear / anisotropic) is a separate set to bind */
     memset(b, 0, sizeof b);
     b[0].binding = 0;
     b[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
     b[0].descriptorCount = 1;
     b[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    b[1].binding = 1;
+    b[1] = b[0];
     b[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    b[1].descriptorCount = 1;
-    b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     memset(&li, 0, sizeof li);
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = 2;
-    li.pBindings = b;
-    if (vkCreateDescriptorSetLayout(v.dev, &li, NULL, &v.set_layout) != VK_SUCCESS)
+    li.bindingCount = 1;
+    li.pBindings = &b[0];
+    if (vkCreateDescriptorSetLayout(v.dev, &li, NULL, &v.smp_layout) != VK_SUCCESS)
         return 0;
-    sets[0] = sets[1] = v.set_layout;
+    li.pBindings = &b[1];
+    if (vkCreateDescriptorSetLayout(v.dev, &li, NULL, &v.img_layout) != VK_SUCCESS)
+        return 0;
+    sets[0] = v.smp_layout;
+    sets[1] = v.img_layout;
     memset(&pr, 0, sizeof pr);
     pr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pr.size = sizeof(draw_pc);
@@ -1176,13 +1224,13 @@ static int make_layouts(void)
     if (vkCreatePipelineLayout(v.dev, &pi, NULL, &v.layout) != VK_SUCCESS)
         return 0;
     ps[0].type = VK_DESCRIPTOR_TYPE_SAMPLER;
-    ps[0].descriptorCount = 64;
+    ps[0].descriptorCount = 16;
     ps[1].type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     ps[1].descriptorCount = MAX_SETS;
     memset(&dpi, 0, sizeof dpi);
     dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    dpi.maxSets = MAX_SETS + 64;
+    dpi.maxSets = MAX_SETS + 16;
     dpi.poolSizeCount = 2;
     dpi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(v.dev, &dpi, NULL, &v.dpool) != VK_SUCCESS)
@@ -1639,7 +1687,7 @@ static void ui_draw(VkCommandBuffer c)
 {
     frame *f = &v.fr[v.fi];
     VkDeviceSize bytes, at;
-    float inv[4];
+    float inv[16];   /* (the whole push constant range: 64 bytes) */
     if (g_ui_n <= 0 || !v.ui_atlas)
         return;
     bytes = (VkDeviceSize)g_ui_n * sizeof(gfx_ui_vert);
@@ -1648,9 +1696,9 @@ static void ui_draw(VkCommandBuffer c)
         return;
     memcpy(f->vb.map + at, g_ui_verts, (size_t)bytes);
     f->vb.pos = at + bytes;
+    memset(inv, 0, sizeof inv);
     inv[0] = 1.0f / v.back_w;
     inv[1] = 1.0f / v.back_h;
-    inv[2] = inv[3] = 0;
     vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, v.pipe_ui);
     vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, v.layout, 0, 1, &v.set_blit_linear, 0, NULL);
     vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, v.layout, 1, 1, &v.ui_atlas->set, 0, NULL);
