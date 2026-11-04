@@ -46,3 +46,6 @@ Thumbs.db
 .idea/
 *.swp
 native/third_party/
+
+# Android build output (android/build_android.py)
+android/build/
