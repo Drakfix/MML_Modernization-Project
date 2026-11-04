@@ -77,7 +77,8 @@ static const uint32_t spv_ui_frag[] =
     X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass)                    \
     X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) X(vkCmdBindVertexBuffers) X(vkCmdPushConstants)             \
     X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdPipelineBarrier)        \
-    X(vkCmdCopyBufferToImage) X(vkCmdResolveImage)
+    X(vkCmdCopyBufferToImage) X(vkCmdResolveImage) X(vkCreateQueryPool) X(vkDestroyQueryPool)                  \
+    X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp) X(vkGetQueryPoolResults)
 
 #define VK_DECL(name) static PFN_##name name;
 static PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
@@ -87,7 +88,8 @@ VK_DEVICE(VK_DECL)
 
 /* ---------------------------------------------------------------- state */
 
-#define FRAMES 2
+#define FRAMES 3   /* in flight: with 2, the game thread waited on Android until the system handed a
+                      swapchain image back (a third of its time in City Hall) */
 #define VB_BYTES (4u << 20)        /* per frame: the game's vertices, then the UI's */
 #define STAGING_BYTES (8u << 20)   /* per frame: texture uploads (bigger ones get their own buffer) */
 #define MAX_SWAP 8
@@ -132,6 +134,7 @@ typedef struct {
     dead_obj dead[MAX_DEAD];
     int ndead;
     int recording, submitted;
+    int ts;   /* GPU timestamps written: 1 start and end, 2 with the scene's end too */
 } frame;
 
 typedef struct {
@@ -431,6 +434,18 @@ static void barrier(VkImage img, VkImageAspectFlags aspect, VkImageLayout from, 
     vkCmdPipelineBarrier(v.fr[v.fi].cmd, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &b);
 }
 
+/* [debug] perf_log: per frame, logged every 300 composed frames, how the GPU's work is cut up
+   (each scene pass begun again stores and reloads the whole target on a tiled GPU; each batch is a
+   draw call) and the GPU's time. The GPU's time includes waiting for the swapchain image, which
+   the whole submission waits for. */
+static struct { unsigned frames, passes, uploads, clears, draws, by_state, by_tex, by_full; unsigned long long upload_bytes;
+                double gpu_ms, gpu_scene_ms; unsigned gpu_n, gpu_scene_n; } g_stat;
+
+/* GPU time per frame: timestamps at the start of each frame's commands, at the end of the
+   scene and at the end (3 per frame slot) */
+static VkQueryPool g_qpool;
+static double g_ts_ns;   /* nanoseconds per tick */
+
 /* the frame's command buffer, recording (waits for the GPU to finish what it last held) */
 static VkCommandBuffer cmd(void)
 {
@@ -443,6 +458,20 @@ static VkCommandBuffer cmd(void)
             f->submitted = 0;
         }
         dead_free(f);
+        if (f->ts && g_qpool) {
+            uint64_t q[3];
+            uint32_t base = 3u * (uint32_t)v.fi;
+            if (vkGetQueryPoolResults(v.dev, g_qpool, base, 3, sizeof q, q, sizeof q[0], VK_QUERY_RESULT_64_BIT) ==
+                    VK_SUCCESS) {
+                g_stat.gpu_ms += (double)(q[2] - q[0]) * g_ts_ns / 1e6;
+                g_stat.gpu_n++;
+                if (f->ts == 2) {
+                    g_stat.gpu_scene_ms += (double)(q[1] - q[0]) * g_ts_ns / 1e6;
+                    g_stat.gpu_scene_n++;
+                }
+            }
+        }
+        f->ts = 0;
         f->vb.pos = 0;
         f->staging.pos = 0;
         vkResetCommandBuffer(f->cmd, 0);
@@ -450,6 +479,10 @@ static VkCommandBuffer cmd(void)
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(f->cmd, &bi);
+        if (g_qpool) {
+            vkCmdResetQueryPool(f->cmd, g_qpool, 3u * (uint32_t)v.fi, 3);
+            vkCmdWriteTimestamp(f->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, g_qpool, 3u * (uint32_t)v.fi);
+        }
         f->recording = 1;
         v.bound_pipe = VK_NULL_HANDLE;
     }
@@ -482,6 +515,7 @@ static void set_viewport(float x, float y, float w, float h, int sw, int sh)
     vkCmdSetScissor(v.fr[v.fi].cmd, 0, 1, &sc);
 }
 
+
 /* the scene pass of the current target, open (bind_scene in gfx_d3d11.c) */
 static void open_scene(void)
 {
@@ -503,6 +537,7 @@ static void open_scene(void)
     rb.clearValueCount = t->fresh ? 2 : 0;
     rb.pClearValues = clr;
     vkCmdBeginRenderPass(c, &rb, VK_SUBPASS_CONTENTS_INLINE);
+    g_stat.passes++;
     t->fresh = 0;
     v.pass_open = 1;
     set_viewport(0, 0, (float)v.scene_w, (float)v.scene_h, v.scene_w, v.scene_h);
@@ -681,6 +716,12 @@ static VkPresentModeKHR present_mode(void)
 {
     VkPresentModeKHR modes[16], want[3];
     uint32_t n = 0, i, k, nw = 0;
+#ifdef __ANDROID__
+    /* Android composes every frame itself: mailbox gains no latency there and only drops the
+       frames that arrive within the same refresh as the next one (51 fps shown of 60 made, in
+       City Hall); every frame in order instead */
+    return VK_PRESENT_MODE_FIFO_KHR;
+#endif
     if (v.opt.vsync)
         return VK_PRESENT_MODE_FIFO_KHR;
     /* DXGI's flip model with sync interval 0 shows the newest frame without tearing: mailbox */
@@ -739,6 +780,12 @@ static int make_swap(void)
                           ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
     si.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     si.presentMode = present_mode();
+    {
+        static int logged;
+        if (!logged++)
+            log_printf("gfx: swapchain %ux%u, %u images, present mode %d (0 immediate, 1 mailbox, 2 fifo)",
+                       (unsigned)w, (unsigned)h, (unsigned)si.minImageCount, (int)si.presentMode);
+    }
     si.clipped = VK_TRUE;
     si.oldSwapchain = old;
     if (vkCreateSwapchainKHR(v.dev, &si, NULL, &v.swap) != VK_SUCCESS) {
@@ -1380,6 +1427,19 @@ static int vk_init(void *window, int app_w, int app_h, const gfx_options *opt)
         return 0;
     }
     v.ready = 1;
+    {   /* GPU timing (gfx: GPU ... ms per frame) */
+        VkPhysicalDeviceProperties p;
+        VkQueryPoolCreateInfo qi;
+        vkGetPhysicalDeviceProperties(v.phys, &p);
+        g_ts_ns = p.limits.timestampPeriod;
+        memset(&qi, 0, sizeof qi);
+        qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qi.queryCount = 3 * FRAMES;
+        if (!v.opt.perf_log || !p.limits.timestampComputeAndGraphics ||
+            vkCreateQueryPool(v.dev, &qi, NULL, &g_qpool) != VK_SUCCESS)
+            g_qpool = VK_NULL_HANDLE;
+    }
     {   /* untextured draws still bind an image */
         static const uint32_t white_px = 0xFFFFFFFFu;
         v.white = vk_tex_create(1, 1);
@@ -1457,6 +1517,8 @@ static void upload(gfx_tex *t, const void *px, int bpp)
     VkBufferImageCopy r;
     VkCommandBuffer c;
     host_buf own;
+    g_stat.uploads++;
+    g_stat.upload_bytes += bytes;
     end_pass();
     c = cmd();
     at = (f->staging.pos + 15) & ~(VkDeviceSize)15;
@@ -1593,6 +1655,7 @@ static void flush_batch(void)
     f->vb.pos = at + bytes;
     vkCmdBindVertexBuffers(f->cmd, 0, 1, &f->vb.buf, &at);
     vkCmdDraw(f->cmd, (uint32_t)n, 1, 0, 0);
+    g_stat.draws++;
 }
 
 static void vk_draw(int prim, const gfx_vertex *vtx, int count)
@@ -1605,14 +1668,22 @@ static void vk_draw(int prim, const gfx_vertex *vtx, int count)
         open_scene();
     }
     if (v.state_dirty || v.cb_dirty) {
+        if (g_nbatch) {
+            if (v.state_dirty)
+                g_stat.by_state++;
+            else
+                g_stat.by_tex++;
+        }
         flush_batch();   /* what's queued goes out with the state it was made with */
         apply_state();
     }
     need = prim == GFX_TRILIST ? count - count % 3 : (count - 2) * 3;
     if (need > BATCH_MAX)
         return;
-    if (g_nbatch + need > BATCH_MAX)
+    if (g_nbatch + need > BATCH_MAX) {
+        g_stat.by_full++;
         flush_batch();
+    }
     o = g_batch + g_nbatch;
     if (prim == GFX_TRILIST) {
         memcpy(o, vtx, sizeof *vtx * (size_t)need);
@@ -1644,6 +1715,7 @@ static void vk_clear(const gfx_rect *rect, int color_too, uint32_t color, int de
         return;
     flush_batch();
     open_scene();
+    g_stat.clears++;
     memset(ca, 0, sizeof ca);
     if (color_too) {
         ca[n].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -1679,6 +1751,11 @@ static void submit_frame(int with_image)
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     if (!f->recording)
         return;
+    if (g_qpool) {
+        vkCmdWriteTimestamp(f->cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_qpool, 3u * (uint32_t)v.fi + 2);
+        if (!f->ts)
+            f->ts = 1;
+    }
     vkEndCommandBuffer(f->cmd);
     memset(&si, 0, sizeof si);
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1716,7 +1793,10 @@ static void present_now(void)
     r = vkQueuePresentKHR(v.queue, &pi);
     LeaveCriticalSection(&v.qlock);
     g_have_img = 0;
-    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR)
+    /* only an unusable swapchain is made again (a new size is noticed before each frame):
+       Android reports every present suboptimal when the image isn't drawn pre-rotated for a
+       turned screen (preTransform), and remaking the swapchain each frame took half the frame */
+    if (r == VK_ERROR_OUT_OF_DATE_KHR)
         v.swap_dirty = 1;
 }
 
@@ -1778,10 +1858,25 @@ static void vk_compose_target(int ti)
     int cw, ch;
     if (!v.ready)
         return;
+    if (v.opt.perf_log && ++g_stat.frames == 300) {
+        log_printf("gfx: per frame %.1f scene passes, %.1f uploads (%.0f KB), %.1f clears, %.0f draws "
+                   "(batches cut by state %.0f, texture %.0f, size %.1f)",
+                   g_stat.passes / 300.0, g_stat.uploads / 300.0, g_stat.upload_bytes / 300.0 / 1024.0,
+                   g_stat.clears / 300.0, g_stat.draws / 300.0, g_stat.by_state / 300.0, g_stat.by_tex / 300.0,
+                   g_stat.by_full / 300.0);
+        if (g_stat.gpu_n)
+            log_printf("gfx: GPU %.2f ms per frame, the scene %.2f ms", g_stat.gpu_ms / g_stat.gpu_n,
+                       g_stat.gpu_scene_n ? g_stat.gpu_scene_ms / g_stat.gpu_scene_n : 0.0);
+        memset(&g_stat, 0, sizeof g_stat);
+    }
     vk_wait_flip();   /* the swapchain image may still hold a frame waiting for its moment */
     if (ti < 0 || ti > 1 || !v.tg_used[ti])
         ti = 0;
     end_pass();
+    if (g_qpool && v.fr[v.fi].recording) {   /* the scene is done */
+        vkCmdWriteTimestamp(v.fr[v.fi].cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_qpool, 3u * (uint32_t)v.fi + 1);
+        v.fr[v.fi].ts = 2;
+    }
     /* follow the window size (and a changed vsync) */
     win_size(&cw, &ch);
     if (v.swap_dirty || (uint32_t)cw != v.swap_w || (uint32_t)ch != v.swap_h) {

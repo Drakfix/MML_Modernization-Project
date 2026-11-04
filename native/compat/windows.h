@@ -365,9 +365,12 @@ static inline int _strlwr_s(char *s, size_t n)
             s[i] += 32;
     return 0;
 }
+const char *compat_path(const char *win_path, char *out, size_t n);
+/* a Windows path (backslashes, any letter case), as CreateFileA takes it */
 static inline int fopen_s(FILE **f, const char *path, const char *mode)
 {
-    *f = fopen(path, mode);
+    char real[1024];
+    *f = fopen(compat_path(path, real, sizeof real), mode);
     return *f ? 0 : 2;
 }
 

@@ -263,6 +263,7 @@ void controls_debug_lock_test(void)
     log_printf("debug: lock-on test target = support object %08X", G_SUPPORT_OBJ);
 }
 
+#ifdef _WIN32
 void controls_debug_pad(void)
 {
     HANDLE m = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(debug_pad_t),
@@ -271,6 +272,61 @@ void controls_debug_pad(void)
         g_dbg = (debug_pad_t *)MapViewOfFile(m, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(debug_pad_t));
     log_printf("debug: remote pad %s", g_dbg ? "listening (Local\\MML_DEBUG_PAD)" : "failed");
 }
+#else
+/* Elsewhere the block arrives over a socket: a Unix socket in the abstract namespace ("mml_pad";
+   from a PC, adb forward tcp:<port> localabstract:mml_pad), one 16-byte copy of the block per
+   message. No network permission is needed. A dropped connection releases the pad. */
+#include <pthread.h>
+#include <stddef.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+static debug_pad_t g_dbg_block;
+
+static void *debug_pad_thread(void *p)
+{
+    int srv = (int)(intptr_t)p;
+    for (;;) {
+        int c = accept(srv, NULL, NULL);
+        unsigned char msg[sizeof(debug_pad_t)];
+        size_t have = 0;
+        if (c < 0)
+            continue;
+        for (;;) {
+            ssize_t n = read(c, msg + have, sizeof msg - have);
+            if (n <= 0)
+                break;
+            have += (size_t)n;
+            if (have == sizeof msg) {
+                memcpy((void *)&g_dbg_block, msg, sizeof msg);
+                have = 0;
+            }
+        }
+        close(c);
+        g_dbg_block.active = 0;
+    }
+    return NULL;
+}
+
+void controls_debug_pad(void)
+{
+    struct sockaddr_un a;
+    pthread_t t;
+    int srv = socket(AF_UNIX, SOCK_STREAM, 0);
+    memset(&a, 0, sizeof a);
+    a.sun_family = AF_UNIX;
+    memcpy(a.sun_path + 1, "mml_pad", 7);   /* (abstract: a leading 0) */
+    if (srv < 0 || bind(srv, (struct sockaddr *)&a, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 8)) ||
+        listen(srv, 1) || pthread_create(&t, NULL, debug_pad_thread, (void *)(intptr_t)srv)) {
+        log_printf("debug: remote pad failed");
+        return;
+    }
+    pthread_detach(t);
+    g_dbg = &g_dbg_block;
+    log_printf("debug: remote pad listening (abstract socket mml_pad)");
+}
+#endif
 static FARPROC(WINAPI *g_real_gpa)(HMODULE, LPCSTR);
 
 static int iround(double v) { return (int)floor(v + 0.5); }

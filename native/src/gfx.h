@@ -54,6 +54,7 @@ typedef struct {
     int fog_from_w;               /* fog depth = 1/rhw instead of z */
     int gpu_display;              /* render on the GPU driving the monitor, not the fastest one */
     int show_depth;               /* debug: show the effects depth instead of the picture */
+    int perf_log;                 /* debug ([debug] perf_log): the renderer's per-frame counts too */
     char shader[260];             /* RetroArch preset (.slangp, full path) for the final picture, "" = none */
     char game_dir[260];           /* where librashader.dll lives */
     char backend[16];             /* [video] backend: "d3d11" (default), "vulkan" */
