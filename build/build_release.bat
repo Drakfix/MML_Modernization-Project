@@ -13,9 +13,18 @@ if "%MML_GAME_DIR%"=="" (
   popd & pause & exit /b 1
 )
 
-echo [0/3] Building mml.dll...
+if "%RECOMP_CLANG%"=="" (
+  echo Set RECOMP_CLANG to the NDK's clang-cl.exe first: the 64-bit standalone game needs it, and
+  echo mml.dll's generated code runs faster built with it, e.g.:
+  echo   set "RECOMP_CLANG=C:\android-ndk\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe"
+  popd & pause & exit /b 1
+)
+
+echo [0/3] Building mml.dll and the standalone game (64-bit)...
 call "%ROOT%\native\build.bat"
 if errorlevel 1 (echo mml.dll build failed & popd & pause & exit /b 1)
+call "%ROOT%\native\build_runner.bat" x64
+if errorlevel 1 (echo mml_run64.exe build failed & popd & pause & exit /b 1)
 
 REM the launcher imports patch_manifest.py, so write it before building the launcher
 python "%ROOT%\tools\make_patcher.py" --manifest-only

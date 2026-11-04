@@ -35,6 +35,9 @@ CUSTOM_AVI = os.path.join(GAME, "CAPCOM.AVI")
 DLL_FILES = ["ddraw.dll", "dinput.dll", "dsound.dll", "dsoal-aldrv.dll", "SDL3.dll", "librashader.dll"]   # from GAME
 CONFIG_FILES = ["DDrawCompat.ini.16to9", "DDrawCompat.ini.4to3", "mml.ini"]     # from CONFIG
 NATIVE_DLL = os.path.join(REPO, "native", "build", "mml.dll")
+# the standalone game (launcher: Advanced, Game engine): the recompiled game, 64-bit, with its own
+# 64-bit SDL3 in x64\ (from the game folder)
+RUNNER64 = os.path.join(REPO, "native", "build", "mml_run64.exe")
 if not os.path.isfile(NATIVE_DLL):
     raise SystemExit("native/build/mml.dll is missing - run native\\build.bat first.")
 
@@ -125,6 +128,13 @@ for fn in DLL_FILES:
 for fn in CONFIG_FILES:
     shutil.copyfile(os.path.join(CONFIG, fn), os.path.join(gf, fn))
 shutil.copyfile(NATIVE_DLL, os.path.join(gf, "mml.dll"))
+SDL64 = os.path.join(GAME, "x64", "SDL3.dll")
+if os.path.isfile(RUNNER64) and os.path.isfile(SDL64):
+    shutil.copyfile(RUNNER64, os.path.join(gf, "mml_run64.exe"))
+    os.makedirs(os.path.join(gf, "x64"), exist_ok=True)
+    shutil.copyfile(SDL64, os.path.join(gf, "x64", "SDL3.dll"))
+else:
+    print("WARNING: mml_run64.exe or x64/SDL3.dll missing - the package has no Standalone engine")
 # our intro (played by mml.dll's own player; CAPCOM.AVI stays for the Compatibility renderer)
 INTRO_MPG = os.path.join(GAME, "Modernization", "intro.mpg")
 if os.path.isfile(INTRO_MPG):
