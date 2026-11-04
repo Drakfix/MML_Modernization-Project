@@ -13,17 +13,27 @@
 #if defined(_M_IX86) && !defined(MML_RUNNER)
 #include <windows.h>
 #endif
+#ifndef _WIN32
+#include <strings.h>
+#define _stricmp strcasecmp
+#endif
 
 #include "gfx_backend.h"
 #include "log.h"
 
 static const gfx_backend *const g_backends[] = {
+#ifdef _WIN32
     &gfx_backend_d3d11,
+#endif
 #ifdef MML_VULKAN
     &gfx_backend_vulkan,
 #endif
 };
-static const gfx_backend *g_be = &gfx_backend_d3d11;
+#ifdef _WIN32
+static const gfx_backend *g_be = &gfx_backend_d3d11;   /* unless [video] backend= names another */
+#else
+static const gfx_backend *g_be = &gfx_backend_vulkan;
+#endif
 static int g_chosen;
 
 #if defined(_M_IX86) && !defined(MML_RUNNER)

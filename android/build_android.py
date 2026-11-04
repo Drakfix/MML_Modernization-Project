@@ -2,7 +2,7 @@
 the native code with the NDK's clang (arm64-v8a), SDL3's Java glue and ours with javac and d8,
 the manifest and resources with aapt2, then zipalign and apksigner (a debug key made on first use).
 
-    python android/build_android.py [--install]
+    python android/build_android.py [--install] [--hello]
 
 Needs (defaults in parentheses; environment variables override them):
   ANDROID_SDK   the Android SDK (%LOCALAPPDATA%\\Android\\Sdk), with build-tools, platforms and ndk
@@ -10,7 +10,8 @@ Needs (defaults in parentheses; environment variables override them):
   SDL3_SRC      SDL3's source (mml-deps\\SDL3-3.4.18 next to the repo): its Java glue and headers
   SDL3_ANDROID  SDL3 built for Android (mml-deps\\SDL3-android): <abi>\\libSDL3.so
   MML_KEYSTORE  the signing key (mml-deps\\android\\debug.keystore, made if missing)
---install puts the app on the connected device with adb.
+--install puts the app on the connected device with adb; --hello builds the step-A test instead of
+the game (android/hello: Vulkan clears the screen).
 """
 import os
 import shutil
@@ -45,8 +46,10 @@ def newest(path):
 BUILD_TOOLS = newest(os.path.join(SDK, "build-tools"))
 NDK = newest(os.path.join(SDK, "ndk"))
 ANDROID_JAR = os.path.join(SDK, "platforms", "android-%d" % TARGET_SDK, "android.jar")
-CLANG = os.path.join(NDK, "toolchains", "llvm", "prebuilt", "windows-x86_64", "bin",
-                     "aarch64-linux-android%d-clang.cmd" % MIN_SDK)
+# clang itself, with the target the NDK's .cmd wrappers add (their command line is too short for
+# the link)
+CLANG = os.path.join(NDK, "toolchains", "llvm", "prebuilt", "windows-x86_64", "bin", "clang.exe")
+TARGET = "--target=aarch64-linux-android%d" % MIN_SDK
 
 
 def run(*cmd):
@@ -55,11 +58,89 @@ def run(*cmd):
     subprocess.run(list(cmd), check=True)
 
 
+NATIVE = os.path.join(REPO, "native")
+GEN = os.path.join(NATIVE, "build", "gen")   # the recompiled game (tools/recomp; never committed)
+# Windows-only sources: Direct3D 11 and its shader runtime, GDI fonts, the Windows platform and
+# window placement, debugging tools; recomp_native.c compiles to nothing without machine code
+WINDOWS_ONLY = {"gfx_d3d11.c", "rshader.c", "ui_font_gdi.c", "plat_win32.c", "gfx_win.c", "iat.c",
+                "apicensus.c", "sampler.c", "watch.c", "kbm.c", "recomp_native.c"}
+CLANGXX_FLAGS = ["-fPIC", "-O2", "-fms-extensions", "-DMML_RUNNER", "-DMML_VULKAN"]
+
+
+def newer(src, obj):
+    return not os.path.exists(obj) or os.path.getmtime(src) > os.path.getmtime(obj)
+
+
+def compile_many(jobs):
+    """(source, object, extra flags) in parallel; stops at the first failure"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(job):
+        src, obj, extra = job
+        r = subprocess.run([CLANG, TARGET, "-c", *CLANGXX_FLAGS, *extra, src, "-o", obj], capture_output=True,
+                           text=True)
+        return src, r
+
+    failed = []
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        for src, r in pool.map(one, jobs):
+            if r.returncode:
+                failed.append(src)
+                print(r.stderr)
+    if failed:
+        sys.exit("failed: " + ", ".join(os.path.basename(f) for f in failed))
+
+
+def shaders(inc):
+    glslc = os.path.join(NDK, "shader-tools", "windows-x86_64", "glslc.exe")
+    os.makedirs(os.path.join(inc, "shaders"), exist_ok=True)
+    for name in ("game", "blit", "ui"):
+        for stage in ("vert", "frag"):
+            run(glslc, "-O", "--target-env=vulkan1.1", "-mfmt=c", os.path.join(NATIVE, "shaders", "vk",
+                "%s.%s" % (name, stage)), "-o", os.path.join(inc, "shaders", "vk_%s_%s.inc" % (name, stage)))
+
+
 def native():
-    """libmain.so: our native code (for now the step-A test, android/hello)"""
+    """libmain.so: the runtime, our mods and the recompiled game (native/build/gen, needed)"""
+    lib = os.path.join(OUT, "lib", ABI)
+    inc = os.path.join(OUT, "include")
+    obj = os.path.join(OUT, "obj")
+    gen_obj = os.path.join(OUT, "gen_obj")
+    for d in (lib, obj, gen_obj):
+        os.makedirs(d, exist_ok=True)
+    if not os.path.exists(os.path.join(GEN, "recomp_table.c")):
+        sys.exit("no recompiled code in native/build/gen (tools/recomp/README.md)")
+    shaders(inc)
+    src_dir = os.path.join(NATIVE, "src")
+    flags = ["-Wall", "-Wno-unused-parameter", "-Wno-unused-function", "-Wno-missing-braces",
+             "-I", os.path.join(NATIVE, "compat"), "-I", inc, "-I", src_dir, "-I", os.path.join(SDL_SRC, "include")]
+    sources = sorted(f for f in os.listdir(src_dir) if f.endswith(".c") and f not in WINDOWS_ONLY)
+    jobs = [(os.path.join(src_dir, f), os.path.join(obj, f[:-2] + ".o"), flags) for f in sources]
+    print("compiling %d sources" % len(jobs))
+    compile_many(jobs)
+    gen_jobs = []
+    for f in sorted(os.listdir(GEN)):
+        if f.endswith(".c"):
+            o = os.path.join(gen_obj, f[:-2] + ".o")
+            if newer(os.path.join(GEN, f), o):
+                gen_jobs.append((os.path.join(GEN, f), o, ["-w", "-I", src_dir]))
+    if gen_jobs:
+        print("compiling %d generated files (the recompiled game)" % len(gen_jobs))
+        compile_many(gen_jobs)
+    objs = [j[1] for j in jobs] + [os.path.join(gen_obj, f) for f in sorted(os.listdir(gen_obj))]
+    rsp = os.path.join(OUT, "objects.rsp")   # (too many for one command line)
+    with open(rsp, "w") as f:
+        f.write("\n".join('"%s"' % o.replace("\\", "/") for o in objs))
+    run(CLANG, TARGET, "-shared", "-fPIC", "-Wl,--no-undefined", "-o", os.path.join(lib, "libmain.so"), "@" + rsp,
+        "-L", os.path.join(SDL_LIB, ABI), "-lSDL3", "-llog", "-landroid", "-lm", "-ldl")
+    shutil.copy(os.path.join(SDL_LIB, ABI, "libSDL3.so"), lib)
+
+
+def native_hello():
+    """libmain.so: the step-A test (android/hello) instead"""
     lib = os.path.join(OUT, "lib", ABI)
     os.makedirs(lib, exist_ok=True)
-    run(CLANG, "-shared", "-fPIC", "-O2", "-Wall",
+    run(CLANG, TARGET, "-shared", "-fPIC", "-O2", "-Wall",
         "-I", os.path.join(SDL_SRC, "include"),
         os.path.join(HERE, "hello", "hello.c"),
         "-L", os.path.join(SDL_LIB, ABI), "-lSDL3", "-llog", "-landroid", "-lm",
@@ -116,7 +197,7 @@ def sign(base):
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.environ["JAVA_HOME"] = JDK   # (d8 and apksigner run on it too)
-    native()
+    native_hello() if "--hello" in sys.argv else native()
     java()
     apk = sign(package())
     print("built", apk)

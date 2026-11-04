@@ -1,4 +1,4 @@
-/* costack.h on Windows, x86 (MSVC) and x64 (clang). A switch saves the callee-saved registers and
+/* costack.h on Windows, x86 (MSVC) and x64 (clang), and on arm64 (Android). A switch saves the callee-saved registers and
  * the FPU and SSE control words on the running stack, stores its stack pointer and loads the
  * other one. On Windows the thread block's stack bounds and exception-handler chain belong to the
  * stack too (exception dispatch checks frames against the bounds), so they move with it, as with
@@ -24,6 +24,120 @@ costack *costack_main(void)
 {
     return &g_main;
 }
+
+#ifdef _WIN32
+static uint8_t *stack_alloc(size_t size)
+{
+    return (uint8_t *)VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+}
+
+static void stack_release(uint8_t *mem, size_t size)
+{
+    (void)size;
+    VirtualFree(mem, 0, MEM_RELEASE);
+}
+#else
+#include <pthread.h>
+#include <sys/mman.h>
+
+/* Stacks carved from the region of costack_thread's thread, downward from the top of its pool,
+   each with an inaccessible gap below it (an overflow faults instead of running into the next).
+   A freed stack is kept for the next one of the same size (the game's thread slots come and go,
+   always 4 MB). Without costack_thread, each stack is a mapping of its own. */
+#define GUARD (64u << 10)
+#define SPARES 8
+
+static uint8_t *g_pool_lo, *g_pool_hi, *g_pool_next;
+static struct { uint8_t *mem; size_t size; } g_spare[SPARES];
+static pthread_mutex_t g_pool_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static uint8_t *stack_alloc(size_t size)
+{
+    uint8_t *m = NULL;
+    int i;
+    pthread_mutex_lock(&g_pool_lock);
+    if (g_pool_next) {
+        for (i = 0; i < SPARES && !m; i++)
+            if (g_spare[i].mem && g_spare[i].size == size) {
+                m = g_spare[i].mem;
+                g_spare[i].mem = NULL;
+            }
+        if (!m && (size_t)(g_pool_next - g_pool_lo) >= size + GUARD) {
+            g_pool_next -= size;
+            m = g_pool_next;
+            g_pool_next -= GUARD;
+            mprotect(g_pool_next, GUARD, PROT_NONE);
+        }
+    } else {
+        m = (uint8_t *)mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (m == (uint8_t *)MAP_FAILED)
+            m = NULL;
+    }
+    pthread_mutex_unlock(&g_pool_lock);
+    return m;
+}
+
+static void stack_release(uint8_t *mem, size_t size)
+{
+    int i;
+    pthread_mutex_lock(&g_pool_lock);
+    if (mem >= g_pool_lo && mem < g_pool_hi) {
+        for (i = 0; i < SPARES && g_spare[i].mem; i++)
+            ;
+        if (i < SPARES) {
+            g_spare[i].mem = mem;
+            g_spare[i].size = size;
+        }   /* (else it stays carved, unused) */
+    } else {
+        munmap(mem, size);
+    }
+    pthread_mutex_unlock(&g_pool_lock);
+}
+
+typedef struct {
+    void (*fn)(void *arg);
+    void *arg;
+} thread_start;
+
+static void *thread_main(void *p)
+{
+    thread_start *t = (thread_start *)p;
+    t->fn(t->arg);
+    return NULL;
+}
+
+int costack_thread(size_t pool, size_t host, void (*fn)(void *arg), void *arg)
+{
+    /* from the bottom: a gap, the pool, a gap, fn's own frames */
+    size_t total = GUARD + pool + GUARD + host;
+    uint8_t *r = (uint8_t *)mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
+                                 -1, 0);
+    thread_start t;
+    pthread_attr_t a;
+    pthread_t th;
+    int ok;
+    if (r == (uint8_t *)MAP_FAILED) {
+        log_printf("costack: no memory for a %u MB thread stack", (unsigned)(total >> 20));
+        return 0;
+    }
+    mprotect(r, GUARD, PROT_NONE);
+    g_pool_lo = r + GUARD;
+    g_pool_hi = g_pool_next = g_pool_lo + pool;
+    mprotect(g_pool_hi, GUARD, PROT_NONE);
+    t.fn = fn;
+    t.arg = arg;
+    pthread_attr_init(&a);
+    pthread_attr_setstack(&a, r, total);
+    ok = pthread_create(&th, &a, thread_main, &t) == 0;
+    pthread_attr_destroy(&a);
+    if (!ok) {
+        log_printf("costack: the thread did not start");
+        return 0;
+    }
+    pthread_join(th, NULL);
+    return 1;
+}
+#endif
 
 #ifdef _M_X64
 /* cs_swap(save, sp) and cs_start, x64 (Windows' convention: RCX, RDX; callee-saved RBX RBP RDI
@@ -64,6 +178,40 @@ __asm__(".intel_syntax noprefix\n"
         "  call rbx\n"
         "  int3\n"          /* fn never returns */
         ".att_syntax prefix\n");
+#elif defined(__aarch64__)
+/* cs_swap(save, sp) and cs_start, arm64 (AAPCS64: X0, X1; callee-saved X19-X28, X29 frame pointer,
+   X30 link register, D8-D15, and FPCR, the rounding and flush-to-zero controls). The frame a
+   switch leaves, from its stack pointer up: X19-X28, X29, X30, D8-D15, FPCR, padding (176 bytes). */
+void cs_swap(void **save, void *sp);
+void cs_start(void);
+__asm__(".text\n"
+        ".globl cs_swap\n"
+        ".type cs_swap, %function\n"
+        ".p2align 2\n"
+        "cs_swap:\n"
+        "  sub sp, sp, #176\n"
+        "  stp x19, x20, [sp, #0]\n  stp x21, x22, [sp, #16]\n  stp x23, x24, [sp, #32]\n"
+        "  stp x25, x26, [sp, #48]\n  stp x27, x28, [sp, #64]\n  stp x29, x30, [sp, #80]\n"
+        "  stp d8, d9, [sp, #96]\n  stp d10, d11, [sp, #112]\n  stp d12, d13, [sp, #128]\n"
+        "  stp d14, d15, [sp, #144]\n"
+        "  mrs x9, fpcr\n  str x9, [sp, #160]\n"
+        "  mov x9, sp\n  str x9, [x0]\n"
+        "  mov sp, x1\n"
+        "  ldr x9, [sp, #160]\n  msr fpcr, x9\n"
+        "  ldp d14, d15, [sp, #144]\n  ldp d12, d13, [sp, #128]\n  ldp d10, d11, [sp, #112]\n"
+        "  ldp d8, d9, [sp, #96]\n"
+        "  ldp x29, x30, [sp, #80]\n  ldp x27, x28, [sp, #64]\n  ldp x25, x26, [sp, #48]\n"
+        "  ldp x23, x24, [sp, #32]\n  ldp x21, x22, [sp, #16]\n  ldp x19, x20, [sp, #0]\n"
+        "  add sp, sp, #176\n"
+        "  ret\n"
+        /* a new stack's first "return": X19 = fn, X20 = arg */
+        ".globl cs_start\n"
+        ".type cs_start, %function\n"
+        ".p2align 2\n"
+        "cs_start:\n"
+        "  mov x0, x20\n"
+        "  blr x19\n"
+        "  brk #0\n");   /* fn never returns */
 #else
 /* called as cs_swap_fn (save, sp): push the callee-saved state, *save = ESP, ESP = sp, pop it */
 typedef void(__cdecl *cs_swap_fn)(void **save, void *sp);
@@ -110,7 +258,7 @@ costack *costack_new(size_t size, void (*fn)(void *arg), void *arg)
     if (!s)
         return NULL;
     /* committed in full: nothing grows it on demand */
-    s->mem = (uint8_t *)VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    s->mem = stack_alloc(size);
     if (!s->mem) {
         log_printf("costack: no memory for a %u KB stack", (unsigned)(size >> 10));
         free(s);
@@ -138,6 +286,15 @@ costack *costack_new(size_t size, void (*fn)(void *arg), void *arg)
         cw[1] = 0x1F80;                  /* MXCSR: Windows' default */
         s->sp = sp;
     }
+#elif defined(__aarch64__)
+    {   /* what cs_swap pops (see above): X19 = fn, X20 = arg, X30 = cs_start; FPCR 0 (round to nearest) */
+        uint64_t *f = (uint64_t *)(((uintptr_t)(s->mem + size - 64) & ~(uintptr_t)15) - 176);
+        memset(f, 0, 176);
+        f[0] = (uint64_t)(uintptr_t)fn;     /* X19 */
+        f[1] = (uint64_t)(uintptr_t)arg;    /* X20 */
+        f[11] = (uint64_t)(uintptr_t)cs_start;   /* X30 */
+        s->sp = f;
+    }
 #else
     {   /* what cs_swap pops: control words, EDI, ESI = arg, EBX = fn, EBP, return address */
         uint32_t *sp = (uint32_t *)((uintptr_t)(s->mem + size - 64) & ~(uintptr_t)15);
@@ -158,12 +315,13 @@ void costack_free(costack *s)
 {
     if (!s || s == &g_main)
         return;
-    VirtualFree(s->mem, 0, MEM_RELEASE);
+    stack_release(s->mem, s->size);
     free(s);
 }
 
 void costack_switch(costack *from, costack *to)
 {
+#ifdef _WIN32
     NT_TIB *t = (NT_TIB *)NtCurrentTeb();
     from->tib_base = t->StackBase;
     from->tib_limit = t->StackLimit;
@@ -171,7 +329,8 @@ void costack_switch(costack *from, costack *to)
     t->StackBase = to->tib_base;
     t->StackLimit = to->tib_limit;
     t->ExceptionList = (struct _EXCEPTION_REGISTRATION_RECORD *)to->tib_except;
-#ifdef _M_X64
+#endif
+#if defined(_M_X64) || defined(__aarch64__)
     cs_swap(&from->sp, to->sp);
 #else
     ((cs_swap_fn)(void *)cs_swap)(&from->sp, to->sp);

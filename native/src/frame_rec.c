@@ -5,8 +5,7 @@
 #include "frame_rec.h"
 #include "log.h"
 
-#ifdef _WIN32
-#include <windows.h>
+#include <windows.h>   /* (native/compat elsewhere) */
 static double now_ms(void)
 {
     static LARGE_INTEGER f;
@@ -37,7 +36,6 @@ double rec_take_wait_ms(void)
     g_waited = 0.0;
     return ms;
 }
-#endif
 
 enum { C_STATE, C_TEX, C_CLEAR, C_DRAW };
 

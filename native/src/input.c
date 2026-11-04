@@ -84,6 +84,13 @@ static HANDLE g_ready_event;
 
 static int load_sdl(void)
 {
+#ifndef _WIN32
+    g_sdl_dll = LoadLibraryA("libSDL3.so");   /* the app's own, already loaded */
+    if (!g_sdl_dll) {
+        log_printf("input: libSDL3.so not found");
+        return 0;
+    }
+#else
     char path[MAX_PATH], *slash;
     GetModuleFileNameA(NULL, path, sizeof path);
     slash = strrchr(path, '\\');
@@ -101,6 +108,7 @@ static int load_sdl(void)
         log_printf("input: SDL3.dll failed to load (error %lu)", GetLastError());
         return 0;
     }
+#endif
 #define GET(field, name) \
     if (!(*(FARPROC *)&sdl.field = GetProcAddress(g_sdl_dll, name))) { \
         log_printf("input: SDL3.dll is missing %s", name); \

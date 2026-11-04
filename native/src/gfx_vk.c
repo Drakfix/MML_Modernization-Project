@@ -15,16 +15,23 @@
  * RetroArch presets. */
 #ifdef MML_VULKAN
 #define VK_NO_PROTOTYPES
+#ifdef _WIN32
 #define VK_USE_PLATFORM_WIN32_KHR
-#include <windows.h>
+#endif
+#include <windows.h>   /* (native/compat elsewhere) */
 #include <vulkan/vulkan.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "gfx_backend.h"
 #include "gfx_ui.h"
-#include "gfx_win.h"
 #include "log.h"
+#ifdef _WIN32
+#include "gfx_win.h"
+#else
+#include <SDL3/SDL_vulkan.h>
+#include "plat_sdl.h"   /* the window SDL made; SDL loads Vulkan and makes the surface */
+#endif
 
 static const uint32_t spv_game_vert[] =
 #include "shaders/vk_game_vert.inc"
@@ -52,7 +59,7 @@ static const uint32_t spv_ui_frag[] =
     X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties)                         \
     X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkGetPhysicalDeviceMemoryProperties)                          \
     X(vkGetPhysicalDeviceFeatures) X(vkGetPhysicalDeviceFormatProperties) X(vkCreateDevice)                     \
-    X(vkGetDeviceProcAddr) X(vkEnumerateDeviceExtensionProperties) X(vkCreateWin32SurfaceKHR)                    \
+    X(vkGetDeviceProcAddr) X(vkEnumerateDeviceExtensionProperties)                    \
     X(vkDestroySurfaceKHR) X(vkGetPhysicalDeviceSurfaceSupportKHR) X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
     X(vkGetPhysicalDeviceSurfaceFormatsKHR) X(vkGetPhysicalDeviceSurfacePresentModesKHR)
 #define VK_DEVICE(X)                                                                                            \
@@ -193,6 +200,24 @@ static struct {
 
 static void flush_batch(void);
 static void vk_wait_flip(void);
+
+/* the window, per platform: its size in pixels, and placing it */
+static void win_size(int *w, int *h)
+{
+#ifdef _WIN32
+    gfx_win_client_size(v.hwnd, w, h);
+#else
+    if (!SDL_GetWindowSizeInPixels(plat_sdl_window(), w, h) || *w <= 0 || *h <= 0)
+        *w = *h = 1;
+#endif
+}
+
+static void win_place(void)
+{
+#ifdef _WIN32
+    gfx_win_place(v.hwnd, &v.opt, v.app_w, v.app_h);
+#endif
+}
 static void vk_present_target(int t);
 static void vk_compose_target(int t);
 
@@ -685,7 +710,7 @@ static int make_swap(void)
     int w, h;
     vkDeviceWaitIdle(v.dev);
     release_swap();
-    gfx_win_client_size(v.hwnd, &w, &h);
+    win_size(&w, &h);
     if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(v.phys, v.surface, &caps) != VK_SUCCESS)
         return 0;
     if (caps.currentExtent.width != UINT32_MAX) {   /* the window's size, as the surface has it */
@@ -707,7 +732,11 @@ static int make_swap(void)
     si.imageArrayLayers = 1;
     si.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     si.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    si.preTransform = caps.currentTransform;
+    /* upright: where the screen's own orientation differs (Android: a panel that is portrait by
+       nature, held in landscape), the system turns the image; caps.currentTransform would
+       promise an image drawn turned already */
+    si.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+                          ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
     si.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     si.presentMode = present_mode();
     si.clipped = VK_TRUE;
@@ -930,12 +959,16 @@ static void release_game_pipes(void)
 
 static int load_api(void)
 {
+#ifdef _WIN32
     v.lib = LoadLibraryA("vulkan-1.dll");
     if (!v.lib) {
         log_printf("gfx: no Vulkan here (vulkan-1.dll)");
         return 0;
     }
     vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)(void *)GetProcAddress(v.lib, "vkGetInstanceProcAddr");
+#else
+    vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)SDL_Vulkan_GetVkGetInstanceProcAddr();   /* (with the window) */
+#endif
     if (!vkGetInstanceProcAddr)
         return 0;
 #define VK_LOAD_GLOBAL(name) name = (PFN_##name)vkGetInstanceProcAddr(NULL, #name);
@@ -979,12 +1012,25 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL on_validation(VkDebugUtilsMessageSeverityF
 
 static int make_instance(void)
 {
-    static const char *const ext[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-                                       VK_EXT_DEBUG_UTILS_EXTENSION_NAME };
     static const char *const layer = "VK_LAYER_KHRONOS_validation";
+    const char *ext[16];
+    uint32_t next = 0;
     VkApplicationInfo ai;
     VkInstanceCreateInfo ii;
     int validate = GetEnvironmentVariableA("MML_VK_VALIDATION", NULL, 0) > 0 && has_layer(layer);
+#ifdef _WIN32
+    ext[next++] = VK_KHR_SURFACE_EXTENSION_NAME;
+    ext[next++] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+#else
+    {   /* what SDL's surface needs */
+        uint32_t n = 0, k;
+        const char *const *e = SDL_Vulkan_GetInstanceExtensions(&n);
+        for (k = 0; e && k < n && next < 15; k++)
+            ext[next++] = e[k];
+    }
+#endif
+    if (validate)
+        ext[next++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;   /* (for the messages) */
     memset(&ai, 0, sizeof ai);
     ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     ai.pApplicationName = "Mega Man Legends";
@@ -993,12 +1039,11 @@ static int make_instance(void)
     memset(&ii, 0, sizeof ii);
     ii.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     ii.pApplicationInfo = &ai;
-    ii.enabledExtensionCount = 2;
+    ii.enabledExtensionCount = next;
     ii.ppEnabledExtensionNames = ext;
     if (validate) {
         ii.enabledLayerCount = 1;
         ii.ppEnabledLayerNames = &layer;
-        ii.enabledExtensionCount = 3;   /* + debug utils, for the messages */
         log_printf("gfx: Vulkan validation layer on");
     }
     if (vkCreateInstance(&ii, NULL, &v.inst) != VK_SUCCESS) {
@@ -1021,7 +1066,7 @@ static int make_instance(void)
     }
 #define VK_LOAD_INSTANCE(name) name = (PFN_##name)vkGetInstanceProcAddr(v.inst, #name);
     VK_INSTANCE(VK_LOAD_INSTANCE)
-    return vkCreateDevice != NULL && vkCreateWin32SurfaceKHR != NULL;
+    return vkCreateDevice != NULL;
 }
 
 /* a GPU that can draw and present to the window, discrete preferred */
@@ -1261,17 +1306,35 @@ static void vk_prepare_window(void *window, int app_w, int app_h, const gfx_opti
     v.opt = *opt;
     v.app_w = app_w > 0 ? app_w : 640;
     v.app_h = app_h > 0 ? app_h : 480;
-    gfx_win_place(v.hwnd, &v.opt, v.app_w, v.app_h);
+    win_place();
+#ifdef _WIN32
     gfx_win_fill_black(v.hwnd);
+#endif
 }
 
 static gfx_tex *vk_tex_create(int w, int h);
 static void vk_tex_upload(gfx_tex *t, const uint32_t *rgba, int w, int h);
 static void submit_frame(int with_image);
 
+/* the surface on the game's window */
+static int make_surface(void)
+{
+#ifdef _WIN32
+    VkWin32SurfaceCreateInfoKHR si;
+    PFN_vkCreateWin32SurfaceKHR create =
+        (PFN_vkCreateWin32SurfaceKHR)vkGetInstanceProcAddr(v.inst, "vkCreateWin32SurfaceKHR");
+    memset(&si, 0, sizeof si);
+    si.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+    si.hinstance = GetModuleHandleA(NULL);
+    si.hwnd = v.hwnd;
+    return create && create(v.inst, &si, NULL, &v.surface) == VK_SUCCESS;
+#else
+    return plat_sdl_window() && SDL_Vulkan_CreateSurface(plat_sdl_window(), v.inst, NULL, &v.surface);
+#endif
+}
+
 static int vk_init(void *window, int app_w, int app_h, const gfx_options *opt)
 {
-    VkWin32SurfaceCreateInfoKHR si;
     if (v.ready)
         return 1;
     v.hwnd = (HWND)window;
@@ -1280,11 +1343,7 @@ static int vk_init(void *window, int app_w, int app_h, const gfx_options *opt)
     v.app_h = app_h;
     if (!load_api() || !make_instance())
         return 0;
-    memset(&si, 0, sizeof si);
-    si.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    si.hinstance = GetModuleHandleA(NULL);
-    si.hwnd = v.hwnd;
-    if (vkCreateWin32SurfaceKHR(v.inst, &si, NULL, &v.surface) != VK_SUCCESS) {
+    if (!make_surface()) {
         log_printf("gfx: Vulkan surface failed");
         return 0;
     }
@@ -1294,7 +1353,7 @@ static int vk_init(void *window, int app_w, int app_h, const gfx_options *opt)
     }
     if (!make_device())
         return 0;
-    gfx_win_place(v.hwnd, &v.opt, v.app_w, v.app_h);
+    win_place();
     v.swap_fmt = pick_swap_format();
     v.depth_fmt = pick_depth_format();
     v.samples = pick_samples(v.opt.msaa);
@@ -1724,7 +1783,7 @@ static void vk_compose_target(int ti)
         ti = 0;
     end_pass();
     /* follow the window size (and a changed vsync) */
-    gfx_win_client_size(v.hwnd, &cw, &ch);
+    win_size(&cw, &ch);
     if (v.swap_dirty || (uint32_t)cw != v.swap_w || (uint32_t)ch != v.swap_h) {
         int ow, oh, nw, nh;
         scene_size(&ow, &oh);

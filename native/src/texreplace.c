@@ -7,8 +7,8 @@
  * under Modernization\textures (outside dump) replaces it, at any size (2x,
  * 4x... texture coordinates are normalised, so nothing else changes).
  *
- * PNG reading and writing go through WIC, built into Windows. A portable
- * decoder replaces it for the Linux / Android ports; the rest is plain C.
+ * PNG reading and writing go through WIC, built into Windows, and through
+ * SDL's own PNG support elsewhere; the rest is plain C.
  *
  * Note: Beetle PSX HW packs don't apply directly. Their names hash the PS1's
  * 4bpp texture uploads, while the PC port re-encoded most world textures as
@@ -16,7 +16,11 @@
 #define COBJMACROS
 #define CINTERFACE
 #include <windows.h>
+#ifdef _WIN32
 #include <wincodec.h>
+#else
+#include <SDL3/SDL.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +43,9 @@ static char g_game_dir[MAX_PATH];
 static char g_dump_dir[MAX_PATH];
 static uint32_t *g_dumped;   /* hashes dumped this session (sorted insert) */
 static int g_ndumped, g_cap_dumped;
+#ifdef _WIN32
 static IWICImagingFactory *g_wic;
+#endif
 static uint32_t g_crc_table[256];
 static unsigned g_replaced, g_written;
 
@@ -148,6 +154,7 @@ static void scan(const char *dir, int depth)
     FindClose(f);
 }
 
+#ifdef _WIN32
 static int wic(void)
 {
     HRESULT hr;
@@ -251,6 +258,43 @@ static int save_png(const char *file, const uint32_t *px, int w, int h)
     free(bgra);
     return ok;
 }
+#else
+/* SDL's own PNG reader and writer (SDL 3.4) */
+static int load_png(entry *e)
+{
+    char path[MAX_PATH * 2];
+    SDL_Surface *png, *rgba;
+    int ok = 0;
+    png = SDL_LoadPNG(compat_path(e->path, path, sizeof path));
+    if (!png)
+        return 0;
+    rgba = SDL_ConvertSurface(png, SDL_PIXELFORMAT_RGBA32);
+    if (rgba && rgba->w > 0 && rgba->h > 0 && rgba->w <= 8192 && rgba->h <= 8192) {
+        e->pixels = (uint32_t *)malloc((size_t)rgba->w * rgba->h * 4);
+        if (e->pixels) {
+            int y;
+            for (y = 0; y < rgba->h; y++)
+                memcpy(e->pixels + (size_t)y * rgba->w, (const uint8_t *)rgba->pixels + (size_t)y * rgba->pitch,
+                       (size_t)rgba->w * 4);
+            e->w = rgba->w;
+            e->h = rgba->h;
+            ok = 1;
+        }
+    }
+    SDL_DestroySurface(rgba);
+    SDL_DestroySurface(png);
+    return ok;
+}
+
+static int save_png(const char *file, const uint32_t *px, int w, int h)
+{
+    char path[MAX_PATH * 2];
+    SDL_Surface *s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGBA32, (void *)px, w * 4);
+    int ok = s && SDL_SavePNG(s, compat_path(file, path, sizeof path));
+    SDL_DestroySurface(s);
+    return ok;
+}
+#endif
 
 static int dumped_before(uint32_t h)
 {

@@ -12,6 +12,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef _WIN32
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
+#include "costack.h"
+#include "sampler.h"
+#endif
+
 #include "guest.h"
 #include "log.h"
 #include "mml.h"
@@ -72,10 +79,9 @@ static int load_image(const char *path)
     return 1;
 }
 
-int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
+static int runner_main(void)
 {
     char dir[MAX_PATH], exe[MAX_PATH], *slash;
-    (void)inst; (void)prev; (void)cmd; (void)show;
     GetModuleFileNameA(NULL, dir, sizeof dir);
     slash = strrchr(dir, '\\');
     if (slash)
@@ -98,6 +104,51 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     recomp_run();
     return 0;
 }
+
+#ifdef _WIN32
+int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
+{
+    (void)inst; (void)prev; (void)cmd; (void)show;
+    return runner_main();
+}
+#else
+/* SDL's startup calls this. The game folder: on Android the app's own folder on the device's
+   storage (Android/data/<app>/files), where the player puts the game's files; elsewhere the
+   current folder. */
+static int g_exit_code = 1;
+
+static void game_thread(void *arg)
+{
+    const char *dir = NULL;
+    (void)arg;
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {   /* (this thread is SDL's main one) */
+        SDL_Log("mml: SDL_Init failed: %s", SDL_GetError());
+        return;
+    }
+#ifdef __ANDROID__
+    dir = SDL_GetAndroidExternalStoragePath();
+#endif
+    compat_set_game_dir(dir ? dir : ".");
+    {   /* [debug] sampler=1: from the start (mml.c starts it only at the first frame) */
+        char ini[1024];
+        snprintf(ini, sizeof ini, "%s\\mml.ini", dir ? dir : ".");
+        if (GetPrivateProfileIntA("debug", "sampler", 0, ini))
+            sampler_start();
+    }
+    g_exit_code = runner_main();
+}
+
+/* The game runs on a thread of ours whose stack holds the game's own stacks too (costack.h:
+   the 32 MB one recomp_run starts on, the thread slots' 4 MB ones): 48 MB for those, 8 MB for
+   the runner's own frames. */
+int main(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (!costack_thread(48u << 20, 8u << 20, game_thread, NULL))
+        return 1;
+    return g_exit_code;
+}
+#endif
 #else
 typedef int runner_unused;   /* the DLL build: nothing here (an empty file would warn) */
 #endif

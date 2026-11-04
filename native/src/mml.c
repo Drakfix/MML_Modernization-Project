@@ -474,7 +474,11 @@ static void install_timing(void)
 {
     static const uint8_t walker_call[] = { 0xE8, 0x96, 0x05, 0x05, 0x00 };   /* call 0x4F7680 */
     uint32_t slot = GVAR(uint32_t, G_IAT_GETTICKCOUNT);
+#ifdef _WIN32
     void *real = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetTickCount");
+#else
+    void *real = (void *)GetTickCount;   /* (compat_posix.c) */
+#endif
     void *mine = (void *)rebased_gettickcount;
 
 #ifdef MML_RUNNER

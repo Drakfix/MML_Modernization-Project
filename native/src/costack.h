@@ -17,3 +17,12 @@ void costack_free(costack *s);   /* not the one running */
 void costack_switch(costack *from, costack *to);
 /* the stack's bounds (0, 0 for the main one) */
 void costack_bounds(const costack *s, size_t *lo, size_t *hi);
+
+#ifndef _WIN32
+/* fn(arg) on a new thread whose stack is one region of `pool + host` bytes: fn's own frames use
+   the top `host` bytes and every costack_new afterwards is carved from the rest, so all of them
+   lie inside the thread's stack as the system knows it. Android's Java runtime refuses a call
+   into Java (the window, the surface) made with the stack pointer below the thread's stack, as
+   on a stack from anywhere else. Waits for fn; 0 if the thread could not start. */
+int costack_thread(size_t pool, size_t host, void (*fn)(void *arg), void *arg);
+#endif

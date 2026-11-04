@@ -19,6 +19,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+
 #include "guest.h"
 #include "hook.h"
 #include "log.h"
@@ -778,7 +782,11 @@ static uint32_t g_guest_tib;
 
 uint32_t guest_fs_base(void)
 {
+#ifdef _WIN32
     return g_guest_tib ? g_guest_tib : (uint32_t)(uintptr_t)NtCurrentTeb();
+#else
+    return g_guest_tib;
+#endif
 }
 
 static __declspec(noreturn) void __cdecl recomp_start(void)
@@ -790,12 +798,14 @@ static __declspec(noreturn) void __cdecl recomp_start(void)
         ExitProcess(1);
     }
     memset(c, 0, sizeof *c);
+#ifdef _WIN32
     {   /* the thread runs on our private stack now: exception dispatch checks handler frames
            against the thread block's stack bounds (C++ exceptions inside drivers went unhandled) */
         NT_TIB *t = (NT_TIB *)NtCurrentTeb();
         t->StackBase = (void *)(uintptr_t)g_hs_hi;
         t->StackLimit = (void *)(uintptr_t)(g_hs_lo + 4096);   /* above the guard page */
     }
+#endif
     g_host_free = (uintptr_t)c - 256;   /* machine-code entries nest below us */
     /* NT_TIB: exception list (none), stack base (top), stack limit, self */
     ST32(c, tib, 0xFFFFFFFFu);
@@ -1019,6 +1029,7 @@ void rt_co_schedule(RCtx *c)
     co_pop_return(c);
 }
 
+#ifdef _WIN32
 /* while recompiled code is being tried, say where the game crashed */
 static LONG CALLBACK on_crash(EXCEPTION_POINTERS *ep)
 {
@@ -1081,8 +1092,10 @@ static LONG CALLBACK on_crash(EXCEPTION_POINTERS *ep)
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
+#endif
 
 /* our own module's image (crash reports; the DLL's direct calls) */
+#ifdef _WIN32
 static void self_range(void)
 {
     MEMORY_BASIC_INFORMATION mi;
@@ -1095,6 +1108,16 @@ static void self_range(void)
     g_mml_lo = (uintptr_t)dos;
     g_mml_hi = g_mml_lo + nt->OptionalHeader.SizeOfImage;
 }
+#else
+static void self_range(void)
+{
+    Dl_info d;
+    if (dladdr((void *)self_range, &d) && d.dli_fbase) {   /* (its size: the crash report only filters by it) */
+        g_mml_lo = (uintptr_t)d.dli_fbase;
+        g_mml_hi = g_mml_lo + (256u << 20);
+    }
+}
+#endif
 
 void recomp_install(const char *ini)
 {
@@ -1152,7 +1175,9 @@ void recomp_install(const char *ini)
     g_hs_lo = (uintptr_t)host_stack;
     g_hs_hi = (uintptr_t)(host_stack + host_size);
 #endif
+#ifdef _WIN32
     AddVectoredExceptionHandler(0, on_crash);
+#endif
     if (GetPrivateProfileIntA("debug", "recomp_watch_self", 0, ini)) {   /* who writes our thread table */
         char w[64];
         _snprintf_s(w, sizeof w, _TRUNCATE, "%p,4", (void *)&g_co_entry[0]);
