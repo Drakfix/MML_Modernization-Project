@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher icon's foreground: the lock-on reticle in the HUD's orange, inside the 66 dp
+     safe zone of an adaptive icon -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:strokeColor="#66000000" android:strokeWidth="6"
+        android:pathData="M32,55 a22,22 0 1,0 44,0 a22,22 0 1,0 -44,0 M54,25 L54,39 M54,71 L54,85 M24,55 L38,55 M70,55 L84,55" />
+    <path android:strokeColor="#FFFF9A2E" android:strokeWidth="4" android:strokeLineCap="round"
+        android:pathData="M32,54 a22,22 0 1,0 44,0 a22,22 0 1,0 -44,0 M54,24 L54,38 M54,70 L54,84 M24,54 L38,54 M70,54 L84,54" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M50.5,54 a3.5,3.5 0 1,0 7,0 a3.5,3.5 0 1,0 -7,0" />
+</vector>
