@@ -31,6 +31,12 @@ typedef struct {
     void (*set_scene)(int render_scale, int msaa);
     int (*set_shader)(const char *path);
     void (*finish_depth)(int t);
+    /* mml.dll: called on a stack of gfx.c's own, not the game's (the game keeps its threads'
+       16 KB stacks just below the main loop's frames; a deep driver call overwrote them) */
+    int own_stack;
 } gfx_backend;
 
 extern const gfx_backend gfx_backend_d3d11;   /* gfx_d3d11.c */
+#ifdef MML_VULKAN
+extern const gfx_backend gfx_backend_vulkan;  /* gfx_vk.c */
+#endif

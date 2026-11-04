@@ -22,6 +22,7 @@ if not exist "%OUT%\gen\recomp_table.c" (
   echo no generated code in build\gen: the runner has nothing to run
   exit /b 1
 )
+call "%ROOT%vk_shaders.bat" || exit /b 1
 if "%ARCH%"=="x64" goto x64
 
 set "RUN=%OUT%\runner"
@@ -41,7 +42,7 @@ if defined RECOMP_CLANG (
 rem C4201: the SDK's own D3D11 headers use nameless unions
 rem /BASE /FIXED: our code above the game's whole address range (guest_mem.c: 512 MB), so a host
 rem function address (in an import slot, a patched JMP) is never also a game address
-cl /nologo /O2 /MT /W4 /WX /wd4201 /GS- /DMML_RUNNER /I"%OUT%" /Fo"%RUN%\\" "%ROOT%src\*.c" "%GENRUN%\*.obj" ^
+cl /nologo /O2 /MT /W4 /WX /wd4201 /GS- /DMML_RUNNER %VKDEF% /I"%OUT%" /Fo"%RUN%\\" "%ROOT%src\*.c" "%GENRUN%\*.obj" ^
    /Fe"%OUT%\mml_run.exe" /link /SUBSYSTEM:WINDOWS /LARGEADDRESSAWARE /INCREMENTAL:NO /MAP:"%OUT%\mml_run.map" ^
    /BASE:0x60000000 /FIXED /DYNAMICBASE:NO ^
    user32.lib kernel32.lib gdi32.lib d3d11.lib dxgi.lib ole32.lib windowscodecs.lib winmm.lib || exit /b 1
@@ -64,7 +65,7 @@ if not exist "%GENRUN%\recomp_table.obj" (
 rem one file at a time: clang-cl stops at the first file that fails
 del /q "%RUN%\*.obj" 2>nul
 for %%f in ("%ROOT%src\*.c") do (
-  "%RECOMP_CLANG%" --target=x86_64-pc-windows-msvc /c /O2 /MT /W3 /GS- /DMML_RUNNER /I"%OUT%" /I"%ROOT%src" /Fo"%RUN%\\" "%%f" || exit /b 1
+  "%RECOMP_CLANG%" --target=x86_64-pc-windows-msvc /c /O2 /MT /W3 /GS- /DMML_RUNNER %VKDEF% /I"%OUT%" /I"%ROOT%src" /Fo"%RUN%\\" "%%f" || exit /b 1
 )
 link /nologo /OUT:"%OUT%\mml_run64.exe" /SUBSYSTEM:WINDOWS /INCREMENTAL:NO /MAP:"%OUT%\mml_run64.map" ^
    "%RUN%\*.obj" "%GENRUN%\*.obj" ^

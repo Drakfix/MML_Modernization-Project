@@ -20,6 +20,7 @@
 #include "log.h"
 #include "rshader.h"
 #include "gfx_ui.h"
+#include "gfx_win.h"
 
 #include "shaders/game_vs.h"
 #include "shaders/game_ps.h"
@@ -155,8 +156,6 @@ static void place_window(void);
 static void d3d_prepare_window(void *window, int app_w, int app_h, const gfx_options *opt)
 {
     HWND hwnd = (HWND)window;
-    RECT rc;
-    HDC dc;
     if (g.ready || !hwnd)
         return;
     g.hwnd = hwnd;
@@ -164,42 +163,12 @@ static void d3d_prepare_window(void *window, int app_w, int app_h, const gfx_opt
     g.app_w = app_w > 0 ? app_w : 640;
     g.app_h = app_h > 0 ? app_h : 480;
     place_window();
-    GetClientRect(hwnd, &rc);
-    dc = GetDC(hwnd);
-    if (dc) {
-        FillRect(dc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
-        ReleaseDC(hwnd, dc);
-    }
+    gfx_win_fill_black(hwnd);
 }
 
 static void place_window(void)
 {
-    HMONITOR mon = MonitorFromWindow(g.hwnd, MONITOR_DEFAULTTOPRIMARY);
-    MONITORINFO mi = { sizeof mi };
-    GetMonitorInfoW(mon, &mi);
-    if (!g.opt.windowed) {
-        RECT r = mi.rcMonitor;
-        SetWindowLongW(g.hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-        SetWindowLongW(g.hwnd, GWL_EXSTYLE, 0);
-        SetWindowPos(g.hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top,
-                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-    } else {
-        RECT work = mi.rcWork, r;
-        int cw = g.opt.window_w, ch = g.opt.window_h;
-        DWORD style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
-        if (cw <= 0 || ch <= 0) {
-            ch = (work.bottom - work.top) * 3 / 4;
-            cw = ch * g.app_w / g.app_h;
-        }
-        r.left = 0; r.top = 0; r.right = cw; r.bottom = ch;
-        AdjustWindowRectEx(&r, style, FALSE, 0);
-        SetWindowLongW(g.hwnd, GWL_STYLE, style);
-        SetWindowLongW(g.hwnd, GWL_EXSTYLE, 0);
-        SetWindowPos(g.hwnd, HWND_TOP,
-                     work.left + ((work.right - work.left) - (r.right - r.left)) / 2,
-                     work.top + ((work.bottom - work.top) - (r.bottom - r.top)) / 2,
-                     r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-    }
+    gfx_win_place(g.hwnd, &g.opt, g.app_w, g.app_h);
 }
 
 static void release_back(void)
@@ -1267,4 +1236,5 @@ const gfx_backend gfx_backend_d3d11 = {
     d3d_flip_at, d3d_wait_flip, d3d_get_options,
     d3d_set_vsync, d3d_set_nearest_upscale, d3d_set_anisotropy, d3d_set_scene, d3d_set_shader,
     d3d_finish_depth,
+    0,
 };

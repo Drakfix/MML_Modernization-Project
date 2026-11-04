@@ -56,7 +56,7 @@ typedef struct {
     int show_depth;               /* debug: show the effects depth instead of the picture */
     char shader[260];             /* RetroArch preset (.slangp, full path) for the final picture, "" = none */
     char game_dir[260];           /* where librashader.dll lives */
-    char backend[16];             /* [video] backend: "d3d11" (default) */
+    char backend[16];             /* [video] backend: "d3d11" (default), "vulkan" */
 } gfx_options;
 
 int gfx_init(void *game_window, int app_w, int app_h, const gfx_options *opt);
