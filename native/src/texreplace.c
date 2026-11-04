@@ -70,7 +70,7 @@ static void crc_init(void)
 /* CRC-32 (the hash in replacement file names), 8 bytes per step ("slicing by 8"): the same
    values as a byte at a time, several times faster. Every changed texture is hashed, and some
    areas change whole texture pages every frame. */
-static uint32_t crc_update(uint32_t c, const void *data, size_t n)
+static uint32_t crc_table_update(uint32_t c, const void *data, size_t n)
 {
     const uint8_t *p = (const uint8_t *)data;
     c = ~c;
@@ -87,6 +87,49 @@ static uint32_t crc_update(uint32_t c, const void *data, size_t n)
         c = g_crc_table[(c ^ *p++) & 0xFF] ^ (c >> 8);
     return ~c;
 }
+
+#if defined(__aarch64__) && !defined(_WIN32)
+/* arm64's CRC32 instructions compute the same CRC (zlib's polynomial, reflected), several times
+   faster: textures are hashed at every upload, and some areas re-upload often. They are optional
+   in the first arm64 cores, so the CPU's feature flags decide. */
+#include <arm_acle.h>
+#include <sys/auxv.h>
+#ifndef HWCAP_CRC32
+#define HWCAP_CRC32 (1 << 7)
+#endif
+
+__attribute__((target("crc"))) static uint32_t crc_hw_update(uint32_t c, const void *data, size_t n)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    c = ~c;
+    for (; n >= 8; p += 8, n -= 8) {
+        uint64_t q;
+        memcpy(&q, p, 8);
+        c = __crc32d(c, q);
+    }
+    while (n--)
+        c = __crc32b(c, *p++);
+    return ~c;
+}
+
+static int g_crc_hw = -1;
+
+static uint32_t crc_update(uint32_t c, const void *data, size_t n)
+{
+    if (g_crc_hw < 0) {   /* first use: the instructions, if there, checked against the table */
+        static const char probe[] = "Mega Man Legends texture hash check";
+        g_crc_hw = (getauxval(AT_HWCAP) & HWCAP_CRC32) &&
+                   crc_hw_update(0, probe, sizeof probe) == crc_table_update(0, probe, sizeof probe);
+        log_printf("textures: CRC32 %s", g_crc_hw ? "by the CPU's instructions" : "by table");
+    }
+    return g_crc_hw ? crc_hw_update(c, data, n) : crc_table_update(c, data, n);
+}
+#else
+static uint32_t crc_update(uint32_t c, const void *data, size_t n)
+{
+    return crc_table_update(c, data, n);
+}
+#endif
 
 static int by_hash(const void *a, const void *b)
 {

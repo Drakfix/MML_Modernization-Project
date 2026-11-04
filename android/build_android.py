@@ -64,7 +64,9 @@ GEN = os.path.join(NATIVE, "build", "gen")   # the recompiled game (tools/recomp
 # window placement, debugging tools; recomp_native.c compiles to nothing without machine code
 WINDOWS_ONLY = {"gfx_d3d11.c", "rshader.c", "ui_font_gdi.c", "plat_win32.c", "gfx_win.c", "iat.c",
                 "apicensus.c", "sampler.c", "watch.c", "kbm.c", "recomp_native.c"}
-CLANGXX_FLAGS = ["-fPIC", "-O2", "-fms-extensions", "-DMML_RUNNER", "-DMML_VULKAN"]
+# -fno-semantic-interposition and -Bsymbolic (link): calls and data inside libmain.so go direct,
+# not through the PLT and GOT as for symbols another library could replace (53,577 PLT calls)
+CLANGXX_FLAGS = ["-fPIC", "-O2", "-fno-semantic-interposition", "-fms-extensions", "-DMML_RUNNER", "-DMML_VULKAN"]
 
 
 def newer(src, obj):
@@ -131,7 +133,7 @@ def native():
     rsp = os.path.join(OUT, "objects.rsp")   # (too many for one command line)
     with open(rsp, "w") as f:
         f.write("\n".join('"%s"' % o.replace("\\", "/") for o in objs))
-    run(CLANG, TARGET, "-shared", "-fPIC", "-Wl,--no-undefined", "-o", os.path.join(lib, "libmain.so"), "@" + rsp,
+    run(CLANG, TARGET, "-shared", "-fPIC", "-Wl,--no-undefined", "-Wl,-Bsymbolic", "-o", os.path.join(lib, "libmain.so"), "@" + rsp,
         "-L", os.path.join(SDL_LIB, ABI), "-lSDL3", "-llog", "-landroid", "-lm", "-ldl")
     shutil.copy(os.path.join(SDL_LIB, ABI, "libSDL3.so"), lib)
 
