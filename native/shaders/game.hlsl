@@ -41,10 +41,12 @@ PSIn vs_main(VSIn i)
 {
     PSIn o;
     float w = 1.0 / max(i.pos.w, 1e-10);
-    // Direct3D 9-era vertices put pixel centres on whole numbers; D3D10+ puts
-    // them on .5, so shift by half a pixel before going to clip space.
-    float2 ndc = float2((i.pos.x + 0.5) / app_size.x * 2.0 - 1.0,
-                        1.0 - (i.pos.y + 0.5) / app_size.y * 2.0);
+    // the game's screen edges at 0 and its mode's size: whole numbers are
+    // pixel corners, as the PlayStation drew them (Direct3D 9's half-pixel
+    // offset is exact only unscaled; scaled up, a full-screen fade left the
+    // first row and column uncovered)
+    float2 ndc = float2(i.pos.x / app_size.x * 2.0 - 1.0,
+                        1.0 - i.pos.y / app_size.y * 2.0);
     // multiply through by w so texture coordinates and colours interpolate
     // with perspective, exactly like rhw did on the old pipeline
     o.pos = float4(ndc * w, i.pos.z * w, w);

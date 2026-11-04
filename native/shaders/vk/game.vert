@@ -14,9 +14,11 @@ layout(location = 3) out float v_fog;
 void main()
 {
     float w = 1.0 / max(in_pos.w, 1e-10);
-    // pixel centres on whole numbers in the game's (Direct3D 9) vertices, on .5 here; Vulkan's
-    // framebuffer y points down, as the game's does
-    vec2 ndc = vec2((in_pos.x + 0.5) / pc.app_size.x * 2.0 - 1.0, (in_pos.y + 0.5) / pc.app_size.y * 2.0 - 1.0);
+    // the game's screen edges at 0 and its mode's size: whole numbers are pixel corners, as
+    // the PlayStation drew them (Direct3D 9's half-pixel offset is exact only unscaled; scaled
+    // up, a full-screen fade left the first row and column uncovered); Vulkan's framebuffer y
+    // points down, as the game's does
+    vec2 ndc = vec2(in_pos.x / pc.app_size.x * 2.0 - 1.0, in_pos.y / pc.app_size.y * 2.0 - 1.0);
     // multiplied through by w so texture coordinates and colours interpolate with perspective
     gl_Position = vec4(ndc * w, in_pos.z * w, w);
     v_color = in_diffuse.bgra;
