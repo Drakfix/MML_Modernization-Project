@@ -685,11 +685,26 @@ static void deadline_in(struct timespec *d, DWORD ms)
 
 /* ---------------------------------------------------------------- threads, events, timers */
 
+/* A thread's start lives apart from its handle: as on Windows, the handle may be closed while the
+   thread runs (CloseHandle(CreateThread(...))), and a closed slot is soon reused and cleared. At
+   its end the thread signals its handle only if the slot is still its own. */
+typedef struct {
+    LPTHREAD_START_ROUTINE fn;
+    LPVOID arg;
+    HANDLE hv;
+} thread_start;
+
 static void *thread_main(void *p)
 {
-    handle *h = (handle *)p;
-    h->fn(h->arg);
-    event_set(&h->ev);
+    thread_start t = *(thread_start *)p;
+    handle *h;
+    free(p);
+    t.fn(t.arg);
+    pthread_mutex_lock(&g_h_lock);
+    h = h_get(t.hv, H_THREAD);
+    if (h && pthread_equal(h->thread, pthread_self()))
+        event_set(&h->ev);
+    pthread_mutex_unlock(&g_h_lock);
     return NULL;
 }
 
@@ -699,20 +714,34 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stack, LPTHREAD_START_ROUTI
     HANDLE hv = h_new(H_THREAD);
     handle *h = h_get(hv, H_THREAD);
     pthread_attr_t at;
+    thread_start *start;
     (void)sa; (void)flags;
     if (!h)
         return NULL;
     event_init(&h->ev, 1, 0);
     h->fn = fn;
     h->arg = arg;
+    start = (thread_start *)malloc(sizeof *start);
+    if (!start) {
+        CloseHandle(hv);
+        return NULL;
+    }
+    start->fn = fn;
+    start->arg = arg;
+    start->hv = hv;
     pthread_attr_init(&at);
     if (stack)
         pthread_attr_setstacksize(&at, stack < 65536 ? 65536 : stack);
-    if (pthread_create(&h->thread, &at, thread_main, h) != 0) {
+    /* (the slot's lock held: the thread can't look at its handle before h->thread is set) */
+    pthread_mutex_lock(&g_h_lock);
+    if (pthread_create(&h->thread, &at, thread_main, start) != 0) {
+        pthread_mutex_unlock(&g_h_lock);
+        free(start);
         pthread_attr_destroy(&at);
         CloseHandle(hv);
         return NULL;
     }
+    pthread_mutex_unlock(&g_h_lock);
     pthread_attr_destroy(&at);
     if (id)
         *id = (DWORD)(uintptr_t)h->thread;

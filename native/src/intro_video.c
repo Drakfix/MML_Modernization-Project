@@ -269,6 +269,12 @@ int intro_video_install(const char *game_dir)
         g_file[0] = 0;
         return 0;
     }
+#ifndef _WIN32
+    {   /* pl_mpeg opens it with fopen: the path as the system has it (compat_path) */
+        char real[MAX_PATH];
+        snprintf(g_file, sizeof g_file, "%s", compat_path(g_file, real, sizeof real));
+    }
+#endif
     if (!mem_expect(G_FN_INTRO_PLAY_AVI, prologue, sizeof prologue)) {
         log_printf("intro: intro_play_avi has unexpected bytes, original intro");
         g_file[0] = 0;
