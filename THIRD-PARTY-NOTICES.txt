@@ -2,24 +2,26 @@ MEGA MAN LEGENDS - MODERNIZATION PROJECT
 Third-Party Notices and Licenses
 ================================================================================
 
-The Modernization Project itself (the launcher, the widescreen / camera / controls
-/ HUD / audio-timing work, and the exe byte-patch) is this project's own work and
-contains NO Capcom code or data. It requires your own copy of the Mega Man Legends
-PC game.
+The Modernization Project itself (the launcher, the start menu, the renderers, the
+widescreen / camera / controls / HUD / audio-timing work, and the exe byte-patch) is this
+project's own work. It contains no game assets. It does include a translation of the game's
+program code made by the project's recompiler (mml.dll, mml_run64.exe and the Android app),
+which runs only with the files of your own copy of the Mega Man Legends PC game.
 
-To run the game on modern Windows it also installs the following THIRD-PARTY,
+To run the game on modern Windows and on Android it also includes the following THIRD-PARTY,
 OPEN-SOURCE components, redistributed UNMODIFIED from their upstream releases or sources. Each
 is used under its own license (full texts in this "licenses" folder). You may
 replace any of these DLLs with your own build from the linked source.
 
 --------------------------------------------------------------------------------
-pl_mpeg                  built into: mml.dll
+pl_mpeg                  built into: mml.dll, mml_run64.exe, the Android app (libmain.so)
   MPEG-1 video / MP2 audio decoder (plays the intro video).
   (c) Dominic Szablewski.  License: MIT  ->  licenses/pl_mpeg-LICENSE.txt
   Source: https://github.com/phoboslab/pl_mpeg
 
-SDL3                     file: SDL3.dll
-  Controller input (Xbox, PlayStation, Switch and other gamepads).
+SDL3                     files: SDL3.dll, x64\SDL3.dll, the Android app (libSDL3.so)
+  Controller input (Xbox, PlayStation, Switch and other gamepads); on Android also the
+  window, audio and the app itself.
   (c) 1997-2026 Sam Lantinga.  License: zlib  ->  licenses/SDL3-LICENSE.txt
   Source: https://github.com/libsdl-org/SDL
 

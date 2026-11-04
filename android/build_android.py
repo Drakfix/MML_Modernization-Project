@@ -133,6 +133,12 @@ def assets():
     os.makedirs(d)
     intro = os.environ.get("MML_INTRO") or os.path.join(os.environ.get("MML_GAME_DIR", ""), "Modernization", "intro.mpg")
     shutil.copyfile(os.path.join(REPO, "config", "mml.ini"), os.path.join(d, "mml.ini"))   # our defaults
+    # the licenses of what the app is made of (ours, SDL3, pl_mpeg)
+    os.makedirs(os.path.join(d, "licenses"))
+    shutil.copyfile(os.path.join(REPO, "LICENSE"), os.path.join(d, "licenses", "LICENSE.txt"))
+    shutil.copyfile(os.path.join(REPO, "THIRD-PARTY-NOTICES.txt"), os.path.join(d, "licenses", "THIRD-PARTY-NOTICES.txt"))
+    for f in ("SDL3-LICENSE.txt", "pl_mpeg-LICENSE.txt"):
+        shutil.copyfile(os.path.join(REPO, "licenses", f), os.path.join(d, "licenses", f))
     if os.path.isfile(intro):
         shutil.copyfile(intro, os.path.join(d, "intro.mpg"))
     else:
