@@ -15,7 +15,12 @@
 #ifndef _WIN32
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#include "controls.h"
 #include "costack.h"
+#include "gfx.h"
+#include "input.h"
+#include "menu.h"
+#include "plat.h"
 #include "sampler.h"
 #endif
 
@@ -79,6 +84,31 @@ static int load_image(const char *path)
     return 1;
 }
 
+#ifndef _WIN32
+/* The start menu, where there is no launcher ([general] start_menu, on by default): the window
+ * and the renderer are made here, before the game; the game takes the same ones when it asks
+ * for its window and device, so Play goes straight in. 0 = the app closed. */
+static int start_menu(const char *dir)
+{
+    char ini[MAX_PATH];
+    gfx_options o;
+    uint32_t win;
+    _snprintf_s(ini, sizeof ini, _TRUNCATE, "%s\\mml.ini", dir);
+    if (!GetPrivateProfileIntA("general", "start_menu", 1, ini))
+        return 1;
+    if (GetPrivateProfileIntA("debug", "remote_pad", 0, ini))
+        controls_debug_pad();
+    input_sdl_start_early();
+    win = plat_window_create("Megaman", "Mega Man Legends", 0, 0, 0, 0, 854, 480, NULL, NULL);
+    mml_gfx_options(ini, dir, &o);
+    if (!win || !gfx_init((void *)(uintptr_t)win, 854, 480, &o)) {
+        log_printf("runner: no start menu (no window or renderer)");
+        return 1;
+    }
+    return menu_start(ini, dir);
+}
+#endif
+
 static int runner_main(void)
 {
     char dir[MAX_PATH], exe[MAX_PATH], *slash;
@@ -91,6 +121,10 @@ static int runner_main(void)
     log_printf("mml_run %s in %s", MML_NATIVE_BUILD, dir);
     if (!guest_init())
         return 1;
+#ifndef _WIN32
+    if (!start_menu(dir))
+        return 0;
+#endif
     _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\MEGAMAN_NATIVE.EXE", dir);
     if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES)
         _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\MEGAMAN.EXE", dir);
@@ -121,6 +155,7 @@ static void game_thread(void *arg)
 {
     const char *dir = NULL;
     (void)arg;
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");   /* Back is ours (menu.c): not a sudden exit */
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {   /* (this thread is SDL's main one) */
         SDL_Log("mml: SDL_Init failed: %s", SDL_GetError());
         return;

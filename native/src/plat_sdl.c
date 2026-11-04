@@ -14,6 +14,7 @@
 static SDL_Window *g_win;
 static plat_event_fn g_on_event;
 static int g_cursor_count;
+static volatile int g_back, g_quit;   /* Back presses not taken yet; plat_quit asked */
 
 SDL_Window *plat_sdl_window(void)
 {
@@ -53,6 +54,11 @@ uint32_t plat_window_create(const char *cls, const char *title, uint32_t style, 
     int pw = 0, ph = 0;
     (void)cls; (void)style; (void)exstyle; (void)x; (void)y; (void)w; (void)h; (void)icon;
     if (g_win) {
+        if (on_event && !g_on_event) {   /* the start menu's window: the game's from now on */
+            g_on_event = on_event;
+            log_printf("plat: the game takes the start menu's window");
+            return GAME_WINDOW;
+        }
         log_printf("plat: only one window here");
         return 0;
     }
@@ -160,10 +166,27 @@ void plat_key_state(uint8_t keys[256])
         }
 }
 
+int plat_take_back(void)
+{
+    int n = g_back;
+    g_back = 0;
+    return n;
+}
+
+void plat_quit(void)
+{
+    g_quit = 1;
+}
+
 int plat_pump(void)
 {
     SDL_Event e;
     int alive = 1;
+    if (g_quit) {
+        if (g_on_event)
+            g_on_event(GAME_WINDOW, WM_DESTROY, 0, 0, 1);
+        return 0;
+    }
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
         case SDL_EVENT_QUIT:
@@ -178,6 +201,11 @@ int plat_pump(void)
                 g_on_event(GAME_WINDOW, WM_ACTIVATEAPP, e.type == SDL_EVENT_WINDOW_FOCUS_GAINED, 0, 1);
             break;
         case SDL_EVENT_KEY_DOWN:
+            if (e.key.key == SDLK_AC_BACK) {   /* Android's Back: ours (menu.c), not the game's */
+                if (!e.key.repeat)
+                    g_back++;
+                break;
+            }
             if (g_on_event && !e.key.repeat && e.key.key < 0x80)
                 g_on_event(GAME_WINDOW, WM_KEYDOWN, (uint32_t)e.key.key, 0, 0);
             break;

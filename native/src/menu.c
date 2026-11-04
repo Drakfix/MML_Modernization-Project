@@ -13,7 +13,12 @@
  *
  * Runs on the game thread: menu_frame() once per game frame (input),
  * menu_filter_buttons() from the pad poll, and the draw callback while each
- * presented frame is composed. */
+ * presented frame is composed.
+ *
+ * The start menu (menu_start) is the same menu before the game starts, where there is no
+ * launcher (Android, later everywhere): every setting the launcher has, the ones that only
+ * count from the start too (renderer, controls, button mapping), on more pages, and Start to
+ * play. It only writes mml.ini; the game reads it when it starts. */
 #include <windows.h>
 #include <math.h>
 #include <stdio.h>
@@ -32,6 +37,9 @@
 #include "lod.h"
 #include "log.h"
 #include "menu.h"
+#include "menu_music.h"
+#include "plat.h"
+#include "toast.h"
 #include "texreplace.h"
 #include "ui_style.h"
 
@@ -41,17 +49,38 @@ enum {
     IT_FPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
     IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE,
+    IT_CHOICE,   /* one of a list, each choice a set of mml.ini values (the start menu's) */
 };
+
+/* an IT_CHOICE's choice: "section.key=value;section.key=value" written when chosen (a choice
+   that starts with "=" is the value of the item's own key); the first pair tells which choice
+   mml.ini holds */
+typedef struct {
+    const char *label, *set;
+} choice;
+
+/* where an item is offered (0 = everywhere) */
+#define PL_WIN 1
+#define PL_OTHER 2
+#ifdef _WIN32
+#define PL_HERE PL_WIN
+#else
+#define PL_HERE PL_OTHER
+#endif
 
 typedef struct {
     int page, kind;
     const char *label, *help;
+    const choice *ch;   /* IT_CHOICE: its choices, how many, its own key, the default */
+    int nch;
+    int plat;
+    const char *key;
+    int def;
 } item;
 
-static const char *const PAGES[] = { "VIDEO", "PICTURE", "CONTROLS" };
-#define NPAGES 3
+static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS" };
 
-static const item g_items[] = {
+static const item g_game_items[] = {
     { 0, IT_FPS, "Frame rate", "60 fps adds in-between frames for smooth motion. The game itself still runs at 30." },
     { 0, IT_VSYNC, "Vsync", "Locks frames to your monitor's refresh so the picture never tears. Adds a little lag." },
     { 0, IT_RES, "Resolution", "Display renders at your monitor's resolution. 1x to 4x are multiples of the game's 480 lines." },
@@ -69,7 +98,90 @@ static const item g_items[] = {
     { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off." },
     { 2, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to." },
 };
-#define NITEMS ((int)(sizeof g_items / sizeof g_items[0]))
+
+/* ---- the start menu's pages: everything the launcher has ---- */
+static const char *const START_PAGES[] = { "DISPLAY", "GRAPHICS", "CONTROLS", "BUTTONS" };
+
+static const choice CH_RENDERER[] = { { "Direct3D 11", "video.renderer=mml;video.backend=d3d11" },
+                                      { "Vulkan", "video.renderer=mml;video.backend=vulkan" },
+                                      { "Compatibility", "video.renderer=ddrawcompat" } };
+static const choice CH_WINDOW[] = { { "Borderless", "video.windowed=0;video.exclusive=0" },
+                                    { "Exclusive", "video.windowed=0;video.exclusive=1" },
+                                    { "Windowed", "video.windowed=1;video.exclusive=0" } };
+static const choice CH_ASPECT[] = { { "16:9 Wide", "video.aspect=16:9" }, { "4:3 Classic", "video.aspect=4:3" } };
+static const choice CH_INTRO[] = { { "Play", "general.intro=play" }, { "Skip", "general.intro=skip" } };
+static const choice CH_CONTROLS[] = { { "Modern", "controls.mode=modern" }, { "Vanilla (1997)", "controls.mode=vanilla" } };
+static const choice CH_ORBIT[] = { { "Off", "controls.orbit_start=0" }, { "On", "controls.orbit_start=1" } };
+static const choice CH_INPUT[] = { { "Any (SDL)", "controls.input=sdl" }, { "Legacy", "controls.input=legacy" } };
+static const choice CH_DEADZONE[] = { { "Small", "controls.deadzone=12" }, { "Default", "controls.deadzone=24" },
+                                      { "Large", "controls.deadzone=32" } };
+static const choice CH_TILT[] = { { "Walks", "controls.walk_tilt=55" }, { "Runs", "controls.walk_tilt=0" } };
+static const choice CH_ROLL[] = { { "Classic", "controls.roll_speed=512;controls.roll_anim=0" },
+                                  { "Fast", "controls.roll_speed=768;controls.roll_anim=50" },
+                                  { "Snappy", "controls.roll_speed=896;controls.roll_anim=80" } };
+static const choice CH_ACTION[] = { { "Jump", "=jump" }, { "Shoot", "=shoot" }, { "Special", "=special" },
+                                    { "Talk / check", "=talk" }, { "Roll", "=roll" }, { "Aim / lock-on", "=aim" },
+                                    { "Modern on/off", "=orbit" }, { "Menu", "=menu" }, { "Select", "=select" },
+                                    { "Nothing", "=none" } };
+#define NCH(a) ((int)(sizeof a / sizeof a[0]))
+#define BTN_HELP "What this button does with modern controls (vanilla controls keep the 1997 layout)."
+
+static const item g_start_items[] = {
+    { 0, IT_CHOICE, "Renderer", "Direct3D 11 or Vulkan: 60 fps, windowed, Alt+Tab. Compatibility: the old wrapper. "
+      "Counts from the next start.", CH_RENDERER, NCH(CH_RENDERER), PL_WIN },
+    { 0, IT_CHOICE, "Display", "Exclusive uses the least GPU, with limited Alt+Tab and capture.",
+      CH_WINDOW, NCH(CH_WINDOW), PL_WIN },
+    { 0, IT_RES, "Resolution", "Display renders at your screen's resolution. 1x to 4x are multiples of the game's 480 lines." },
+    { 0, IT_CHOICE, "Aspect ratio", "16:9 fills a wide screen; 4:3 is the original picture.", CH_ASPECT, NCH(CH_ASPECT) },
+    { 0, IT_FPS, "Frame rate", "60 fps adds in-between frames for smooth motion. The game itself still runs at 30." },
+    { 0, IT_VSYNC, "Vsync", "Locks frames to your monitor's refresh so the picture never tears. Adds a little lag.",
+      NULL, 0, PL_WIN },
+    { 0, IT_CHOICE, "Intro video", "Any button skips it while it plays.", CH_INTRO, NCH(CH_INTRO) },
+    { 1, IT_MSAA, "Antialiasing", "Smooths jagged polygon edges." },
+    { 1, IT_TEXFILTER, "Texture filter", "Anisotropic keeps floors and walls sharp when you look along them." },
+    { 1, IT_UPSCALE, "Upscaling", "How a lower resolution is stretched to the screen. Nearest keeps the pixels crisp." },
+    { 1, IT_SHADER, "Shader", "RetroArch shader presets (CRT looks and more) from the Modernization\\shaders folder.",
+      NULL, 0, PL_WIN },
+    { 1, IT_SHADER_RES, "Shader input", "What the shader works on. CRT presets look right at the game's own resolution.",
+      NULL, 0, PL_WIN },
+    { 1, IT_FOG, "Distance fog", "The original fog, a lighter one that lets you see further, or none at all." },
+    { 1, IT_LOD, "Model detail", "Full detail keeps faraway models at their best instead of swapping in low-poly ones." },
+    { 1, IT_HDTEX, "HD textures", "Replacement textures from the Modernization\\textures folder." },
+    { 2, IT_CHOICE, "Controls", "Modern: camera-relative movement, orbit camera, lock-on, dodge roll. Vanilla: the 1997 controls.",
+      CH_CONTROLS, NCH(CH_CONTROLS) },
+    { 2, IT_CHOICE, "Modern controls at start", "Whether the game starts with modern controls on (L3 / R3 switch them).",
+      CH_ORBIT, NCH(CH_ORBIT), 0, NULL, 1 },
+    { 2, IT_CHOICE, "Controller", "Any (SDL) handles every controller. Legacy uses the old DirectInput path.",
+      CH_INPUT, NCH(CH_INPUT), PL_WIN },
+    { 2, IT_CAMSPEED, "Camera speed", "How fast the right stick turns the camera." },
+    { 2, IT_INVERT_X, "Invert camera X", "Flips left and right on the camera stick." },
+    { 2, IT_INVERT_Y, "Invert camera Y", "Flips up and down on the camera stick and the mouse." },
+    { 2, IT_CHOICE, "Stick deadzone", "How far the sticks move before anything happens.", CH_DEADZONE, NCH(CH_DEADZONE),
+      0, NULL, 1 },
+    { 2, IT_CHOICE, "Light tilt", "What a slight push of the stick does.", CH_TILT, NCH(CH_TILT) },
+    { 2, IT_CHOICE, "Roll", "Classic is the original cartwheel speed.", CH_ROLL, NCH(CH_ROLL), 0, NULL, 1 },
+    { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off.", NULL, 0, PL_WIN },
+    { 2, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to." },
+    { 3, IT_CHOICE, "A", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_a", 0 },
+    { 3, IT_CHOICE, "B", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_b", 2 },
+    { 3, IT_CHOICE, "X", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_x", 4 },
+    { 3, IT_CHOICE, "Y", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_y", 3 },
+    { 3, IT_CHOICE, "LB", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lb", 5 },
+    { 3, IT_CHOICE, "RB", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rb", 9 },
+    { 3, IT_CHOICE, "LT", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lt", 5 },
+    { 3, IT_CHOICE, "RT", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rt", 1 },
+    { 3, IT_CHOICE, "L3 (left stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_l3", 6 },
+    { 3, IT_CHOICE, "R3 (right stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_r3", 6 },
+    { 3, IT_CHOICE, "Back", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_back", 8 },
+    { 3, IT_CHOICE, "Start", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_start", 7 },
+};
+
+/* the tables in use: the in-game menu's, or the start menu's before the game */
+static const item *g_items = g_game_items;
+static int NITEMS = (int)(sizeof g_game_items / sizeof g_game_items[0]);
+static const char *const *PAGES = GAME_PAGES;
+static int NPAGES = 3;
+#define MAX_ITEMS 64
 
 static const int SPEEDS[] = { 50, 75, 100, 125, 150, 200 };
 static const int MOUSE[] = { 0, 50, 75, 100, 150, 200 };
@@ -81,6 +193,12 @@ static const struct { const char *name; unsigned rgb; } RETICLES[] = {
 
 static struct {
     int ready, open, page, cursor, block;   /* block: input held back until everything is released */
+    int start;                              /* the start menu (before the game) */
+    int play, quit;                         /* the start menu: Play / close the app */
+    int on_play;                            /* the start menu: the PLAY button has the focus */
+    double back_at;                         /* in the game: the last Back press (twice quits) */
+    int scroll;                             /* the first row shown (long pages) */
+    int chv[MAX_ITEMS];                     /* IT_CHOICE values, by item */
     int pad_ui;                             /* button prompts for the pad (else the keyboard) */
     char ini[MAX_PATH], game_dir[MAX_PATH];
     /* values */
@@ -126,6 +244,55 @@ static void ini_int(const char *sec, const char *key, int v)
 static void ini_str(const char *sec, const char *key, const char *v)
 {
     WritePrivateProfileStringA(sec, key, v, M.ini);
+}
+
+/* one "section.key=value" of a choice (a leading "=": the item's own key) */
+static const char *choice_pair(const item *it, const char *p, char *sec, char *key, char *val, size_t n)
+{
+    const char *full = p, *eq, *end, *dot;
+    char own[96];
+    if (*p == '=') {
+        _snprintf_s(own, sizeof own, _TRUNCATE, "%s%.*s", it->key ? it->key : "", (int)strcspn(p, ";"), p);
+        full = own;
+    }
+    end = full + strcspn(full, ";");
+    eq = memchr(full, '=', (size_t)(end - full));
+    dot = memchr(full, '.', (size_t)(end - full));
+    if (!eq || !dot || dot > eq)
+        return NULL;
+    _snprintf_s(sec, n, _TRUNCATE, "%.*s", (int)(dot - full), full);
+    _snprintf_s(key, n, _TRUNCATE, "%.*s", (int)(eq - dot - 1), dot + 1);
+    _snprintf_s(val, n, _TRUNCATE, "%.*s", (int)(end - eq - 1), eq + 1);
+    p += strcspn(p, ";");
+    return *p == ';' ? p + 1 : p;
+}
+
+/* which choice mml.ini holds (by each choice's first value), else the item's default */
+static int choice_read(const item *it)
+{
+    int c;
+    for (c = 0; c < it->nch; c++) {
+        char sec[48], key[48], val[48], cur[64];
+        if (!choice_pair(it, it->ch[c].set, sec, key, val, sizeof sec))
+            continue;
+        GetPrivateProfileStringA(sec, key, "\x01", cur, sizeof cur, M.ini);
+        if (_stricmp(cur, val) == 0)
+            return c;
+    }
+    return it->def;
+}
+
+static void choice_write(const item *it, int c)
+{
+    const char *p = it->ch[c].set;
+    char sec[48], key[48], val[48];
+    while (p && *p && (p = choice_pair(it, p, sec, key, val, sizeof sec)) != NULL)
+        ini_str(sec, key, val);
+}
+
+static int item_index(const item *it)
+{
+    return (int)(it - g_items);
 }
 
 /* ---- shader presets under Modernization\shaders ---- */
@@ -194,7 +361,8 @@ static void apply(int kind)
 {
     switch (kind) {
     case IT_FPS:
-        rec_enable(M.fps60);
+        if (!M.start)
+            rec_enable(M.fps60);
         ini_int("video", "interp", M.fps60);
         break;
     case IT_VSYNC:
@@ -234,22 +402,27 @@ static void apply(int kind)
         ini_int("video", "anisotropy", M.aniso ? 16 : 0);
         break;
     case IT_FOG:
-        fog_set_mode(M.fog);
+        if (!M.start)
+            fog_set_mode(M.fog);
         ini_str("video", "fog", M.fog == FOG_OFF ? "off" : M.fog == FOG_LIGHT ? "light" : "original");
         break;
     case IT_LOD:
-        lod_set(M.lod_full, !GetPrivateProfileIntA("debug", "near_subdiv", 0, M.ini));
+        if (!M.start)
+            lod_set(M.lod_full, !GetPrivateProfileIntA("debug", "near_subdiv", 0, M.ini));
         ini_str("video", "lod", M.lod_full ? "full" : "original");
         break;
     case IT_HDTEX:
-        texreplace_set_replace(M.hdtex);
-        ddshim_reupload_textures();
+        if (!M.start) {
+            texreplace_set_replace(M.hdtex);
+            ddshim_reupload_textures();
+        }
         ini_int("textures", "replace", M.hdtex);
         break;
     case IT_CAMSPEED:
     case IT_INVERT_X:
     case IT_INVERT_Y:
-        controls_camera(SPEEDS[M.cam_speed], SPEEDS[M.cam_speed], M.inv_x, M.inv_y, 0, 0);
+        if (!M.start)
+            controls_camera(SPEEDS[M.cam_speed], SPEEDS[M.cam_speed], M.inv_x, M.inv_y, 0, 0);
         ini_int("controls", "camera_speed_x", SPEEDS[M.cam_speed]);
         ini_int("controls", "camera_speed_y", SPEEDS[M.cam_speed]);
         ini_int("controls", "invert_x", M.inv_x);
@@ -260,14 +433,16 @@ static void apply(int kind)
         ini_int("controls", "mouse_invert_y", M.inv_y);
         /* fall through */
     case IT_MOUSE:
-        controls_mouse(MOUSE[M.mouse] > 0, MOUSE[M.mouse] > 0 ? MOUSE[M.mouse] : 100, M.inv_y);
+        if (!M.start)
+            controls_mouse(MOUSE[M.mouse] > 0, MOUSE[M.mouse] > 0 ? MOUSE[M.mouse] : 100, M.inv_y);
         ini_int("controls", "mouse_keyboard", MOUSE[M.mouse] > 0);
         if (MOUSE[M.mouse] > 0)
             ini_int("controls", "mouse_speed", MOUSE[M.mouse]);
         break;
     case IT_RETICLE: {
         char hex[8];
-        lockon_set_color(RETICLES[M.reticle].rgb);
+        if (!M.start)
+            lockon_set_color(RETICLES[M.reticle].rgb);
         _snprintf_s(hex, sizeof hex, _TRUNCATE, "%06X", RETICLES[M.reticle].rgb);
         ini_str("controls", "reticle_color", hex);
         break;
@@ -290,6 +465,8 @@ static int nearest_index(const int *list, int n, int v)
             best = i;
     return best;
 }
+
+static void change_item(const item *it, int dir);
 
 static void change(int kind, int dir)
 {
@@ -319,6 +496,18 @@ static void change(int kind, int dir)
     M.kick_dir = dir;
     M.kick_at = now_s();
     apply(kind);
+}
+
+static void change_item(const item *it, int dir)
+{
+    if (it->kind != IT_CHOICE) {
+        change(it->kind, dir);
+        return;
+    }
+    M.chv[item_index(it)] = cycle(M.chv[item_index(it)], it->nch, dir);
+    choice_write(it, M.chv[item_index(it)]);
+    M.kick_dir = dir;
+    M.kick_at = now_s();
 }
 
 static void value_text(int kind, char *out, size_t n)
@@ -434,17 +623,26 @@ static float wrapped(float x, float y, float maxw, const char *s, uint32_t col, 
     return yy - y;
 }
 
-static int page_items(int page, int *first)
+/* the items a page shows here, in order (list may be NULL); their count */
+static int page_list(int page, int *list)
 {
     int i, n = 0;
-    *first = -1;
     for (i = 0; i < NITEMS; i++)
-        if (g_items[i].page == page) {
-            if (*first < 0)
-                *first = i;
+        if (g_items[i].page == page && (!g_items[i].plat || (g_items[i].plat & PL_HERE))) {
+            if (list)
+                list[n] = i;
             n++;
         }
     return n;
+}
+
+static int list_pos(const int *list, int n, int item)
+{
+    int i;
+    for (i = 0; i < n; i++)
+        if (list[i] == item)
+            return i;
+    return 0;
 }
 
 static void draw_value(const item *it, float vx, float cy, float u, int selected, double t)
@@ -452,7 +650,10 @@ static void draw_value(const item *it, float vx, float cy, float u, int selected
     char v[MAX_PATH];
     float sc = 0.86f, th = gfx_ui_font_line(UI_FONT_BODY, sc), x = vx, kick = 0, aw = u * 0.42f;
     int on = toggle_state(it->kind), total = 0, filled = gauge(it->kind, &total);
-    value_text(it->kind, v, sizeof v);
+    if (it->kind == IT_CHOICE)
+        strcpy_s(v, sizeof v, it->ch[M.chv[item_index(it)]].label);
+    else
+        value_text(it->kind, v, sizeof v);
     if (selected) {
         double since = t - M.kick_at;
         if (since < 0.18)
@@ -520,10 +721,12 @@ static void draw_value(const item *it, float vx, float cy, float u, int selected
         ui_arrow(x - u * 0.35f - aw / 2 - (M.kick_dir < 0 ? kick : 0), cy, aw, -1, COL_YELLOW);
 }
 
+static void draw_start_backdrop(float w, float h, float u, double t);
+
 static void draw(void *user, int w, int h)
 {
     float u, pad, pw, ph, x, y, cut, rowh, head_h, tab_h, help_h, foot_h, rows_y, slide, dt;
-    int first, n, i, maxrows = 0;
+    int list[MAX_ITEMS], n, i, maxrows = 0, fit;
     double t = now_s();
     (void)user;
     dt = M.last_draw > 0 ? (float)(t - M.last_draw) : 0;
@@ -548,22 +751,37 @@ static void draw(void *user, int w, int h)
     help_h = u * 2.5f;
     foot_h = u * 1.4f;
     for (i = 0; i < NPAGES; i++) {
-        n = page_items(i, &first);
+        n = page_list(i, NULL);
         if (n > maxrows)
             maxrows = n;
     }
+    /* as many rows as the screen holds (the start menu leaves room for its title); longer
+       pages scroll */
+    /* (the start menu: the title above, 4.6 lines, the PLAY button and the stripes below) */
+    fit = (int)((h - (M.start ? u * 4.6f + u * 2.0f + u * 0.8f : u * 1.0f) -
+                 (head_h + tab_h + u * 0.9f + help_h + foot_h + pad)) / rowh);
+    if (fit < 4)
+        fit = 4;
+    if (maxrows > fit)
+        maxrows = fit;
     pw = u * 19;
     if (pw > w - 2 * u)
         pw = w - 2 * u;
-    ph = head_h + tab_h + u * 0.5f + maxrows * rowh + u * 0.4f + help_h + foot_h + pad;
+    ph = head_h + tab_h + u * 0.5f + maxrows * rowh + u * 0.4f + help_h + foot_h + pad +
+         (M.start ? u * 2.0f : 0);   /* (the start menu's PLAY button under the rows) */
     slide = (1 - ui_alpha) * u * 4;
-    x = u * 1.2f - slide;
-    y = (h - ph) / 2;
+    if (M.start) {   /* centred, under the title */
+        draw_start_backdrop((float)w, (float)h, u, t);
+        x = (w - pw) / 2;
+        y = u * 4.6f + (h - u * 4.6f - u * 0.6f - ph) / 2;
+    } else {
+        x = u * 1.2f - slide;
+        y = (h - ph) / 2;
+        /* dim the game behind the panel so the text reads, but keep the right side clear for comparing */
+        gfx_ui_hgrad(0, 0, w * 0.62f, (float)h, ui_col(0x99030812), ui_col(0x00030812));
+    }
     if (y < u * 0.5f)
         y = u * 0.5f;
-
-    /* dim the game behind the panel so the text reads, but keep the right side clear for comparing */
-    gfx_ui_hgrad(0, 0, w * 0.62f, (float)h, ui_col(0x99030812), ui_col(0x00030812));
 
     /* body */
     ui_panel(x + u * 0.25f, y + u * 0.3f, pw, ph, cut, 0x60000000, 0x60000000);   /* drop shadow */
@@ -604,14 +822,15 @@ static void draw(void *user, int w, int h)
         }
         gfx_ui_rect(bx, by + bh - u * 0.08f, bw - bh * 0.5f, u * 0.08f, ui_col(COL_YELLOW));
         ty = by + (bh - gfx_ui_font_line(UI_FONT_DISPLAY, ts)) / 2;
-        ui_text_outlined(UI_FONT_DISPLAY, tx, ty, "SETTINGS", 0xFFFFFFFF, 0xFF9EE2FF, ts, u * 0.06f, 0xFF061226);
+        ui_text_outlined(UI_FONT_DISPLAY, tx, ty, M.start ? "OPTIONS" : "SETTINGS", 0xFFFFFFFF, 0xFF9EE2FF, ts,
+                         u * 0.06f, 0xFF061226);
         /* hazard stripes */
         {
             float sx0 = bx + bw + u * 0.2f, sx1 = x + pw - cut - u * 0.1f, sh = u * 0.32f, sy = by + bh - sh;
             float step = sh * 1.6f, sxx;
             for (sxx = sx0; sxx + step <= sx1; sxx += step)
                 ui_slant(sxx, sy, step * 0.5f, sh, sh, COL_YELLOW, COL_YELLOW_LO);
-            ui_text(sx0, by + u * 0.05f, "changes apply live", COL_DIM, 0.58f);
+            ui_text(sx0, by + u * 0.05f, M.start ? "saved for the game" : "changes apply live", COL_DIM, 0.58f);
         }
     }
 
@@ -643,9 +862,20 @@ static void draw(void *user, int w, int h)
 
     /* rows */
     rows_y = y + head_h + tab_h + u * 0.5f;
-    n = page_items(M.page, &first);
+    n = page_list(M.page, list);
     {
-        float target = rows_y + (M.cursor - first) * rowh, fade_in;
+        int pos = list_pos(list, n, M.cursor), shown_n = n < maxrows ? n : maxrows;
+        float target, fade_in;
+        /* keep the selection in view */
+        if (pos < M.scroll)
+            M.scroll = pos;
+        if (pos >= M.scroll + shown_n)
+            M.scroll = pos - shown_n + 1;
+        if (M.scroll > n - shown_n)
+            M.scroll = n - shown_n;
+        if (M.scroll < 0)
+            M.scroll = 0;
+        target = rows_y + (pos - M.scroll) * rowh;
         if (M.sel_page != M.page || M.sel_y <= 0) {
             M.sel_y = target;
             M.sel_page = M.page;
@@ -653,7 +883,7 @@ static void draw(void *user, int w, int h)
         M.sel_y += (target - M.sel_y) * (dt * 20 > 1 ? 1 : dt * 20);
         fade_in = ui_ease_out((float)((t - M.page_since) / 0.16));
         /* selection: a slanted light bar with the yellow pointer at its left */
-        {
+        if (!(M.start && M.on_play)) {
             float sy = M.sel_y, bob = sinf((float)t * 6.0f) * u * 0.08f;
             float pulse = 0.75f + 0.25f * sinf((float)t * 4.0f);
             ui_slant(x + pad * 0.6f, sy + u * 0.08f, pw - pad * 1.4f, rowh - u * 0.16f, u * 0.25f,
@@ -661,11 +891,19 @@ static void draw(void *user, int w, int h)
             gfx_ui_rect(x + pad * 0.6f, sy + u * 0.08f, u * 0.09f, rowh - u * 0.16f, ui_col(COL_YELLOW));
             ui_arrow(x + pad * 0.35f + bob, sy + rowh / 2, u * 0.38f, 1, COL_YELLOW);
         }
-        for (i = 0; i < n; i++) {
-            const item *it = &g_items[first + i];
+        if (M.scroll > 0) {   /* more above / below */
+            float ax = x + pw / 2, ay = rows_y - u * 0.05f, s = u * 0.22f;
+            gfx_ui_tri(ax, ay - s, ax + s, ay, ax - s, ay, ui_col(COL_DIM));
+        }
+        if (M.scroll + shown_n < n) {
+            float ax = x + pw / 2, ay = rows_y + shown_n * rowh + u * 0.05f, s = u * 0.22f;
+            gfx_ui_tri(ax - s, ay, ax + s, ay, ax, ay + s, ui_col(COL_DIM));
+        }
+        for (i = 0; i < shown_n; i++) {
+            const item *it = &g_items[list[M.scroll + i]];
             float ry = rows_y + i * rowh + (1 - fade_in) * u * 0.3f * (i + 1), cy = ry + rowh / 2;
             float save = ui_alpha;
-            int sel = first + i == M.cursor;
+            int sel = list[M.scroll + i] == M.cursor && !(M.start && M.on_play);
             ui_alpha *= fade_in;
             if (i > 0)
                 gfx_ui_rect(x + pad * 1.2f, ry, pw - pad * 2.2f, 1, ui_col(0x14FFFFFF));
@@ -674,6 +912,29 @@ static void draw(void *user, int w, int h)
             draw_value(it, x + pw - pad * 1.2f, cy, u, sel, t);
             ui_alpha = save;
         }
+    }
+
+    if (M.start) {   /* the PLAY button: Start, or A with the focus on it */
+        float bh = u * 1.5f, bw = pw * 0.5f, bx = x + (pw - bw) / 2, by = rows_y + maxrows * rowh + u * 0.35f;
+        float pulse = 0.5f + 0.5f * sinf((float)t * 5.0f), lw = gfx_ui_font_width(UI_FONT_DISPLAY, "PLAY", 0.75f);
+        float lh = gfx_ui_font_line(UI_FONT_DISPLAY, 0.75f);
+        if (M.on_play) {
+            ui_slant(bx - u * 0.12f, by - u * 0.12f, bw + u * 0.24f, bh + u * 0.24f, bh * 0.45f,
+                     ui_with_alpha(COL_YELLOW, 0.35f + 0.35f * pulse), 0x00FFD23A);
+            ui_slant(bx, by, bw, bh, bh * 0.4f, COL_YELLOW, COL_YELLOW_LO);
+            ui_arrow(bx - u * 0.45f + sinf((float)t * 6.0f) * u * 0.08f, by + bh / 2, u * 0.45f, 1, COL_YELLOW);
+            gfx_ui_font_text(UI_FONT_DISPLAY, bx + (bw - lw) / 2 - u * 0.5f, by + (bh - lh) / 2, "PLAY",
+                             ui_col(COL_NAVY), ui_col(COL_NAVY), 0.75f);
+        } else {
+            ui_slant(bx, by, bw, bh, bh * 0.4f, COL_BLUE, COL_BLUE_DARK);
+            gfx_ui_font_text(UI_FONT_DISPLAY, bx + (bw - lw) / 2 - u * 0.5f, by + (bh - lh) / 2, "PLAY",
+                             ui_col(COL_YELLOW), ui_col(COL_YELLOW_LO), 0.75f);
+        }
+        if (M.pad_ui)
+            ui_key_cap(bx + (bw + lw) / 2 - u * 0.2f, by + bh / 2, u * 0.6f, "Start");
+        else
+            ui_key_cap(bx + (bw + lw) / 2 - u * 0.2f, by + bh / 2, u * 0.6f, "Enter");
+        rows_y += u * 2.0f;   /* (the help goes below it) */
     }
 
     /* help for the selected setting (or a warning) */
@@ -686,6 +947,9 @@ static void draw(void *user, int w, int h)
             gfx_ui_tri(hx + s / 2, hy + u * 0.05f, hx + s, hy + s + u * 0.05f, hx, hy + s + u * 0.05f, ui_col(COL_WARN));
             ui_text(hx + s * 0.38f, hy + s * 0.18f, "!", COL_NAVY, 0.5f);
             wrapped(hx + s + u * 0.3f, hy, hw - s - u * 0.3f, M.note, COL_WARN, 0.72f);
+        } else if (M.start && M.on_play) {
+            wrapped(hx, hy, hw, "Starts the game with these settings. They're saved, and the in-game menu "
+                    "(Back + Start) changes most of them while you play.", 0xFFB4C6D8, 0.72f);
         } else if (M.cursor >= 0) {
             wrapped(hx, hy, hw, g_items[M.cursor].help, 0xFFB4C6D8, 0.72f);
         }
@@ -701,8 +965,20 @@ static void draw(void *user, int w, int h)
             fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 0.7f;
             fx += pad_button(fx, fy, r, "A", 0xFF3FA34D) + u * 0.25f;
             fx += ui_text(fx, fy - lh / 2, "Change", COL_DIM, sc) + u * 0.7f;
-            fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.25f;
-            fx += ui_text(fx, fy - lh / 2, "Close", COL_DIM, sc) + u * 0.7f;
+            if (M.start) {
+                fx += ui_key_cap(fx, fy, r * 1.9f, "Start") + u * 0.25f;
+                fx += ui_text(fx, fy - lh / 2, "Play", COL_YELLOW, sc) + u * 0.7f;
+                fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.25f;
+                fx += ui_text(fx, fy - lh / 2, "Quit", COL_DIM, sc) + u * 0.7f;
+            } else {
+                fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.25f;
+                fx += ui_text(fx, fy - lh / 2, "Close", COL_DIM, sc) + u * 0.7f;
+            }
+        } else if (M.start) {
+            fx += ui_key_cap(fx, fy, r * 1.9f, "Arrows") + u * 0.25f;
+            fx += ui_text(fx, fy - lh / 2, "Choose / change", COL_DIM, sc) + u * 0.7f;
+            fx += ui_key_cap(fx, fy, r * 1.9f, "Enter") + u * 0.25f;
+            fx += ui_text(fx, fy - lh / 2, "Play", COL_YELLOW, sc) + u * 0.7f;
         } else {
             fx += ui_key_cap(fx, fy, r * 1.9f, "Arrows") + u * 0.25f;
             fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 0.7f;
@@ -717,7 +993,7 @@ static void draw(void *user, int w, int h)
 /* ---- input ---- */
 
 enum { K_UP = 1, K_DOWN = 2, K_LEFT = 4, K_RIGHT = 8, K_OK = 16, K_BACK = 32, K_TOGGLE = 64,
-       K_PREV = 128, K_NEXT = 256 };
+       K_PREV = 128, K_NEXT = 256, K_PLAY = 512 };
 
 static int read_keys(WORD *buttons)
 {
@@ -737,6 +1013,7 @@ static int read_keys(WORD *buttons)
         if (p.wButtons & BTN_LB) k |= K_PREV;
         if (p.wButtons & BTN_RB) k |= K_NEXT;
         if ((p.wButtons & (BTN_BACK | BTN_START)) == (BTN_BACK | BTN_START)) k |= K_TOGGLE;
+        else if (M.start && (p.wButtons & BTN_START)) k |= K_PLAY;
         if (k)
             M.pad_ui = 1;
     }
@@ -746,7 +1023,8 @@ static int read_keys(WORD *buttons)
         if (KEY(VK_DOWN)) kb |= K_DOWN;
         if (KEY(VK_LEFT)) kb |= K_LEFT;
         if (KEY(VK_RIGHT)) kb |= K_RIGHT;
-        if (KEY(VK_RETURN) || KEY(VK_SPACE)) kb |= K_OK;
+        if (M.start && KEY(VK_RETURN)) kb |= K_PLAY;
+        else if (KEY(VK_RETURN) || KEY(VK_SPACE)) kb |= K_OK;
         if (KEY(VK_ESCAPE) || KEY(VK_BACK)) kb |= K_BACK;
         if (KEY('Q') || KEY(VK_PRIOR)) kb |= K_PREV;
         if (KEY('E') || KEY(VK_NEXT)) kb |= K_NEXT;
@@ -761,17 +1039,32 @@ static int read_keys(WORD *buttons)
 
 static void set_page(int page)
 {
-    int first;
+    int list[MAX_ITEMS];
+    M.on_play = 0;
     M.page = (page + NPAGES) % NPAGES;
-    page_items(M.page, &first);
-    M.cursor = first;
+    M.cursor = page_list(M.page, list) ? list[0] : 0;
+    M.scroll = 0;
     M.page_since = now_s();
 }
 
 static void move_cursor(int dir)
 {
-    int first, n = page_items(M.page, &first);
-    M.cursor = first + (M.cursor - first + dir + n) % n;
+    int list[MAX_ITEMS], n = page_list(M.page, list), pos;
+    if (!n)
+        return;
+    pos = list_pos(list, n, M.cursor);
+    if (M.start) {   /* rows, then PLAY, then round again */
+        if (M.on_play) {
+            M.on_play = 0;
+            M.cursor = list[dir > 0 ? 0 : n - 1];
+            return;
+        }
+        if ((dir > 0 && pos == n - 1) || (dir < 0 && pos == 0)) {
+            M.on_play = 1;
+            return;
+        }
+    }
+    M.cursor = list[(pos + dir + n) % n];
 }
 
 static void set_open(int open)
@@ -797,13 +1090,34 @@ void menu_frame(void)
     M.prev_keys = keys;
     if (M.block && !keys && !buttons)
         M.block = 0;
-    if (pressed & K_TOGGLE) {
+    if (M.start) {
+        if (plat_take_back() || (pressed & K_BACK)) {   /* B or Android's Back: close the app */
+            M.quit = 1;
+            return;
+        }
+        if ((pressed & K_PLAY) || (M.on_play && (pressed & K_OK))) {
+            M.play = 1;
+            return;
+        }
+    } else if (plat_take_back()) {   /* Android's Back: closes the menu, else twice quits the game */
+        double now = now_s();
+        if (M.open) {
+            set_open(0);
+        } else if (now - M.back_at < 2.5) {
+            log_printf("menu: Back twice, the game closes");
+            plat_quit();
+        } else {
+            M.back_at = now;
+            toast_post(TOAST_ICON_WARN, TOAST_OFF, "PRESS BACK AGAIN", NULL, "to close the game");
+        }
+    }
+    if (pressed & K_TOGGLE && !M.start) {
         set_open(!M.open);
         return;
     }
     if (!M.open)
         return;
-    if (pressed & K_BACK) {
+    if ((pressed & K_BACK) && !M.start) {
         set_open(0);
         return;
     }
@@ -831,12 +1145,14 @@ void menu_frame(void)
         move_cursor(-1);
     else if (dir == K_DOWN)
         move_cursor(1);
+    else if (M.start && M.on_play)
+        ;   /* (left / right: nothing on the PLAY button) */
     else if (dir == K_LEFT)
-        change(g_items[M.cursor].kind, -1);
+        change_item(&g_items[M.cursor], -1);
     else if (dir == K_RIGHT)
-        change(g_items[M.cursor].kind, 1);
-    if (pressed & K_OK)
-        change(g_items[M.cursor].kind, 1);
+        change_item(&g_items[M.cursor], 1);
+    if ((pressed & K_OK) && !(M.start && M.on_play))
+        change_item(&g_items[M.cursor], 1);
 }
 
 /* Pad chords with Back: Back + Start opens the menu, Back + RB quick saves.
@@ -920,7 +1236,8 @@ int menu_blocks_input(void)
     return M.open || M.block;
 }
 
-void menu_install(const char *ini, const char *game_dir)
+/* every value from mml.ini */
+static void load_values(const char *ini, const char *game_dir)
 {
     char s[MAX_PATH], full[MAX_PATH], dir[MAX_PATH];
     int i;
@@ -957,8 +1274,7 @@ void menu_install(const char *ini, const char *game_dir)
                 M.reticle = i;
     }
     /* presets */
-    M.presets = (char **)calloc(MAX_PRESETS, sizeof *M.presets);
-    if (M.presets) {
+    if (!M.presets && (M.presets = (char **)calloc(MAX_PRESETS, sizeof *M.presets)) != NULL) {   /* (once) */
         _snprintf_s(dir, sizeof dir, _TRUNCATE, "%s\\Modernization\\shaders", game_dir);
         scan_presets(dir, 0);
         qsort(M.presets, (size_t)M.npresets, sizeof *M.presets, by_name);
@@ -972,12 +1288,101 @@ void menu_install(const char *ini, const char *game_dir)
             M.shader = i;
     if (full[0] && M.shader < 0)
         strcpy_s(M.shader_custom, sizeof M.shader_custom, full);
+    for (i = 0; i < NITEMS && i < MAX_ITEMS; i++)
+        if (g_items[i].kind == IT_CHOICE)
+            M.chv[i] = choice_read(&g_items[i]);
     {
         pad_t p;
         M.pad_ui = input_sdl_snapshot(&p);
     }
+}
+
+static void add_draw_once(void)
+{
+    static int added;
+    if (!added++)
+        gfx_ui_add_draw(draw, NULL);
+}
+
+void menu_install(const char *ini, const char *game_dir)
+{
+    load_values(ini, game_dir);
     set_page(0);
-    gfx_ui_add_draw(draw, NULL);
+    add_draw_once();
     M.ready = 1;
     log_printf("menu: F1 or Back + Start (%d shader presets found)", M.npresets);
+}
+
+/* ---- the start menu ---- */
+
+/* behind the start menu's panel: the project's colours, a slow sweep of light, the title */
+static void draw_start_backdrop(float w, float h, float u, double t)
+{
+    float band = u * 2.6f, ty, tw, sweep;
+    const char *title = "MEGA MAN LEGENDS", *sub = "MODERNIZATION PROJECT";
+    gfx_ui_vgrad(0, 0, w, h, ui_col(0xFF0E2452), ui_col(0xFF040A18));
+    sweep = (float)fmod(t * 0.07, 1.0);
+    ui_slant(-w * 0.3f + sweep * w * 1.6f, 0, w * 0.18f, h, h * 0.35f, 0x00FFFFFF, 0x0CFFFFFF);
+    {   /* hazard stripes along the bottom */
+        float sh = u * 0.35f, step = sh * 1.6f, sx;
+        for (sx = -sh; sx < w; sx += step)
+            ui_slant(sx, h - sh, step * 0.5f, sh, sh, 0x50FFD23A, 0x50FFA81C);
+    }
+    tw = gfx_ui_font_width(UI_FONT_DISPLAY, title, 1.15f);
+    ty = u * 0.7f;
+    ui_slant((w - tw) / 2 - u * 1.2f, ty - u * 0.1f, tw + u * 2.4f, band, band * 0.4f, COL_BLUE, COL_BLUE_DARK);
+    gfx_ui_rect((w - tw) / 2 - u * 1.2f, ty + band - u * 0.2f, tw + u * 1.6f, u * 0.1f, ui_col(COL_YELLOW));
+    ui_text_outlined(UI_FONT_DISPLAY, (w - tw) / 2, ty + (band - gfx_ui_font_line(UI_FONT_DISPLAY, 1.15f)) / 2 - u * 0.1f,
+                     title, 0xFFFFFFFF, 0xFF9EE2FF, 1.15f, u * 0.08f, 0xFF061226);
+    tw = gfx_ui_font_width(UI_FONT_DISPLAY, sub, 0.5f);
+    gfx_ui_font_text(UI_FONT_DISPLAY, (w - tw) / 2, ty + band + u * 0.15f, sub, ui_col(0xFF8FD3FF),
+                     ui_col(0xFF8FD3FF), 0.5f);
+}
+
+int menu_start(const char *ini, const char *game_dir)
+{
+    g_items = g_start_items;
+    NITEMS = (int)(sizeof g_start_items / sizeof g_start_items[0]);
+    PAGES = START_PAGES;
+    NPAGES = (int)(sizeof START_PAGES / sizeof START_PAGES[0]);
+    M.start = 1;
+    load_values(ini, game_dir);
+    set_page(0);
+    add_draw_once();
+    M.ready = M.open = 1;
+    M.shown = 1;
+    log_printf("menu: the start menu");
+    menu_music_start(game_dir, ini);
+    while (!M.play) {
+        if (!plat_pump() || M.quit) {
+            menu_music_stop();
+            log_printf("menu: closed from the start menu");
+            return 0;
+        }
+        menu_frame();
+        menu_music_frame(1.0f);
+        gfx_clear(NULL, 1, 0xFF000000u, 1, 1.0f);
+        gfx_present();
+    }
+    {   /* the music fades and the menu slides away (half a second) */
+        double t0 = now_s(), f;
+        M.open = 0;
+        while ((f = (now_s() - t0) / 0.5) < 1.0) {
+            plat_pump();
+            menu_music_frame((float)(1.0 - f));
+            gfx_clear(NULL, 1, 0xFF000000u, 1, 1.0f);
+            gfx_present();
+        }
+        menu_music_stop();
+    }
+    /* the game's own menu from here (menu_install) */
+    M.start = M.play = M.open = M.ready = 0;
+    M.shown = 0;
+    M.block = 1;   /* (the Start that started the game doesn't reach it) */
+    g_items = g_game_items;
+    NITEMS = (int)(sizeof g_game_items / sizeof g_game_items[0]);
+    PAGES = GAME_PAGES;
+    NPAGES = 3;
+    log_printf("menu: play");
+    return 1;
 }

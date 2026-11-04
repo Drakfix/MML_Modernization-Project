@@ -553,6 +553,47 @@ static void disable_dev_keys(void)
 
 /* ---- entry ---- */
 
+/* the renderer's options from mml.ini (the game's device, or the start menu's before it) */
+void mml_gfx_options(const char *ini, const char *game_dir, gfx_options *o)
+{
+    memset(o, 0, sizeof *o);
+    o->windowed = GetPrivateProfileIntA("video", "windowed", 0, ini);
+    o->exclusive = GetPrivateProfileIntA("video", "exclusive", 0, ini);
+    o->render_scale = GetPrivateProfileIntA("video", "render_scale", 0, ini);
+    o->perf_log = GetPrivateProfileIntA("debug", "perf_log", 0, ini);
+    o->render_thread = GetPrivateProfileIntA("video", "render_thread", 1, ini);
+    GetPrivateProfileStringA("video", "backend", "d3d11", o->backend, sizeof o->backend, ini);   /* gfx_backend.h */
+    {
+        /* [video] shader=preset.slangp (relative to the game folder, or a full path):
+         * RetroArch shaders on the final picture. They're made for the console's own
+         * resolution, so the game renders at its own size unless render_scale says
+         * otherwise ([video] shader_scale, default 1). */
+        char sh[MAX_PATH];
+        GetPrivateProfileStringA("video", "shader", "", sh, sizeof sh, ini);
+        if (sh[0]) {
+            if (sh[1] == ':' || (sh[0] == '\\' && sh[1] == '\\'))
+                strcpy_s(o->shader, sizeof o->shader, sh);
+            else
+                _snprintf_s(o->shader, sizeof o->shader, _TRUNCATE, "%s\\%s", game_dir, sh);
+            if (!o->render_scale)
+                o->render_scale = GetPrivateProfileIntA("video", "shader_scale", 1, ini);
+        }
+        strcpy_s(o->game_dir, sizeof o->game_dir, game_dir);
+    }
+    o->nearest_upscale = GetPrivateProfileIntA("video", "nearest_upscale", 0, ini);
+    o->msaa = GetPrivateProfileIntA("video", "msaa", 1, ini);
+    o->anisotropy = GetPrivateProfileIntA("video", "anisotropy", 16, ini);
+    o->vsync = GetPrivateProfileIntA("video", "vsync", 0, ini);
+    o->no_fog = GetPrivateProfileIntA("video", "no_fog", 0, ini);
+    o->fog_from_w = GetPrivateProfileIntA("video", "fog_from_w", 0, ini);
+    {
+        char gpu[16];
+        GetPrivateProfileStringA("video", "gpu", "performance", gpu, sizeof gpu, ini);
+        o->gpu_display = _stricmp(gpu, "display") == 0;
+        o->show_depth = GetPrivateProfileIntA("debug", "show_depth", 0, ini);
+    }
+}
+
 void mml_init(void)
 {
     char aspect[16], controls[16], mode[16];
@@ -668,42 +709,7 @@ void mml_init(void)
         ini_string("video", "renderer", "mml", r, sizeof r);
         if (_stricmp(r, "mml") == 0) {
             gfx_options o;
-            memset(&o, 0, sizeof o);
-            o.windowed = GetPrivateProfileIntA("video", "windowed", 0, g_ini);
-            o.exclusive = GetPrivateProfileIntA("video", "exclusive", 0, g_ini);
-            o.render_scale = GetPrivateProfileIntA("video", "render_scale", 0, g_ini);
-            o.perf_log = GetPrivateProfileIntA("debug", "perf_log", 0, g_ini);
-            o.render_thread = GetPrivateProfileIntA("video", "render_thread", 1, g_ini);
-            ini_string("video", "backend", "d3d11", o.backend, sizeof o.backend);   /* gfx_backend.h */
-            {
-                /* [video] shader=preset.slangp (relative to the game folder, or a full path):
-                 * RetroArch shaders on the final picture. They're made for the console's own
-                 * resolution, so the game renders at its own size unless render_scale says
-                 * otherwise ([video] shader_scale, default 1). */
-                char sh[MAX_PATH];
-                ini_string("video", "shader", "", sh, sizeof sh);
-                if (sh[0]) {
-                    if (sh[1] == ':' || (sh[0] == '\\' && sh[1] == '\\'))
-                        strcpy_s(o.shader, sizeof o.shader, sh);
-                    else
-                        _snprintf_s(o.shader, sizeof o.shader, _TRUNCATE, "%s\\%s", g_game_dir, sh);
-                    if (!o.render_scale)
-                        o.render_scale = GetPrivateProfileIntA("video", "shader_scale", 1, g_ini);
-                }
-                strcpy_s(o.game_dir, sizeof o.game_dir, g_game_dir);
-            }
-            o.nearest_upscale = GetPrivateProfileIntA("video", "nearest_upscale", 0, g_ini);
-            o.msaa = GetPrivateProfileIntA("video", "msaa", 1, g_ini);
-            o.anisotropy = GetPrivateProfileIntA("video", "anisotropy", 16, g_ini);
-            o.vsync = GetPrivateProfileIntA("video", "vsync", 0, g_ini);
-            o.no_fog = GetPrivateProfileIntA("video", "no_fog", 0, g_ini);
-            o.fog_from_w = GetPrivateProfileIntA("video", "fog_from_w", 0, g_ini);
-            {
-                char gpu[16];
-                ini_string("video", "gpu", "performance", gpu, sizeof gpu);
-                o.gpu_display = _stricmp(gpu, "display") == 0;
-                o.show_depth = GetPrivateProfileIntA("debug", "show_depth", 0, g_ini);
-            }
+            mml_gfx_options(g_ini, g_game_dir, &o);
             g_fog_debug = GetPrivateProfileIntA("debug", "fog_debug", 0, g_ini);
             g_drop_clamped = GetPrivateProfileIntA("video", "drop_clamped", 1, g_ini);
             {

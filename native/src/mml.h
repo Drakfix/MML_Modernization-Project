@@ -1,6 +1,6 @@
 #pragma once
 
-#define MML_NATIVE_BUILD "0.5.0-beta"
+#define MML_NATIVE_BUILD "0.6.0-beta"
 
 /* Horizontal factor that keeps 2D elements correctly proportioned on the
  * current display (0.75 on 16:9; 1.0 when widescreen is off). */
@@ -14,3 +14,5 @@ float mml_h_x(void);
 void mml_sleep_ms(double ms);
 /* everything mml installs (the DLL's DllMain; the standalone runner after loading the game) */
 void mml_init(void);
+#include "gfx.h"
+void mml_gfx_options(const char *ini, const char *game_dir, gfx_options *o);

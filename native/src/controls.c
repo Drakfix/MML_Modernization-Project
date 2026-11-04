@@ -313,7 +313,10 @@ void controls_debug_pad(void)
 {
     struct sockaddr_un a;
     pthread_t t;
-    int srv = socket(AF_UNIX, SOCK_STREAM, 0);
+    int srv;
+    if (g_dbg)
+        return;   /* (the start menu set it up already) */
+    srv = socket(AF_UNIX, SOCK_STREAM, 0);
     memset(&a, 0, sizeof a);
     a.sun_family = AF_UNIX;
     memcpy(a.sun_path + 1, "mml_pad", 7);   /* (abstract: a leading 0) */

@@ -189,6 +189,16 @@ void plat_key_state(uint8_t keys[256])
 
 /* everything queued for this thread's windows (ours, and the renderer's and video player's);
    the game took one message a frame, which let raw input and the like pile up */
+int plat_take_back(void)
+{
+    return 0;   /* (no system Back button) */
+}
+
+void plat_quit(void)
+{
+    PostQuitMessage(0);
+}
+
 int plat_pump(void)
 {
     MSG m;

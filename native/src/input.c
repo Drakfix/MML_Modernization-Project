@@ -68,6 +68,8 @@ static struct {
 
 static HMODULE g_sdl_dll;
 static int g_active;            /* SDL path selected (gate patched) */
+static int g_early;             /* started before the game (the start menu): readable, nothing patched */
+static int g_cs_ready;
 static int g_started, g_failed;
 static volatile LONG g_ready;    /* SDL_Init finished: other threads may read */
 static SDL_Gamepad *g_pad;
@@ -400,7 +402,22 @@ static void on_poll_done(regs_t *r)
 
 int input_sdl_active(void)
 {
-    return g_active && g_ready;
+    return (g_active || g_early) && g_ready;
+}
+
+/* the controller before the game is loaded (the start menu): SDL on its thread, read with
+   input_sdl_snapshot; input_install patches the game later as usual */
+int input_sdl_start_early(void)
+{
+    if (!load_sdl())
+        return 0;
+    if (!g_cs_ready) {
+        InitializeCriticalSection(&g_cs);
+        g_cs_ready = 1;
+    }
+    g_early = 1;
+    start_sdl();
+    return input_sdl_active();
 }
 
 int input_sdl_snapshot(pad_t *out)
@@ -449,7 +466,10 @@ int input_install(void)
         log_printf("input: gate patch failed, SDL unused");
         return 0;
     }
-    InitializeCriticalSection(&g_cs);
+    if (!g_cs_ready) {
+        InitializeCriticalSection(&g_cs);
+        g_cs_ready = 1;
+    }
     if (!hook_mid(G_SITE_AFTER_POLL, sizeof after_poll, after_poll, on_poll_done))
         log_printf("input: no post-poll hook, the game's keyboard keys stay live with KB+M");
     g_active = 1;

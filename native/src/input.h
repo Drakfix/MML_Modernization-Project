@@ -45,3 +45,4 @@ int input_sdl_any_button(void);
 void *input_sdl_proc(const char *name);
 /* latest controller state straight from the SDL thread (the in-game menu) */
 int input_sdl_snapshot(pad_t *out);
+int input_sdl_start_early(void);   /* before the game: the start menu reads the controller */
