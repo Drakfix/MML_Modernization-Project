@@ -169,6 +169,8 @@ static struct {
     VkSemaphore swap_done[MAX_SWAP];   /* rendering into that image finished */
     uint32_t nswap, swap_w, swap_h;
     int swap_dirty;                    /* recreate before the next frame (size, vsync) */
+    void *native;                      /* Android: the window the surface was made for */
+    volatile int surface_bad;          /* a present or acquire said the surface is lost */
     int back_w, back_h;
     VkFormat depth_fmt;
     VkSampleCountFlagBits samples;
@@ -203,6 +205,7 @@ static struct {
 
 static void flush_batch(void);
 static void vk_wait_flip(void);
+static int g_have_img;               /* composed, not presented yet */
 
 /* the window, per platform: its size in pixels, and placing it */
 static void win_size(int *w, int *h)
@@ -1376,7 +1379,48 @@ static int make_surface(void)
     si.hwnd = v.hwnd;
     return create && create(v.inst, &si, NULL, &v.surface) == VK_SUCCESS;
 #else
+#ifdef __ANDROID__
+    v.native = SDL_GetPointerProperty(SDL_GetWindowProperties(plat_sdl_window()),
+                                      SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
+    if (!v.native)
+        return 0;
+#endif
     return plat_sdl_window() && SDL_Vulkan_CreateSurface(plat_sdl_window(), v.inst, NULL, &v.surface);
+#endif
+}
+
+/* Android takes the window's surface away while the app is in the background (Home, the screen
+   off, another app in front) and gives a new one when it returns; SDL keeps the current one in
+   a window property. Before each frame: no window, no surface (the frame isn't shown); a new
+   window, a new surface and swapchain. 1 = there is a surface to present to. */
+static int surface_follow(void)
+{
+#ifdef __ANDROID__
+    void *now = SDL_GetPointerProperty(SDL_GetWindowProperties(plat_sdl_window()),
+                                       SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
+    if (v.surface && now == v.native && !v.surface_bad)
+        return 1;
+    if (v.surface) {
+        vk_wait_flip();   /* (a frame waiting for its moment goes to the old surface, or fails) */
+        vkDeviceWaitIdle(v.dev);
+        g_have_img = 0;
+        release_swap();
+        if (v.swap)
+            vkDestroySwapchainKHR(v.dev, v.swap, NULL);
+        v.swap = VK_NULL_HANDLE;
+        vkDestroySurfaceKHR(v.inst, v.surface, NULL);
+        v.surface = VK_NULL_HANDLE;
+        log_printf("gfx: the window's surface is gone (the app left the screen)");
+    }
+    v.surface_bad = 0;
+    v.native = NULL;
+    if (!now || !make_surface())
+        return 0;
+    v.swap_dirty = 1;
+    log_printf("gfx: a new window surface (the app is back)");
+    return 1;
+#else
+    return 1;
 #endif
 }
 
@@ -1741,7 +1785,6 @@ static void vk_clear(const gfx_rect *rect, int color_too, uint32_t color, int de
 /* ---------------------------------------------------------------- composing and presenting */
 
 static uint32_t g_img;               /* the swapchain image of the composed frame */
-static int g_have_img;               /* composed, not presented yet */
 
 /* submit the frame (its pending present uses swap_done[g_img]) and move to the next one */
 static void submit_frame(int with_image)
@@ -1798,6 +1841,8 @@ static void present_now(void)
        turned screen (preTransform), and remaking the swapchain each frame took half the frame */
     if (r == VK_ERROR_OUT_OF_DATE_KHR)
         v.swap_dirty = 1;
+    else if (r == VK_ERROR_SURFACE_LOST_KHR)
+        v.surface_bad = 1;
 }
 
 /* the UI for this frame (gfx_ui.h): its triangles, built once, and a new atlas uploaded before
@@ -1877,6 +1922,10 @@ static void vk_compose_target(int ti)
         vkCmdWriteTimestamp(v.fr[v.fi].cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_qpool, 3u * (uint32_t)v.fi + 1);
         v.fr[v.fi].ts = 2;
     }
+    if (!surface_follow()) {   /* no surface (the app is in the background): the frame isn't shown */
+        submit_frame(0);
+        return;
+    }
     /* follow the window size (and a changed vsync) */
     win_size(&cw, &ch);
     if (v.swap_dirty || (uint32_t)cw != v.swap_w || (uint32_t)ch != v.swap_h) {
@@ -1893,9 +1942,14 @@ static void vk_compose_target(int ti)
     }
     ui_prepare();
     c = cmd();
-    r = vkAcquireNextImageKHR(v.dev, v.swap, UINT64_MAX, v.fr[v.fi].acquired, VK_NULL_HANDLE, &g_img);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR) {
-        v.swap_dirty = 1;
+    /* (not forever: an image of a surface Android has taken away may never come) */
+    r = vkAcquireNextImageKHR(v.dev, v.swap, 100000000ull, v.fr[v.fi].acquired, VK_NULL_HANDLE, &g_img);
+    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {   /* this frame isn't shown */
+        if (r == VK_ERROR_OUT_OF_DATE_KHR)
+            v.swap_dirty = 1;
+        else if (r == VK_ERROR_SURFACE_LOST_KHR)
+            v.surface_bad = 1;
+        submit_frame(0);
         return;
     }
     t = &v.tg[ti];
