@@ -203,7 +203,14 @@ static LARGE_INTEGER g_qpc_base, g_qpc_freq;
    deadline moves to now, so the game draws and drops the time it lost: an overloaded game slows
    down instead, and doesn't race to catch up once the load is gone. [debug] max_skipped_draws. */
 static int g_max_skipped = -1;
-static HANDLE g_wait_timer;
+/* one timer per thread: the game thread's frame limiter and the render thread's present slots
+   both sleep here, and a shared timer let one thread take the other's wake-up (the game thread
+   then waited forever) */
+#ifdef _MSC_VER
+static __declspec(thread) HANDLE g_wait_timer;
+#else
+static __thread HANDLE g_wait_timer;
+#endif
 
 /* Sleep for ms with sub-millisecond precision (no busy waiting). */
 void mml_sleep_ms(double ms)
@@ -666,6 +673,7 @@ void mml_init(void)
             o.exclusive = GetPrivateProfileIntA("video", "exclusive", 0, g_ini);
             o.render_scale = GetPrivateProfileIntA("video", "render_scale", 0, g_ini);
             o.perf_log = GetPrivateProfileIntA("debug", "perf_log", 0, g_ini);
+            o.render_thread = GetPrivateProfileIntA("video", "render_thread", 1, g_ini);
             ini_string("video", "backend", "d3d11", o.backend, sizeof o.backend);   /* gfx_backend.h */
             {
                 /* [video] shader=preset.slangp (relative to the game folder, or a full path):

@@ -176,6 +176,7 @@ typedef struct IUnknown { void **lpVtbl; } IUnknown, *LPUNKNOWN;
 #define SM_CYSCREEN                          0x00000001u
 #define S_OK                                 ((HRESULT)0x00000000u)
 #define THREAD_PRIORITY_HIGHEST              0x00000002u
+#define THREAD_PRIORITY_ABOVE_NORMAL         0x00000001u
 #define TIMER_ALL_ACCESS                     0x001F0003u
 #define TRUNCATE_EXISTING                    0x00000005u
 #define VERTRES                              0x0000000Au

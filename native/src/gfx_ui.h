@@ -38,3 +38,7 @@ typedef struct {
 } gfx_ui_vert;
 int gfx_ui_build(int w, int h, const gfx_ui_vert **verts, const uint8_t **atlas, int *aw, int *ah,
                  unsigned *atlas_gen);
+/* gfx.c with a render thread: the callbacks run in gfx_ui_snapshot (on the game thread, at each
+   queued frame end) and gfx_ui_build returns the latest snapshot */
+void gfx_ui_threaded(int on);
+void gfx_ui_snapshot(void);

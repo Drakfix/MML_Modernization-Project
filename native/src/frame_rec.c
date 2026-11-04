@@ -372,10 +372,34 @@ static double present_slot(double period)
     return slot;
 }
 
+/* The present steps run where the presents happen: on the render thread when there is one
+ * (gfx_run), so the slot follows when the frame is actually drawn, not when the game thread
+ * finished queuing it. arg: steps << 8 | s for an in-between frame. */
+static double g_t0;   /* this frame's first slot (the presenting thread's) */
+
+static void present_mid(double arg)
+{
+    int steps = (int)arg >> 8, s = (int)arg & 255;
+    double tick = 1000.0 / 60.0;
+    if (s == 1)
+        g_t0 = present_slot(tick * steps);
+    wait_until(g_t0 + tick * (s - 1));
+    gfx_present_target(1);
+    note_present();
+}
+
+static void present_game(double arg)
+{
+    int steps = (int)arg;
+    /* the game's frame goes up half a tick later from the timer thread, so the presenting
+       thread can get on with the next frame meanwhile */
+    gfx_compose_target(0);
+    gfx_flip_at(g_t0 + 1000.0 / 60.0 * (steps - 1), note_present);
+}
+
 void rec_present(int steps)
 {
     static int overflow_logged;
-    double t0, tick;
     int s;
 
     if (!g_on || !g_ncmds || steps < 2) {
@@ -389,22 +413,17 @@ void rec_present(int steps)
                    g_ncmds, g_nverts);
     }
     g_overflow = 0;
-    tick = 1000.0 / 60.0;
-    t0 = present_slot(tick * steps);
+    if (steps > 255)
+        steps = 255;
     gfx_finish_depth(0);   /* the game's frame is complete: its depth is final before the replay */
     for (s = 1; s < steps; s++) {
         gfx_use_target(1);
         replay((float)s / (float)steps);
-        wait_until(t0 + tick * (s - 1));
-        gfx_present_target(1);
-        note_present();
+        gfx_run(present_mid, (double)(steps << 8 | s));
     }
     gfx_use_target(0);
-    if (!g_mid_only) {
-        /* the game's frame goes up half a tick later from the timer thread, so
-         * the game thread can get on with the next frame meanwhile */
-        gfx_compose_target(0);
-        gfx_flip_at(t0 + tick * (steps - 1), note_present);
-    }
+    if (!g_mid_only)
+        gfx_run(present_game, (double)steps);
+    gfx_end_frame();
     reset();
 }

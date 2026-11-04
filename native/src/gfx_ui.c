@@ -4,7 +4,12 @@
  * rasterises (ui_font.h) at a size that follows the window height (rebuilt
  * when that changes): a body font and a bolder display font for titles. The
  * UI's owner registers a draw callback; the backend calls gfx_ui_build while
- * composing every presented frame and draws what it returns. */
+ * composing every presented frame and draws what it returns.
+ *
+ * With a render thread (gfx.c) the callbacks would run there, beside the game thread changing
+ * what they draw (the menu's state): instead gfx.c takes a snapshot on the game thread whenever
+ * it queues a frame's end, and gfx_ui_build hands the render thread the latest one. */
+#include <windows.h>   /* (native/compat elsewhere): the snapshot's lock */
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -35,6 +40,17 @@ static struct {
     int ndraw;
 } U;
 
+static struct {
+    int on;                            /* gfx_ui_threaded */
+    volatile int w, h;                 /* the size the backend last asked for */
+    CRITICAL_SECTION lock;             /* over pub* */
+    ui_vert pub[MAX_VERTS], out[MAX_VERTS];
+    int pub_n;
+    const uint8_t *pub_atlas;
+    unsigned pub_gen;
+    uint8_t *retired;                  /* the atlas before the current one (freed at the next rebuild) */
+} S;
+
 void gfx_ui_add_draw(gfx_ui_draw_fn draw, void *user)
 {
     if (U.ndraw < (int)(sizeof U.draw / sizeof U.draw[0])) {
@@ -48,6 +64,11 @@ void gfx_ui_add_draw(gfx_ui_draw_fn draw, void *user)
 static int make_font(int px)
 {
     int c;
+    if (S.on && U.atlas) {   /* the render thread may still be uploading the old one: a new buffer */
+        free(S.retired);
+        S.retired = U.atlas;
+        U.atlas = NULL;
+    }
     if (!U.atlas)
         U.atlas = (uint8_t *)malloc((size_t)ATLAS_W * ATLAS_H);
     if (!U.atlas || !ui_font_rasterize(px, U.atlas, ATLAS_W, ATLAS_H, U.glyph, U.line))
@@ -221,8 +242,8 @@ float gfx_ui_text(float x, float y, const char *s, uint32_t argb, float scale)
     return gfx_ui_font_text(0, x, y, s, argb, argb, scale);
 }
 
-int gfx_ui_build(int w, int h, const gfx_ui_vert **verts, const uint8_t **atlas, int *aw, int *ah,
-                 unsigned *atlas_gen)
+/* the callbacks' triangles into U.verts (their count) */
+static int run_draws(int w, int h)
 {
     int px, i;
     if (!U.ndraw || U.failed || w <= 0 || h <= 0)
@@ -236,6 +257,50 @@ int gfx_ui_build(int w, int h, const gfx_ui_vert **verts, const uint8_t **atlas,
     U.nverts = 0;
     for (i = 0; i < U.ndraw; i++)
         U.draw[i].fn(U.draw[i].user, w, h);
+    return U.nverts;
+}
+
+void gfx_ui_threaded(int on)
+{
+    if (on && !S.on)
+        InitializeCriticalSection(&S.lock);
+    S.on = on;
+}
+
+void gfx_ui_snapshot(void)
+{
+    int n;
+    if (!S.on)
+        return;
+    n = run_draws(S.w, S.h);
+    EnterCriticalSection(&S.lock);
+    memcpy(S.pub, U.verts, sizeof *U.verts * (size_t)n);
+    S.pub_n = n;
+    S.pub_atlas = U.atlas;
+    S.pub_gen = U.atlas_gen;
+    LeaveCriticalSection(&S.lock);
+}
+
+int gfx_ui_build(int w, int h, const gfx_ui_vert **verts, const uint8_t **atlas, int *aw, int *ah,
+                 unsigned *atlas_gen)
+{
+    if (S.on) {   /* the latest snapshot (the size asked for counts from the next one) */
+        int n;
+        S.w = w;
+        S.h = h;
+        EnterCriticalSection(&S.lock);
+        n = S.pub_n;
+        memcpy(S.out, S.pub, sizeof *S.pub * (size_t)n);
+        *atlas = S.pub_atlas;
+        *atlas_gen = S.pub_gen;
+        LeaveCriticalSection(&S.lock);
+        *verts = S.out;
+        *aw = ATLAS_W;
+        *ah = ATLAS_H;
+        return *atlas ? n : 0;
+    }
+    if (!run_draws(w, h))
+        return 0;
     *verts = U.verts;
     *atlas = U.atlas;
     *aw = ATLAS_W;

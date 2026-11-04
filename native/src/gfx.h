@@ -55,6 +55,7 @@ typedef struct {
     int gpu_display;              /* render on the GPU driving the monitor, not the fastest one */
     int show_depth;               /* debug: show the effects depth instead of the picture */
     int perf_log;                 /* debug ([debug] perf_log): the renderer's per-frame counts too */
+    int render_thread;            /* [video] render_thread: the backend's work on a thread of its own */
     char shader[260];             /* RetroArch preset (.slangp, full path) for the final picture, "" = none */
     char game_dir[260];           /* where librashader.dll lives */
     char backend[16];             /* [video] backend: "d3d11" (default), "vulkan" */
@@ -99,3 +100,10 @@ int gfx_set_shader(const char *path);   /* full path or "" */
  * depth buffer, for effects tools (ReShade); done once per frame, on compose
  * at the latest */
 void gfx_finish_depth(int t);
+/* fn(arg) in order with the drawing calls before and after it: on the render thread when there
+   is one, else now. fn may present, compose and flip (gfx_present_target, gfx_compose_target,
+   gfx_flip_at, gfx_use_target): frame_rec.c times its presents there, where they happen. */
+void gfx_run(void (*fn)(double), double arg);
+/* the frame's calls are all made (with a render thread: it may start the next frame meanwhile,
+   one frame ahead at most; the UI is taken here) */
+void gfx_end_frame(void);
