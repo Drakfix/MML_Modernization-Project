@@ -173,7 +173,8 @@ RES_CHOICES = [("Display", "display"), ("1x", "app(1)"), ("2x", "app(2)"),
                ("3x", "app(3)"), ("4x", "app(4)"), ("5x", "app(5)")]
 LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
               "2560x1920": "app(4)", "3200x2400": "app(5)"}   # 0.1.x settings.json values
-DEFAULTS = {"renderer": "mml", "window": "fullscreen",
+RUNNER64 = "mml_run64.exe"   # the standalone game: recompiled, 64-bit, no original code
+DEFAULTS = {"renderer": "mml", "window": "fullscreen", "engine": "classic",
             "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
             "lod": "full", "fps": "60", "reticle": "FFD840",
@@ -279,6 +280,9 @@ def import_mml_ini(s):
         v = get(sec, key)
         return int(v) if v and v.lstrip("-").isdigit() else None
 
+    v, b = get("video", "renderer"), get("video", "backend")
+    if v in ("mml", "ddrawcompat"):
+        s["renderer"] = "vulkan" if v == "mml" and (b or "").lower() == "vulkan" else v
     v = num("video", "interp")
     if v is not None:
         s["fps"] = "60" if v else "30"
@@ -371,6 +375,12 @@ def start_game(s):
     with open(log, "a", encoding="utf-8") as f:
         f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} v{VERSION} width {width} {json.dumps(s)}\n")
     exe = os.environ.get("MML_EXE", "MEGAMAN.EXE")   # dev trees test other builds
+    if s.get("engine") == "standalone":
+        if os.path.exists(os.path.join(GAME_DIR, RUNNER64)):
+            exe = RUNNER64
+        else:
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(f"{RUNNER64} not found, starting the classic game instead\n")
     return subprocess.Popen([os.path.join(GAME_DIR, exe)], cwd=GAME_DIR,
                             env=clean_child_env())
 
@@ -508,7 +518,9 @@ def write_mml_ini(s, width):
             "aspect": "16:9" if s["aspect"] == "16:9" else "4:3",
             "mode": "native",
             "native_width": width,
-            "renderer": s["renderer"],
+            # renderer "vulkan" = our renderer on the Vulkan backend ([video] backend)
+            "renderer": "ddrawcompat" if s["renderer"] == "ddrawcompat" else "mml",
+            "backend": "vulkan" if s["renderer"] == "vulkan" else "d3d11",
             "windowed": 1 if s["window"] == "windowed" else 0,
             "exclusive": 1 if s["window"] == "exclusive" else 0,
             "render_scale": scale,
@@ -700,8 +712,8 @@ class App:
         # ---- Display ----
         page[0] = self.pages["display"]
         option("Renderer", "renderer",
-               [("Modern (Direct3D 11)", "mml"), ("Compatibility", "ddrawcompat")],
-               "Modern = 60 fps, alt-tab, screenshots, windowed")
+               [("Direct3D 11", "mml"), ("Vulkan", "vulkan"), ("Compatibility", "ddrawcompat")],
+               "Compatibility = no 60 fps, no windowed")
         option("Display", "window",
                [("Borderless", "fullscreen"), ("Exclusive", "exclusive"), ("Windowed", "windowed")],
                "Exclusive = lowest GPU use, limited Alt+Tab and capture")
@@ -711,6 +723,11 @@ class App:
         option("Frame rate", "fps", [("60 fps", "60"), ("30 fps", "30")], row=r, side="right")
         option("Intro video", "intro",
                [("Play (any button skips)", "play"), ("Skip entirely", "skip")])
+        tk.Label(page[0], text="ADVANCED", bg=BG, fg=DIM, font=(HEAD, 9, "bold")).pack(anchor="w", pady=(8, 1))
+        have_runner = bool(GAME_DIR) and os.path.exists(os.path.join(GAME_DIR, RUNNER64))
+        option("Game engine", "engine",
+               [("Classic", "classic"), ("Standalone (64-bit)", "standalone")],
+               "Standalone = recompiled, no original code" if have_runner else "Standalone is not installed")
 
         # ---- Graphics ----
         page[0] = self.pages["graphics"]
