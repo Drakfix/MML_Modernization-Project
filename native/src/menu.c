@@ -29,6 +29,7 @@
 #include "ddshim.h"
 #include "fog.h"
 #include "frame_rec.h"
+#include "gamefiles.h"
 #include "gfx.h"
 #include "gfx_ui.h"
 #include "input.h"
@@ -50,6 +51,7 @@ enum {
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
     IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE,
     IT_CHOICE,   /* one of a list, each choice a set of mml.ini values (the start menu's) */
+    IT_GF_STATUS, IT_GF_IMPORT,   /* the start menu's game files: where they stand; import them */
 };
 
 /* an IT_CHOICE's choice: "section.key=value;section.key=value" written when chosen (a choice
@@ -100,7 +102,8 @@ static const item g_game_items[] = {
 };
 
 /* ---- the start menu's pages: everything the launcher has ---- */
-static const char *const START_PAGES[] = { "DISPLAY", "GRAPHICS", "CONTROLS", "BUTTONS" };
+static const char *const START_PAGES[] = { "DISPLAY", "GRAPHICS", "CONTROLS", "BUTTONS", "FILES" };
+#define PAGE_FILES 4   /* (only where there is an importer) */
 
 static const choice CH_RENDERER[] = { { "Direct3D 11", "video.renderer=mml;video.backend=d3d11" },
                                       { "Vulkan", "video.renderer=mml;video.backend=vulkan" },
@@ -174,6 +177,10 @@ static const item g_start_items[] = {
     { 3, IT_CHOICE, "R3 (right stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_r3", 6 },
     { 3, IT_CHOICE, "Back", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_back", 8 },
     { 3, IT_CHOICE, "Start", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_start", 7 },
+    { PAGE_FILES, IT_GF_STATUS, "Game files", "Your own copy of Mega Man Legends for Windows PC, copied into this app "
+      "once. Nothing of the game comes with the app." },
+    { PAGE_FILES, IT_GF_IMPORT, "Import", "Pick the folder with MEGAMAN.EXE (copy it from your PC to this device "
+      "first). The game, its music and your saves are copied; the folder itself isn't changed." },
 };
 
 /* the tables in use: the in-game menu's, or the start menu's before the game */
@@ -197,6 +204,10 @@ static struct {
     int play, quit;                         /* the start menu: Play / close the app */
     int on_play;                            /* the start menu: the PLAY button has the focus */
     double back_at;                         /* in the game: the last Back press (twice quits) */
+    /* the start menu's game files (gamefiles.h) */
+    int gf_ready, gf_state;
+    float gf_progress;
+    char gf_line[200];
     int scroll;                             /* the first row shown (long pages) */
     int chv[MAX_ITEMS];                     /* IT_CHOICE values, by item */
     int pad_ui;                             /* button prompts for the pad (else the keyboard) */
@@ -500,6 +511,16 @@ static void change(int kind, int dir)
 
 static void change_item(const item *it, int dir)
 {
+    if (it->kind == IT_GF_STATUS)
+        return;
+    if (it->kind == IT_GF_IMPORT) {
+        if (M.gf_state != IMPORT_COPYING && M.gf_state != IMPORT_PICKING && dir > 0) {
+            M.gf_state = IMPORT_PICKING;
+            M.gf_line[0] = 0;
+            gamefiles_import_begin(M.game_dir);
+        }
+        return;
+    }
     if (it->kind != IT_CHOICE) {
         change(it->kind, dir);
         return;
@@ -546,6 +567,18 @@ static void value_text(int kind, char *out, size_t n)
             strcpy_s(out, n, "Off");
         break;
     case IT_RETICLE: strcpy_s(out, n, RETICLES[M.reticle].name); break;
+    case IT_GF_STATUS:
+        if (M.gf_state == IMPORT_COPYING)
+            _snprintf_s(out, n, _TRUNCATE, "Copying %d%%", (int)(M.gf_progress * 100));
+        else if (M.gf_state == IMPORT_PICKING)
+            strcpy_s(out, n, "Choosing a folder");
+        else
+            strcpy_s(out, n, M.gf_ready ? "Ready" : "Not found");
+        break;
+    case IT_GF_IMPORT:
+        strcpy_s(out, n, M.gf_state == IMPORT_COPYING || M.gf_state == IMPORT_PICKING ? "Busy" :
+                         M.gf_ready ? "Import again" : "Choose folder");
+        break;
     default: out[0] = 0; break;
     }
 }
@@ -554,6 +587,7 @@ static void value_text(int kind, char *out, size_t n)
 static int toggle_state(int kind)
 {
     switch (kind) {
+    case IT_GF_STATUS: return M.gf_state == IMPORT_COPYING || M.gf_state == IMPORT_PICKING ? -1 : M.gf_ready;
     case IT_VSYNC: return M.vsync;
     case IT_HDTEX: return M.hdtex;
     case IT_INVERT_X: return M.inv_x;
@@ -568,6 +602,11 @@ static int gauge(int kind, int *total)
     case IT_CAMSPEED: *total = 6; return M.cam_speed + 1;
     case IT_MOUSE: *total = 5; return M.mouse;
     case IT_MSAA: *total = 2; return M.msaa == 1 ? 0 : M.msaa == 4 ? 1 : 2;
+    case IT_GF_STATUS:
+        if (M.gf_state != IMPORT_COPYING)
+            return -1;
+        *total = 10;
+        return (int)(M.gf_progress * 10 + 0.5f);
     default: return -1;
     }
 }
@@ -947,6 +986,8 @@ static void draw(void *user, int w, int h)
             gfx_ui_tri(hx + s / 2, hy + u * 0.05f, hx + s, hy + s + u * 0.05f, hx, hy + s + u * 0.05f, ui_col(COL_WARN));
             ui_text(hx + s * 0.38f, hy + s * 0.18f, "!", COL_NAVY, 0.5f);
             wrapped(hx + s + u * 0.3f, hy, hw - s - u * 0.3f, M.note, COL_WARN, 0.72f);
+        } else if (M.start && M.page == PAGE_FILES && M.gf_line[0]) {
+            wrapped(hx, hy, hw, M.gf_line, M.gf_state == IMPORT_FAILED ? COL_WARN : 0xFFB4C6D8, 0.72f);
         } else if (M.start && M.on_play) {
             wrapped(hx, hy, hw, "Starts the game with these settings. They're saved, and the in-game menu "
                     "(Back + Start) changes most of them while you play.", 0xFFB4C6D8, 0.72f);
@@ -1091,11 +1132,38 @@ void menu_frame(void)
     if (M.block && !keys && !buttons)
         M.block = 0;
     if (M.start) {
+        if (M.gf_state == IMPORT_PICKING || M.gf_state == IMPORT_COPYING) {   /* the import goes on */
+            char line[200];
+            int st = gamefiles_import_poll(line, sizeof line, &M.gf_progress);
+            if (line[0])
+                strcpy_s(M.gf_line, sizeof M.gf_line, line);
+            if (st == IMPORT_DONE) {
+                M.gf_state = IMPORT_IDLE;
+                strcpy_s(M.gf_line, sizeof M.gf_line, "Checking the game...");
+                if (gamefiles_finish(M.game_dir, line, sizeof line)) {
+                    M.gf_ready = 1;
+                    strcpy_s(M.gf_line, sizeof M.gf_line, "Ready. Press Start to play.");
+                    log_printf("menu: game files imported");
+                } else {
+                    M.gf_ready = 0;
+                    M.gf_state = IMPORT_FAILED;
+                    strcpy_s(M.gf_line, sizeof M.gf_line, line);
+                }
+            } else if (st == IMPORT_FAILED || st == IMPORT_CANCELLED || st == IMPORT_IDLE) {
+                M.gf_state = st;
+                log_printf("menu: game files: %s", M.gf_line);
+            }
+        }
         if (plat_take_back() || (pressed & K_BACK)) {   /* B or Android's Back: close the app */
             M.quit = 1;
             return;
         }
         if ((pressed & K_PLAY) || (M.on_play && (pressed & K_OK))) {
+            if (gamefiles_can_import() && !M.gf_ready) {   /* nothing to play yet */
+                set_page(PAGE_FILES);
+                note("Import your game files first");
+                return;
+            }
             M.play = 1;
             return;
         }
@@ -1344,10 +1412,11 @@ int menu_start(const char *ini, const char *game_dir)
     g_items = g_start_items;
     NITEMS = (int)(sizeof g_start_items / sizeof g_start_items[0]);
     PAGES = START_PAGES;
-    NPAGES = (int)(sizeof START_PAGES / sizeof START_PAGES[0]);
+    NPAGES = gamefiles_can_import() ? PAGE_FILES + 1 : PAGE_FILES;
     M.start = 1;
     load_values(ini, game_dir);
-    set_page(0);
+    M.gf_ready = gamefiles_ready(game_dir);
+    set_page(gamefiles_can_import() && !M.gf_ready ? PAGE_FILES : 0);
     add_draw_once();
     M.ready = M.open = 1;
     M.shown = 1;

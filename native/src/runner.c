@@ -17,6 +17,7 @@
 #include <SDL3/SDL_main.h>
 #include "controls.h"
 #include "costack.h"
+#include "gamefiles.h"
 #include "gfx.h"
 #include "input.h"
 #include "menu.h"
@@ -94,6 +95,7 @@ static int start_menu(const char *dir)
     gfx_options o;
     uint32_t win;
     _snprintf_s(ini, sizeof ini, _TRUNCATE, "%s\\mml.ini", dir);
+    gamefiles_defaults(dir);   /* (a fresh install: our mml.ini; imported files: the intro...) */
     if (!GetPrivateProfileIntA("general", "start_menu", 1, ini))
         return 1;
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, ini))
