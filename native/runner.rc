@@ -1,0 +1,4 @@
+/* The standalone game's resources: its icon, named as the game's own (the game asks for
+ * ROCKMAN_ICON for its window; the first icon is also the one Explorer shows). From art/mml.ico,
+ * which tools/icons/make_icons.py builds. */
+ROCKMAN_ICON ICON "../art/mml.ico"

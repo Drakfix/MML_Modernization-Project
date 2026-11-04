@@ -1,15 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The launcher icon's background: sky into sea -->
+<!-- The launcher icon's background: dark navy, lighter behind the artwork -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
     <path android:pathData="M0,0h108v108h-108z">
         <aapt:attr name="android:fillColor">
-            <gradient android:type="linear"
-                android:startX="0" android:startY="0" android:endX="0" android:endY="108"
-                android:startColor="#FF3F86F2" android:centerColor="#FF2457C4"
-                android:endColor="#FF0B2557" />
+            <gradient android:type="radial"
+                android:centerX="54" android:centerY="50" android:gradientRadius="62"
+                android:startColor="#FF22386E" android:endColor="#FF070E24" />
         </aapt:attr>
     </path>
 </vector>
