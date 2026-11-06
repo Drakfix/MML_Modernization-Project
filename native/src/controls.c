@@ -724,7 +724,7 @@ static void place_camera(regs_t *r, int yaw, int pitch, int mode)
 static void on_cam_apply(regs_t *r)
 {
     int32_t px, pz;
-    int gate, ma, is_gameplay_cam;
+    int gate, ma, is_gameplay_cam, lock_stand;
 
     frame_tick = (frame_tick + 1) & 0x3fffffff;
     QueryPerformanceCounter(&g_last_cam_qpc);
@@ -774,7 +774,12 @@ static void on_cam_apply(regs_t *r)
     if (ma && !move_prev)
         move_start_grace = MOVE_START_GRACE;
     move_prev = ma;
-    inject_fwd = ma && (move_gate > 0 || pos_move_credit > 0 || move_start_grace > 0);
+    /* locked on, the raw stick never reaches the game (it would turn him), so a closed gate
+     * means no input at all: a shot that roots Mega Man (special weapons) lets the gate run
+     * out while the stick is held, and with no direction he never starts moving again to
+     * reopen it. Standing in control while locked on is gameplay: keep the direction coming. */
+    lock_stand = lock_active && P8(PL_STATE) == 0 && !(P8(PL_INPUT_FLAGS) & 0x60);
+    inject_fwd = ma && (move_gate > 0 || pos_move_credit > 0 || move_start_grace > 0 || lock_stand);
     if (move_start_grace > 0)
         move_start_grace--;
 

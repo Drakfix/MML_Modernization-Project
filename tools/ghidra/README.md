@@ -16,7 +16,8 @@ unmodified exe.
 2. `python create_project.py` imports `MEGAMAN.EXE.orig` (vanilla) with that
    spec and runs auto-analysis (~4 min).
 3. Start the server (`python -u ghidra_server.py`) and leave it running.
-4. `python gq.py run fixups.py` (memory map, function discovery, Win32 signatures; see below).
+4. `python gq.py run fixups.py` (memory map, function discovery, Win32 signatures; see below),
+   then `python gq.py run realign.py` (code that step decoded at the wrong byte; see below).
 5. `python gq.py run dx_signatures.py` (DirectX entry points, not in Ghidra's library).
 6. `python gq.py run recover_watcom_params.py` (game function signatures, see below).
 7. `python gq.py symbols symbols.csv` (our names).
@@ -32,6 +33,15 @@ unmodified exe.
   became a function entry (1972 new functions). Coverage 75% -> 95.5%,
   4306 functions. Cross-check: 260 refs to the packet arena cursor, same as
   the earlier manual byte-scan audit.
+* **Code decoded at the wrong byte.** A relocation can also point at data that sits in
+  the code section (a small table between two functions). The step above makes a
+  function there, which decodes the data as instructions and runs on into the real code
+  after it, out of step. Elsewhere a stray data item blocks the disassembler. Either way
+  real code never starts an instruction, so the recompiler can't translate it (Balloon
+  Fantasy's entry at 0x4D5135 was one). `realign.py` re-decodes the three places this
+  happened and then repeats the sweeps that found them: calls and branches that don't
+  land on an instruction start, fall-throughs into undefined bytes, and relocations
+  inside an instruction. What those still list is data decoded as code (GUIDs, tables).
 * **Parameters.** Because EDX/EBX/ECX are (correctly) callee-saved, the
   decompiler won't treat them as parameters on its own. `recover_watcom_params.py`
   infers each function's register params (read-before-write dataflow,
