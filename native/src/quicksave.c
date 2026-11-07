@@ -1,4 +1,4 @@
-/* Quick save ([debug] quick_save=1): F6 saves to the 10th slot from anywhere
+/* Quick save (on by default; [debug] quick_save=0 turns it off): F6 saves to the 10th slot from anywhere
  * in normal play, the same way talking to Data does, and the save loads from
  * the game's own Load Data screen.
  *

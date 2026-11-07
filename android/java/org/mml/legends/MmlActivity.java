@@ -202,7 +202,7 @@ public class MmlActivity extends SDLActivity {
                             dat |= up.equals("DAT");
                         }
                 } else if (up.equals("MEGAMAN.EXE") || up.equals("MEGAMAN.CFG") || up.equals("CAPCOM.AVI") ||
-                           up.endsWith(".MCD")) {   /* (CAPCOM.AVI: the game checks it's there) */
+                           up.endsWith(".MCD") || up.endsWith(".MCD.QUICKSAVE")) {   /* (CAPCOM.AVI: the game checks it's there) */
                     files.add(new Entry(ch[0], ch[1], Long.parseLong(ch[3])));
                     exe |= up.equals("MEGAMAN.EXE");
                 }
