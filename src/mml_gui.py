@@ -177,7 +177,7 @@ RUNNER64 = "mml_run64.exe"   # the standalone game: recompiled, 64-bit, no origi
 DEFAULTS = {"renderer": "mml", "window": "fullscreen", "engine": "classic",
             "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
-            "lod": "full", "fps": "60", "reticle": "FFD840",
+            "lod": "full", "fps": "60", "reticle": "FFD840", "aim": "character", "crosshair": "on",
             "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
             "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display",
             "mouse": "100", "shader": "", "shader_res": "game", "texpack": "on", "texdump": "off"}
@@ -332,6 +332,12 @@ def import_mml_ini(s):
     v = get("controls", "reticle_color")
     if v:
         s["reticle"] = v.lstrip("#").upper()
+    v = get("controls", "aim")
+    if v in ("camera", "character"):
+        s["aim"] = v
+    v = num("controls", "crosshair")
+    if v is not None:
+        s["crosshair"] = "on" if v else "off"
 
 
 def save_settings(s):
@@ -500,6 +506,8 @@ def controls_ini(s):
         "roll_anim": roll_anim,
         "walk_tilt": 55 if s["walk"] == "on" else 0,
         "reticle_color": reticle_hex(s),
+        "aim": "camera" if s.get("aim") == "camera" else "character",
+        "crosshair": 0 if s.get("crosshair") == "off" else 1,
         "mouse_keyboard": 0 if s["mouse"] == "off" else 1,
         "mouse_speed": int(s["mouse"]) if str(s["mouse"]).isdigit() else 100,
         "mouse_invert_y": 1 if s["invert_y"] == "on" else 0,
@@ -768,6 +776,9 @@ class App:
         option("Mouse & keyboard", "mouse",
                [("Off", "off"), ("50%", "50"), ("75%", "75"), ("100%", "100"), ("150%", "150"), ("200%", "200")],
                "mouse look speed")
+        r = pair()
+        option("Shots aim", "aim", [("Character", "character"), ("Camera", "camera")], row=r, side="left")
+        option("Crosshair", "crosshair", [("Off", "off"), ("On", "on")], row=r, side="right")
         self.reticle_card(page[0])
 
         # ---- Buttons ----

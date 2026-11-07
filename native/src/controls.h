@@ -33,6 +33,16 @@ void controls_tune(int roll_speed, int roll_anim_pct, int walk_pct, int walk_min
  * Zero/negative percentages keep the defaults. */
 void controls_camera(int speed_x_pct, int speed_y_pct, int invert_x, int invert_y, int deadzone_pct, int orbit_start);
 
+/* Modern controls aiming: camera = firing turns Mega Man to where the camera looks (he keeps
+ * moving freely around that direction until a moment after the last shot); otherwise shots go
+ * where he faces. crosshair = a marker where those shots go. controls_crosshair: how visible it
+ * is now (0 = hidden, 1 = fully; it fades out a few seconds after the last shot). */
+void controls_aim(int camera, int crosshair);
+float controls_crosshair(void);
+/* the world point camera-aimed shots go toward (the camera's view, a fixed distance out);
+   0 = no vertical aim (shots stay level) */
+int controls_aim_point(double *x, double *y, double *z);
+
 /* Button remapping for the orbit-camera layout: reads [controls] btn_a .. btn_start
  * (jump, shoot, special, talk, roll, aim, orbit, menu, select, none). */
 void controls_load_buttons(const char *ini);

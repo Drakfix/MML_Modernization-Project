@@ -75,6 +75,9 @@ copy.
 - **Lock-on targeting.** Hold aim to lock on to the nearest enemy in view. Mega Man keeps
   facing the target while moving freely; flick the right stick (or use the mouse wheel) to
   switch targets. The reticle colour is configurable.
+- **Camera aim** (optional). Shots go where the camera looks, up and down included, with an
+  optional crosshair. Mega Man turns to the camera's direction only while firing, so movement
+  stays free in every direction.
 - **Analog movement.** A light stick tilt walks, a full tilt runs.
 - **Any controller.** SDL3 supports Xbox, PlayStation, Switch and most other pads, and the
   built-in controls of Android handhelds. The D-pad works as a second movement input, as in
@@ -194,6 +197,31 @@ pressed twice. In the start menu, **Start** plays and **B** quits.
 All of these can be remapped in the launcher or the start menu (Buttons). With modern controls
 off, or in Vanilla mode, the game uses its original controls and camera.
 
+### Camera aim
+
+With **Shots aim: Camera** (Controls settings), shooting works like a third-person shooter
+while modern controls are on:
+
+| Situation | What happens |
+|-----------|--------------|
+| Fire (shoot or special weapon) | Mega Man turns to where the camera looks, and the shot goes there, up and down included |
+| Move while firing | He keeps facing the camera's direction and runs or strafes around it, firing continuously |
+| Move toward the camera while firing | He turns and runs toward the camera, shooting where he runs (the game has no way to shoot while backing away) |
+| Stop firing | He keeps facing that way for a moment, then moves freely again |
+| Aim / lock-on held | Lock-on works as usual; camera aim does not apply |
+
+**Crosshair:** shows where camera-aimed shots go. It appears with the first shot, fades out a
+few seconds after the last one, and uses the lock-on reticle colour. It needs the project's
+renderer (Direct3D 11 or Vulkan).
+
+With **Shots aim: Character** (the default), shots go where Mega Man faces, as in the original
+game.
+
+| `mml.ini` `[controls]` | Values |
+|------------------------|--------|
+| `aim` | `character` (default), `camera` |
+| `crosshair` | `1` (default), `0` |
+
 ### Quick save
 
 Quick save writes to save slot 10, which appears as "Quick save" on the load screen. It never
@@ -210,7 +238,7 @@ file (`mml.ini` in the game folder).
 |------|----------|
 | Display | Renderer (Direct3D 11 / Vulkan / Compatibility), display mode, resolution, aspect ratio, frame rate, intro video; Advanced: game engine |
 | Graphics | Texture filter, upscaling, antialiasing, distance fog, model detail, shader preset, HD textures |
-| Controls | Control scheme, modern controls at start, controller backend, camera speed and inversion, stick deadzone, walk tilt, roll speed, mouse speed, lock-on reticle colour |
+| Controls | Control scheme, modern controls at start, controller backend, camera speed and inversion, stick deadzone, walk tilt, roll speed, mouse speed, lock-on reticle colour, shots aim (character / camera), crosshair |
 | Buttons | Controller and keyboard remapping |
 | Files (Android) | The game files' status, and importing them |
 

@@ -22,6 +22,7 @@
 #include "ambience.h"
 #include "apicensus.h"
 #include "controls.h"
+#include "crosshair.h"
 #include "input.h"
 #include "hints.h"
 #include "intro_video.h"
@@ -652,6 +653,11 @@ void mml_init(void)
                   GetPrivateProfileIntA("controls", "walk_tilt", -1, g_ini),
                   GetPrivateProfileIntA("controls", "walk_min", -1, g_ini),
                   GetPrivateProfileIntA("controls", "run_min", -1, g_ini));
+    {
+        char a[16];
+        ini_string("controls", "aim", "character", a, sizeof a);
+        controls_aim(_stricmp(a, "camera") == 0, GetPrivateProfileIntA("controls", "crosshair", 1, g_ini));
+    }
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, g_ini))
         controls_debug_pad();
     if (GetPrivateProfileIntA("debug", "lock_test", 0, g_ini))
@@ -735,6 +741,7 @@ void mml_init(void)
             g_blend_census = GetPrivateProfileIntA("debug", "blend_census", 0, g_ini);
             if (ddshim_install(&o)) {
                 intro_video_install(g_game_dir);   /* our intro player, if Modernization\intro.mpg exists */
+                crosshair_install();               /* camera aim's crosshair, under everything else */
                 toast_use_ui();                    /* notices in our UI's style, under the menu */
                 hints_install(g_ini);              /* shortcut card on the title screen */
                 menu_install(g_ini, g_game_dir);   /* in-game options (F1 / Back + Start) */

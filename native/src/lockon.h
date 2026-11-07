@@ -12,3 +12,6 @@ int lockon_owns(const void *pkt);    /* reticle packets */
 void lockon_test_reticle(int on);    /* dev: draw the reticle on Mega Man ([debug] lock_test) */
 unsigned lockon_alpha(void);         /* reticle opacity the renderer applies (0..255) */
 void lockon_set_color(unsigned rgb);  /* 0xRRGGBB */
+unsigned lockon_color(void);         /* the reticle colour, 0xRRGGBB (the crosshair uses it too) */
+/* world point -> the game's 320x240 screen through the current camera; 0 = behind it */
+int lockon_project(double wx, double wy, double wz, double *sx, double *sy);

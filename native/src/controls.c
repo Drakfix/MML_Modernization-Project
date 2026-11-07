@@ -23,6 +23,7 @@
  */
 #include <windows.h>
 #include <math.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -70,6 +71,10 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define LOCK_STEP_PCT    200     /* walk / backstep speed while locked on, % of stock */
 #define LOCK_SIDESTEP_PCT 500    /* sidestep while locked on (stock 0x20 is 1/16 of a run) */
 #define LOCK_TURN_STEP   0x100   /* max facing turn per update toward the target */
+#define AIM_HOLD         36      /* camera aim: 1/60 s it stays on after the fire button is let go */
+#define AIM_TURN_STEP    0x400   /* camera aim: max facing turn per update (180 deg in 2 updates) */
+#define AIM_FIRE_TOL     0x100   /* camera aim: a shot waits until the facing is this close... */
+#define AIM_FIRE_WAIT    6       /* ...or this many updates have passed */
 #define CAM_STEP         24      /* collision probe spacing along the camera line (world units) */
 #define CAM_MARGIN       48      /* keep the camera this far in front of a hit */
 #define CAM_MIN_DIST     80
@@ -186,6 +191,34 @@ static volatile LONG move_active, move_fwd, move_walk, inject_fwd;
 static volatile LONG dodge_req;
 static volatile LONG lock_active, lock_free, lock_face;   /* lock_free: aim still held after the lock was lost */
 static int g_lock_test;   /* Z-targeting: locked on, facing toward the target */
+/* face hold: Mega Man keeps facing face_dir and moves freely around it (strafe, backstep); lock-on
+   faces the target, camera aim ([controls] aim=camera) faces where the camera looks while firing */
+static volatile LONG face_hold, face_dir, cam_aim, aim_ready;
+static int g_aim_camera, g_crosshair;
+static double aim_hold;
+static double since_fire = 1e9;   /* 1/60 s since the fire button was last held with camera aim on */
+
+/* Vertical aim. Every shot spawner (the buster's FUN_004B08D5 and the special weapons) builds its
+ * velocity from a pitch it gets from FUN_0042A85C: the aim camera's pitch [0x77E964] when the aim
+ * camera is up ([0x77E958] != 0), else 0 (level). That function's two operands are retargeted to
+ * a flag and a pitch of ours, which mirror the game's values except while camera-aiming, when
+ * they hold the pitch from Mega Man's chest to the point the camera looks at (AIM_DIST along the
+ * view): the crosshair is drawn there too. The game's globals stay untouched (the camera and many
+ * others read [0x77E964]). */
+#define G_FN_SHOT_PITCH   0x42A85Cu   /* cmp byte [0x77E958],0 / ... / mov eax,[0x77E964] at +0xC */
+#define G_AIMCAM_ON       0x77E958u
+#define G_AIMCAM_PITCH    0x77E964u
+#define G_CAM_PLACED      0x77E9E8u   /* s32 x, y, z: where cam_apply_angles put the camera */
+#define G_CAM_PITCH_NOW   0x77EA08u
+#define G_CAM_YAW_NOW     0x77EA0Au
+#define AIM_DIST          2000.0
+#define AIM_CHEST         100         /* the buster's height above the player's position (y down) */
+#define AIM_PITCH_MAX     0x300       /* shots no steeper than ~67 degrees */
+#define SHOT_PITCH_SIGN   (1)         /* the spawners' pitch: + = ... (checked in game) */
+static volatile uint8_t *g_shot_flag;
+static volatile int32_t *g_shot_pitch;
+static double aim_px, aim_py, aim_pz;   /* where the camera looks (world), refreshed per camera update */
+static LONG aim_since;   /* frame_tick when camera aim started (the shot waits for the turn) */
 static volatile LONG frame_tick;
 static volatile LONG move_gate;
 
@@ -496,7 +529,7 @@ static void input_update(void)
     pad_t p;
     LARGE_INTEGER now;
     double ticks = 0, n;
-    int f5, click, aiming, moving = 0, fwd = 0, facing = 0, mdx = 0, mdy = 0, mwheel = 0;
+    int f5, click, aiming, moving = 0, fwd = 0, facing = 0, mdx = 0, mdy = 0, mwheel = 0, firing;
 
     pad_read(&p);
     if (g_kbm && g_modern) {
@@ -601,6 +634,25 @@ static void input_update(void)
         if (lock_active && !was)
             log_printf("lock-on: on");
     }
+    /* camera aim: firing turns Mega Man to where the camera looks and he keeps moving freely
+     * around that direction (like lock-on), for a moment after the last shot too; otherwise
+     * movement stays all-round. The aim button keeps lock-on / the stock aim. */
+    {
+        unsigned acts = actions_of(&p) | (unsigned)g_kbm_acts;
+        int ok = g_aim_camera && st_active && st_allowed && !aiming, was = cam_aim;
+        firing = ok && (ACT(acts, ACT_SHOOT) || ACT(acts, ACT_SPECIAL));
+        since_fire = firing ? 0 : since_fire < 1e9 ? since_fire + ticks : since_fire;
+        if (firing)
+            aim_hold = AIM_HOLD;
+        else if (!ok)
+            aim_hold = 0;
+        else if (aim_hold > 0)
+            aim_hold -= ticks;
+        cam_aim = aim_hold > 0;
+        if (cam_aim && !was)
+            aim_since = frame_tick;
+        face_dir = lock_active ? lock_face : (((int)st_yaw + FACE_OFFSET) & 0xfff);
+    }
     /* mouse look (raw counts), wheel = next lock-on target */
     if (st_active && st_allowed && (mdx || mdy || mwheel)) {
         if (lock_active) {
@@ -651,6 +703,20 @@ static void input_update(void)
     move_fwd = fwd;
     move_walk = moving && fwd < (int)(g_walk_frac * 32767);
     move_active = moving;
+    /* camera aim, moving toward the camera: the game has no way to shoot while moving backward
+     * (the backward run turns his body around and never shoots, the walk-back stops for every
+     * shot), so there he turns to run toward the camera and shoots where he runs. */
+    {
+        static int fled;   /* the last shots went out running toward the camera */
+        int back = cam_aim && !lock_active && moving && abs(((facing - face_dir + 2048) & 0xfff) - 2048) > 1536;
+        if (firing)
+            fled = back;
+        else if (fled || back) {   /* ...then they don't turn him around afterwards */
+            aim_hold = 0, cam_aim = 0;
+            fled = 0;
+        }
+        face_hold = lock_active || (cam_aim && !back);
+    }
     cam_yaw = (int)st_yaw & 0xffff;
     cam_active = st_active && st_allowed;
     cam_suppress = cam_active && aiming && !lock_active && !lock_free;
@@ -721,10 +787,48 @@ static void place_camera(regs_t *r, int yaw, int pitch, int mode)
     }
 }
 
+/* the point the camera looks at, AIM_DIST out along its view (the camera as the game last placed
+   it: the same framing the reticle projects through) */
+static void aim_point_update(void)
+{
+    double yaw = (RD16(G_CAM_YAW_NOW) & 0xfff) * (PI / 2048.0);
+    int pr = RD16(G_CAM_PITCH_NOW) & 0xfff;
+    double p = -(pr > 2048 ? pr - 4096 : pr) * (PI / 2048.0);
+    aim_px = RD32(G_CAM_PLACED) + AIM_DIST * sin(yaw) * cos(p);
+    aim_py = RD32(G_CAM_PLACED + 4) + AIM_DIST * sin(p);
+    aim_pz = RD32(G_CAM_PLACED + 8) + AIM_DIST * cos(yaw) * cos(p);
+}
+
+/* what FUN_0042A85C returns now: the game's own value, or the camera-aimed pitch */
+static void shot_pitch_sync(void)
+{
+    if (!g_shot_flag)
+        return;
+    if (cam_aim && face_hold && !lock_active) {
+        double dx = aim_px - S16(0x14), dz = aim_pz - S16(0x18), dy = aim_py - (S16(0x16) - AIM_CHEST);
+        int pitch = iround(SHOT_PITCH_SIGN * atan2(dy, sqrt(dx * dx + dz * dz)) * (2048.0 / PI));
+        if (pitch > AIM_PITCH_MAX) pitch = AIM_PITCH_MAX;
+        if (pitch < -AIM_PITCH_MAX) pitch = -AIM_PITCH_MAX;
+        *g_shot_pitch = pitch;
+        *g_shot_flag = 1;
+    } else {
+        *g_shot_pitch = GVAR(int32_t, G_AIMCAM_PITCH);
+        *g_shot_flag = GVAR(uint8_t, G_AIMCAM_ON);
+    }
+}
+
+int controls_aim_point(double *x, double *y, double *z)
+{
+    *x = aim_px;
+    *y = aim_py;
+    *z = aim_pz;
+    return g_shot_flag != NULL;
+}
+
 static void on_cam_apply(regs_t *r)
 {
     int32_t px, pz;
-    int gate, ma, is_gameplay_cam, lock_stand;
+    int gate, ma, is_gameplay_cam, lock_stand, ready;
 
     frame_tick = (frame_tick + 1) & 0x3fffffff;
     QueryPerformanceCounter(&g_last_cam_qpc);
@@ -757,15 +861,21 @@ static void on_cam_apply(regs_t *r)
     last_pz = pz;
 
     gate = move_gate;
-    if (lock_active && !roll_latch && !(P8(PL_INPUT_FLAGS) & 0x60)) {
-        int cur = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
-        int d = ((lock_face - cur + 2048) & 0xfff) - 2048;
-        if (d > LOCK_TURN_STEP) d = LOCK_TURN_STEP;
-        if (d < -LOCK_TURN_STEP) d = -LOCK_TURN_STEP;
+    ready = 1;
+    if (face_hold && !roll_latch && !(P8(PL_INPUT_FLAGS) & 0x60)) {
+        int cur = (RD32(G_PLAYER_FACING) >> 16) & 0xfff, step = lock_active ? LOCK_TURN_STEP : AIM_TURN_STEP;
+        int d = ((face_dir - cur + 2048) & 0xfff) - 2048;
+        if (d > step) d = step;
+        if (d < -step) d = -step;
         if (d)
             write_facing(cur + d);
+        /* camera aim: the shot goes out once he faces the camera's way (or after a moment) */
+        d = ((face_dir - cur - d + 2048) & 0xfff) - 2048;
+        ready = !cam_aim || lock_active || (d <= AIM_FIRE_TOL && d >= -AIM_FIRE_TOL) ||
+                (LONG)(frame_tick - aim_since) >= AIM_FIRE_WAIT;
     } else if (move_active && !roll_latch && (gate > 0 || pos_move_credit > 0))
         write_facing(move_face);
+    aim_ready = ready;
     if (gate > 0)
         move_gate = gate - 1;
 
@@ -774,11 +884,14 @@ static void on_cam_apply(regs_t *r)
     if (ma && !move_prev)
         move_start_grace = MOVE_START_GRACE;
     move_prev = ma;
-    /* locked on, the raw stick never reaches the game (it would turn him), so a closed gate
-     * means no input at all: a shot that roots Mega Man (special weapons) lets the gate run
-     * out while the stick is held, and with no direction he never starts moving again to
-     * reopen it. Standing in control while locked on is gameplay: keep the direction coming. */
-    lock_stand = lock_active && P8(PL_STATE) == 0 && !(P8(PL_INPUT_FLAGS) & 0x60);
+    /* in a face hold (lock-on, camera aim) the raw stick never reaches the game (it would turn
+     * him), so a closed gate means no input at all: a shot that roots Mega Man (special weapons)
+     * lets the gate run out while the stick is held, and with no direction he never starts
+     * moving again to reopen it; a run's first frames don't move him either, and losing the
+     * direction there ends the run before it starts. Standing, walking or running in control
+     * in a face hold is gameplay: keep the direction coming. */
+    lock_stand = face_hold && !(P8(PL_INPUT_FLAGS) & 0x60) &&
+                 (P8(PL_STATE) == 0 || P8(PL_STATE) == 1 || P8(PL_STATE) == 2 || P8(PL_STATE) == 6);
     inject_fwd = ma && (move_gate > 0 || pos_move_credit > 0 || move_start_grace > 0 || lock_stand);
     if (move_start_grace > 0)
         move_start_grace--;
@@ -795,6 +908,8 @@ static void on_cam_apply(regs_t *r)
     } else {
         cam_dist_cur = -1;
     }
+    aim_point_update();
+    shot_pitch_sync();
 }
 
 /* ---- player_update hook: roll + analog walk ----
@@ -919,19 +1034,19 @@ static void locomotion_tune(void)
     int st = P8(PL_STATE), id = P8(PL_ANIM_ID), pct;
     double n = move_fwd / 32767.0, w = g_walk_frac, t;
     loco_pct = 100;
-    if ((st == 1 && P8(PL_SUBSTATE) >= 1 && (P8(PL_VARIANT) == 0 || lock_active)) ||
-        (st == 6 && lock_active)) {
+    if ((st == 1 && P8(PL_SUBSTATE) >= 1 && (P8(PL_VARIANT) == 0 || face_hold)) ||
+        (st == 6 && face_hold)) {
         t = w > 0 ? n / w : 1;
         if (t > 1) t = 1;
         pct = g_walk_min + (int)((100 - g_walk_min) * t);
-        /* locked on, the walk-mode steps are how Mega Man moves while facing
-         * the target; stock they crawl (the sidestep at 1/16 of a run) */
-        if (lock_active)
+        /* in a face hold, the walk-mode steps are how Mega Man moves while facing
+         * the target / the camera's way; stock they crawl (the sidestep at 1/16 of a run) */
+        if (face_hold)
             pct = pct * (st == 6 ? LOCK_SIDESTEP_PCT : LOCK_STEP_PCT) / 100;
         loco_pct = pct;
         if (id < 0x0C || id > 0x0F)
             return;
-    } else if (st == 2 && P8(PL_SUBSTATE) >= 2 && (P8(PL_RUN_DIR) == 0 || lock_active)) {
+    } else if (st == 2 && P8(PL_SUBSTATE) >= 2 && (P8(PL_RUN_DIR) == 0 || face_hold)) {
         t = w < 1 ? (n - w) / (1 - w) : 1;
         if (t < 0) t = 0;
         if (t > 1) t = 1;
@@ -962,6 +1077,7 @@ static void on_player_update(regs_t *r)
 {
     if (r->eax != G_PLAYER)
         return;
+    shot_pitch_sync();   /* (shots spawn during the object updates) */
     if (talk_hidden) {
         P16(PL_MASK_TALK) = talk_saved;
         talk_hidden = 0;
@@ -1001,6 +1117,28 @@ static void on_player_update(regs_t *r)
         roll_tune();
     roll_latch = roll_ours;
 
+    /* A run can't change direction: pre_02 drops to idle for it and the run restarts (a shot in
+     * between goes out standing and roots him through the weapon's cooldown). In a face hold the
+     * direction relative to the facing changes whenever the facing turns, so while running it is
+     * switched in place: the run animation is the same for all four (anim 1; +0x116, set at apply
+     * time, turns the body), +0x112 only picks the rules (which runs may shoot). Leaving the face
+     * hold mid-run goes back to the forward run, travel unchanged. */
+    if (cam_active && move_active && inject_fwd && !roll_ours && !(P8(PL_INPUT_FLAGS) & 0x60) &&
+        P8(PL_STATE) == 2 && (P8(PL_SUBSTATE) == 3 || P8(PL_SUBSTATE) == 4)) {
+        int want = 0;
+        if (face_hold) {
+            int rel = ((move_face - face_dir + 2048) & 0xfff) - 2048;
+            want = rel >= -512 && rel <= 512 ? 0 : rel > 512 && rel <= 1536 ? 3 : rel < -512 && rel >= -1536 ? 1 : 2;
+        } else if (P8(PL_RUN_DIR) != 0) {
+            write_facing(move_face);   /* facing = travel, body where it was */
+            S16(PL_MOVE_ANGLE) = 0;
+        }
+        if (want != P8(PL_RUN_DIR)) {
+            P8(PL_RUN_DIR_PREV) = P8(PL_RUN_DIR);
+            P8(PL_RUN_DIR) = (uint8_t)want;
+        }
+    }
+
     loco_pct = 100;
     if (move_active && inject_fwd && !roll_ours)
         locomotion_tune();
@@ -1010,10 +1148,10 @@ static void on_player_update(regs_t *r)
     if (walk_injected && !(GVAR(uint16_t, G_PAD_HELD) & P16(PL_MASK_WALK)))
         P16(PL_HELD) &= (uint16_t)~P16(PL_MASK_WALK);   /* in case held wasn't refreshed yet */
     walk_injected = 0;
-    /* locked on, a light tilt walks too (sidestep / backstep facing the target),
-     * but only from standing or walking: walk + strafe while running turns in place */
+    /* in a face hold, a light tilt walks too (sidestep / backstep facing the target or the
+     * camera's way), but only from standing or walking: walk + strafe while running turns in place */
     if (move_walk && move_active && inject_fwd && !roll_ours && !(P8(PL_INPUT_FLAGS) & 0x60) &&
-        (!lock_active || P8(PL_STATE) == 0 || P8(PL_STATE) == 1 || P8(PL_STATE) == 6)) {
+        (!face_hold || P8(PL_STATE) == 0 || P8(PL_STATE) == 1 || P8(PL_STATE) == 6)) {
         uint16_t walk = P16(PL_MASK_WALK);
         walk_injected = 1;
         P16(PL_HELD) |= walk;
@@ -1036,9 +1174,9 @@ static void on_apply_velocity(regs_t *r)
     if (r->eax != G_PLAYER)
         return;
     st = P8(PL_STATE);
-    /* locked on: the run state only knows 4 directions; steer the travel to
+    /* in a face hold the run state only knows 4 directions; steer the travel to
      * the exact stick heading (travel = facing - +0x116) */
-    if (lock_active && move_active && st == 2) {
+    if (face_hold && move_active && st == 2) {
         int f = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
         S16(PL_MOVE_ANGLE) = (int16_t)(((f - move_face + 2048) & 0xfff) - 2048);
     }
@@ -1065,7 +1203,7 @@ static void on_player_move(regs_t *r)
 static void on_player_turn_ret(regs_t *r)
 {
     (void)r;
-    if (lock_active)
+    if (face_hold)
         return;
     if (move_active && !roll_latch && (move_gate > 0 || pos_move_credit > 0))
         write_facing(move_face);
@@ -1124,8 +1262,9 @@ void controls_filter(pad_t *p)
     p->bRightTrigger = 0;
     out = p->wButtons & (BTN_DPAD_UP | BTN_DPAD_DOWN | BTN_DPAD_LEFT | BTN_DPAD_RIGHT);
     if (ACT(acts, ACT_JUMP))    out |= BTN_A;      /* Cross */
-    if (ACT(acts, ACT_SHOOT))   out |= BTN_X;      /* Square: buster */
-    if (ACT(acts, ACT_SPECIAL)) out |= BTN_B;      /* Triangle: special weapon */
+    /* camera aim: a shot waits (briefly) until Mega Man has turned to the camera's way */
+    if (ACT(acts, ACT_SHOOT) && aim_ready)   out |= BTN_X;      /* Square: buster */
+    if (ACT(acts, ACT_SPECIAL) && aim_ready) out |= BTN_B;      /* Triangle: special weapon */
     if (ACT(acts, ACT_TALK))    out |= BTN_Y;      /* Circle: talk / check / walk */
     if (ACT(acts, ACT_MENU))    out |= BTN_START;
     if (ACT(acts, ACT_SELECT))  out |= BTN_BACK;
@@ -1145,12 +1284,12 @@ void controls_filter(pad_t *p)
     }
     p->wButtons = out;
 
-    if (lock_active) {
-        /* the stick picks the game's run direction relative to the facing
+    if (face_hold) {
+        /* the stick picks the game's run direction relative to the held facing
          * (forward / strafe / back); the exact heading is set at apply time */
         p->sThumbLX = p->sThumbLY = 0;
         if (fresh && move_active && inject_fwd) {
-            int rel = ((move_face - lock_face + 2048) & 0xfff) - 2048;
+            int rel = ((move_face - face_dir + 2048) & 0xfff) - 2048;
             if (rel >= -512 && rel <= 512)
                 p->sThumbLY = 32767;
             else if (rel > 512 && rel <= 1536)
@@ -1372,6 +1511,35 @@ void controls_tune(int roll_speed, int roll_anim_pct, int walk_pct, int walk_min
                g_roll_speed, g_roll_anim, (int)(g_walk_frac * 100), g_walk_min, g_run_min);
 }
 
+void controls_aim(int camera, int crosshair)
+{
+    g_aim_camera = camera != 0;
+    g_crosshair = crosshair != 0;
+    log_printf("controls: shots aim %s, crosshair %s", g_aim_camera ? "where the camera looks" : "where Mega Man faces",
+               g_crosshair ? "on" : "off");
+}
+
+/* called once per presented frame: the game's own menus and pauses stop the camera hook, which
+   leaves the flags above as they were, so the camera must also have moved on recently. Shown
+   from the first shot, it fades out XH_SHOW after the last one. */
+#define XH_SHOW  (4.0 * 60)   /* 1/60 s */
+#define XH_FADE  (0.4 * 60)
+float controls_crosshair(void)
+{
+    static LONG last_ft;
+    static int idle;
+    if (frame_tick != last_ft) {
+        last_ft = frame_tick;
+        idle = 0;
+    } else if (idle < 1000) {
+        idle++;
+    }
+    if (!(g_aim_camera && g_crosshair && cam_active && !cam_suppress && !lock_active && idle < 6 &&
+          controls_in_gameplay()) || since_fire >= XH_SHOW + XH_FADE)
+        return 0;
+    return since_fire <= XH_SHOW ? 1.0f : (float)(1.0 - (since_fire - XH_SHOW) / XH_FADE);
+}
+
 /* ---- install ---- */
 
 void controls_install(int modern, int intro_pad_skip)
@@ -1404,6 +1572,25 @@ void controls_install(int modern, int intro_pad_skip)
         log_printf("controls: %s (F5 / L3 / R3 toggles modern controls)", modern ? "modern" : "vanilla");
     else
         log_printf("controls: game hooks failed");
+
+    /* vertical aim: FUN_0042A85C reads our flag and pitch instead of the aim camera's */
+    {
+        static const uint8_t cmp_flag[] = { 0x80, 0x3D, 0x58, 0xE9, 0x77, 0x00, 0x00 };   /* cmp byte [0x77E958],0 */
+        static const uint8_t mov_pitch[] = { 0xA1, 0x64, 0xE9, 0x77, 0x00 };              /* mov eax,[0x77E964] */
+        uint32_t flag_at = guest_alloc(8), pitch_at = flag_at + 4;
+        if (flag_at && mem_expect(G_FN_SHOT_PITCH, cmp_flag, sizeof cmp_flag) &&
+            mem_expect(G_FN_SHOT_PITCH + 0xC, mov_pitch, sizeof mov_pitch)) {
+            g_shot_flag = (volatile uint8_t *)GUEST(flag_at);
+            g_shot_pitch = (volatile int32_t *)GUEST(pitch_at);
+            shot_pitch_sync();
+            if (mem_write(G_FN_SHOT_PITCH + 2, &flag_at, 4) && mem_write(G_FN_SHOT_PITCH + 0xD, &pitch_at, 4))
+                log_printf("controls: shots take their pitch from us (camera aim)");
+            else
+                log_printf("controls: shot pitch patch failed");
+        } else {
+            log_printf("controls: shot pitch getter unexpected, no vertical aim");
+        }
+    }
 
     if (intro_pad_skip)
         CloseHandle(CreateThread(NULL, 0, intro_skip_thread, NULL, 0, NULL));

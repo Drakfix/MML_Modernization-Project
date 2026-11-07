@@ -49,7 +49,7 @@
 enum {
     IT_FPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
-    IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE,
+    IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR,
     IT_CHOICE,   /* one of a list, each choice a set of mml.ini values (the start menu's) */
     IT_GF_STATUS, IT_GF_IMPORT,   /* the start menu's game files: where they stand; import them */
 };
@@ -81,6 +81,8 @@ typedef struct {
 } item;
 
 static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS" };
+#define AIM_HELP "Camera: firing turns Mega Man to where the camera looks. Character: shots go where he faces."
+#define XH_HELP "With camera aim, a marker shows where your shots go."
 
 static const item g_game_items[] = {
     { 0, IT_FPS, "Frame rate", "60 fps adds in-between frames for smooth motion. The game itself still runs at 30." },
@@ -98,7 +100,9 @@ static const item g_game_items[] = {
     { 2, IT_INVERT_X, "Invert camera X", "Flips left and right on the camera stick." },
     { 2, IT_INVERT_Y, "Invert camera Y", "Flips up and down on the camera stick and the mouse." },
     { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off." },
-    { 2, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to." },
+    { 2, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to, and of the crosshair." },
+    { 2, IT_AIM, "Shots aim", AIM_HELP },
+    { 2, IT_CROSSHAIR, "Crosshair", XH_HELP },
 };
 
 /* ---- the start menu's pages: everything the launcher has ---- */
@@ -164,7 +168,9 @@ static const item g_start_items[] = {
     { 2, IT_CHOICE, "Light tilt", "What a slight push of the stick does.", CH_TILT, NCH(CH_TILT) },
     { 2, IT_CHOICE, "Roll", "Classic is the original cartwheel speed.", CH_ROLL, NCH(CH_ROLL), 0, NULL, 1 },
     { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off.", NULL, 0, PL_WIN },
-    { 2, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to." },
+    { 2, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to, and of the crosshair." },
+    { 2, IT_AIM, "Shots aim", AIM_HELP },
+    { 2, IT_CROSSHAIR, "Crosshair", XH_HELP },
     { 3, IT_CHOICE, "A", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_a", 0 },
     { 3, IT_CHOICE, "B", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_b", 2 },
     { 3, IT_CHOICE, "X", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_x", 4 },
@@ -214,7 +220,7 @@ static struct {
     char ini[MAX_PATH], game_dir[MAX_PATH];
     /* values */
     int fps60, vsync, res, msaa, shader_game_res, nearest, aniso, fog, lod_full, hdtex;
-    int cam_speed, inv_x, inv_y, mouse, reticle;
+    int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair;
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
     char **presets;
@@ -458,6 +464,13 @@ static void apply(int kind)
         ini_str("controls", "reticle_color", hex);
         break;
     }
+    case IT_AIM:
+    case IT_CROSSHAIR:
+        if (!M.start)
+            controls_aim(M.aim_camera, M.crosshair);
+        ini_str("controls", "aim", M.aim_camera ? "camera" : "character");
+        ini_int("controls", "crosshair", M.crosshair);
+        break;
     default:
         break;
     }
@@ -502,6 +515,8 @@ static void change(int kind, int dir)
     case IT_INVERT_Y: M.inv_y = !M.inv_y; break;
     case IT_MOUSE: M.mouse = cycle(M.mouse, 6, dir); break;
     case IT_RETICLE: M.reticle = cycle(M.reticle, (int)(sizeof RETICLES / sizeof RETICLES[0]), dir); break;
+    case IT_AIM: M.aim_camera = !M.aim_camera; break;
+    case IT_CROSSHAIR: M.crosshair = !M.crosshair; break;
     default: return;
     }
     M.kick_dir = dir;
@@ -567,6 +582,8 @@ static void value_text(int kind, char *out, size_t n)
             strcpy_s(out, n, "Off");
         break;
     case IT_RETICLE: strcpy_s(out, n, RETICLES[M.reticle].name); break;
+    case IT_AIM: strcpy_s(out, n, M.aim_camera ? "Camera" : "Character"); break;
+    case IT_CROSSHAIR: strcpy_s(out, n, M.crosshair ? "On" : "Off"); break;
     case IT_GF_STATUS:
         if (M.gf_state == IMPORT_COPYING)
             _snprintf_s(out, n, _TRUNCATE, "Copying %d%%", (int)(M.gf_progress * 100));
@@ -1341,6 +1358,9 @@ static void load_values(const char *ini, const char *game_dir)
             if (RETICLES[i].rgb == rgb)
                 M.reticle = i;
     }
+    GetPrivateProfileStringA("controls", "aim", "character", s, sizeof s, ini);
+    M.aim_camera = _stricmp(s, "camera") == 0;
+    M.crosshair = GetPrivateProfileIntA("controls", "crosshair", 1, ini) != 0;
     /* presets */
     if (!M.presets && (M.presets = (char **)calloc(MAX_PRESETS, sizeof *M.presets)) != NULL) {   /* (once) */
         _snprintf_s(dir, sizeof dir, _TRUNCATE, "%s\\Modernization\\shaders", game_dir);

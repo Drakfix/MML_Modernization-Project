@@ -2,6 +2,8 @@
 # The recompiler makes the generated code call the hooks and read patched bytes from memory.
 0042961B 6 H E9
 004298F6 6 H E9
+0042A85E 4 P 00
+0042A869 4 P 00
 00434644 1 P EB
 00434653 1 P EB
 00434660 1 P EB

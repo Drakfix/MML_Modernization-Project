@@ -315,6 +315,16 @@ int lockon_owns(const void *pkt)
     return g_tri && p >= g_tri[0] && p < g_tri[0] + 2 * RET_TRIS * 0x40;
 }
 
+int lockon_project(double wx, double wy, double wz, double *sx, double *sy)
+{
+    return project(wx, wy, wz, sx, sy);
+}
+
+unsigned lockon_color(void)
+{
+    return (unsigned)(g_ret_rgb[0] << 16 | g_ret_rgb[1] << 8 | g_ret_rgb[2]);
+}
+
 /* one inward-pointing triangle of the reticle; outline = the same shape
  * grown by RET_EDGE in dark red */
 static void reticle_tri(uint8_t *t, double sx, double sy, double a, double pulse, int outline)
