@@ -700,7 +700,7 @@ void mml_init(void)
                     GetPrivateProfileIntA("textures", "dump", 0, g_ini));
     if (GetPrivateProfileIntA("debug", "clip_uv", 1, g_ini))
         clipfix_install();
-    if (GetPrivateProfileIntA("debug", "quick_save", 0, g_ini)) {
+    if (GetPrivateProfileIntA("debug", "quick_save", 1, g_ini)) {   /* on by default; =0 turns it off */
         quicksave_install(g_game_dir);
     }
     if (GetPrivateProfileIntA("video", "terrain_clip", 1, g_ini))
