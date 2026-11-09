@@ -219,6 +219,7 @@ static volatile uint8_t *g_shot_flag;
 static volatile int32_t *g_shot_pitch;
 static double aim_px, aim_py, aim_pz;   /* where the camera looks (world), refreshed per camera update */
 static LONG aim_since;   /* frame_tick when camera aim started (the shot waits for the turn) */
+static int air_travel, air_steered;   /* a jump's heading; +0x116 was set for it in a face hold */
 static volatile LONG frame_tick;
 static volatile LONG move_gate;
 
@@ -715,7 +716,11 @@ static void input_update(void)
             aim_hold = 0, cam_aim = 0;
             fled = 0;
         }
-        face_hold = lock_active || (cam_aim && !back);
+        /* camera aim only on the ground (idle, walk, run, sidestep) and in jumps: talking,
+           checking, kicking, ladders, knockback, Jet Skates keep their own facing (with the
+           camera turning, the hold turned Mega Man in the middle of a conversation) */
+        int st = P8(PL_STATE), aim_state = st <= 2 || st == 6 || st == 7 || st == 8;
+        face_hold = lock_active || (cam_aim && !back && aim_state);
     }
     cam_yaw = (int)st_yaw & 0xffff;
     cam_active = st_active && st_allowed;
@@ -1078,6 +1083,19 @@ static void on_player_update(regs_t *r)
     if (r->eax != G_PLAYER)
         return;
     shot_pitch_sync();   /* (shots spawn during the object updates) */
+    if (air_steered && P8(PL_STATE) != 7 && P8(PL_STATE) != 8) {
+        /* landed from a jump steered in a face hold: body back on the facing. A run in full
+           swing sets its own heading; the landing's brief run start (sub < 3) may still drop
+           to idle, so wait for it to go either way */
+        if (P8(PL_STATE) != 2) {
+            S16(PL_MOVE_ANGLE) = 0;
+            air_steered = 0;
+        } else if (P8(PL_SUBSTATE) >= 3) {
+            if (!face_hold)   /* (in a face hold the run's heading is set at apply time) */
+                S16(PL_MOVE_ANGLE) = 0;
+            air_steered = 0;
+        }
+    }
     if (talk_hidden) {
         P16(PL_MASK_TALK) = talk_saved;
         talk_hidden = 0;
@@ -1179,6 +1197,21 @@ static void on_apply_velocity(regs_t *r)
     if (face_hold && move_active && st == 2) {
         int f = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
         S16(PL_MOVE_ANGLE) = (int16_t)(((f - move_face + 2048) & 0xfff) - 2048);
+    }
+    /* jumps move along the facing too (travel = facing - +0x116), so turning him to shoot in
+     * the air swung the drift to the target / the camera's way. In a face hold the drift
+     * follows the stick, or keeps the heading it had (from before the hold) when the stick
+     * is let go; outside one it is just tracked. */
+    if (st == 7 || st == 8) {
+        int f = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
+        if (!face_hold) {
+            air_travel = (f - S16(PL_MOVE_ANGLE)) & 0xfff;
+        } else {
+            if (move_active)
+                air_travel = move_face & 0xfff;
+            S16(PL_MOVE_ANGLE) = (int16_t)(((f - air_travel + 2048) & 0xfff) - 2048);
+            air_steered = 1;
+        }
     }
     if (loco_pct == 100)
         return;
@@ -1284,7 +1317,12 @@ void controls_filter(pad_t *p)
     }
     p->wButtons = out;
 
-    if (face_hold) {
+    if (face_hold && (P8(PL_STATE) == 7 || P8(PL_STATE) == 8)) {
+        /* in a jump: forward, as without a face hold (left/right would be the game's own air
+           steering, relative to the turned facing); the heading is set at apply time */
+        p->sThumbLX = 0;
+        p->sThumbLY = (SHORT)((fresh && move_active && inject_fwd) ? 32767 : 0);
+    } else if (face_hold) {
         /* the stick picks the game's run direction relative to the held facing
          * (forward / strafe / back); the exact heading is set at apply time */
         p->sThumbLX = p->sThumbLY = 0;

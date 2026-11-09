@@ -208,6 +208,8 @@ while modern controls are on:
 | Move while firing | He keeps facing the camera's direction and runs or strafes around it, firing continuously |
 | Move toward the camera while firing | He turns and runs toward the camera, shooting where he runs (the game has no way to shoot while backing away) |
 | Stop firing | He keeps facing that way for a moment, then moves freely again |
+| Fire while jumping | He turns to shoot where the camera looks; the jump keeps drifting where the stick points |
+| Talk, check or kick | Camera aim does not apply: he faces what he is interacting with |
 | Aim / lock-on held | Lock-on works as usual; camera aim does not apply |
 
 **Crosshair:** shows where camera-aimed shots go. It appears with the first shot, fades out a
