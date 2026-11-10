@@ -96,6 +96,8 @@ VK_DEVICE(VK_DECL)
 #define MAX_PIPES 128
 #define MAX_DEAD 4096
 #define MAX_SETS 8192
+/* resources alive and failures, for the log: a leak shows as numbers that keep growing */
+static struct { long mem, sets, mem_fail, set_fail, dead_overflow; } g_res;
 
 struct gfx_tex {
     VkImage img;
@@ -246,8 +248,13 @@ static VkDeviceMemory alloc_mem(VkMemoryRequirements req, VkMemoryPropertyFlags 
     ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     ai.allocationSize = req.size;
     ai.memoryTypeIndex = mem_type(req.memoryTypeBits, want);
-    if (ai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(v.dev, &ai, NULL, &m) != VK_SUCCESS)
+    if (ai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(v.dev, &ai, NULL, &m) != VK_SUCCESS) {
+        if (g_res.mem_fail++ < 8)
+            log_printf("gfx: Vulkan memory allocation of %llu bytes failed (%ld allocations live)",
+                       (unsigned long long)req.size, g_res.mem);
         return VK_NULL_HANDLE;
+    }
+    g_res.mem++;
     return m;
 }
 
@@ -311,18 +318,33 @@ static int image_make(int w, int h, VkFormat fmt, VkImageUsageFlags usage, VkSam
     return vkCreateImageView(v.dev, &vi, NULL, view) == VK_SUCCESS;
 }
 
-/* destroyed once the frame being recorded has finished on the GPU */
+/* destroyed once the frame being recorded has finished on the GPU. Between frames (nothing
+   recording: frame_rec.c destroys the textures its replay drew with right after the present)
+   the last frame submitted is the one that may still use it: the object waits for that frame's
+   fence. Queued on the next slot instead, it was freed as soon as that slot's older frame was
+   done, with the GPU still drawing with it (a GPU page fault: the game froze, or the whole
+   system on some laptops). */
+static void dead_free(frame *f);
+
 static void dead_add(int kind, uint64_t h)
 {
     frame *f = &v.fr[v.fi];
     if (!h)
         return;
+    if (!f->recording) {
+        frame *last = &v.fr[(v.fi + FRAMES - 1) % FRAMES];
+        if (last->submitted)
+            f = last;
+    }
     if (f->ndead < MAX_DEAD) {
         f->dead[f->ndead].kind = kind;
         f->dead[f->ndead].h = h;
         f->ndead++;
     } else {   /* (never in practice) */
+        if (g_res.dead_overflow++ < 8)
+            log_printf("gfx: Vulkan deletion queue full (%d objects in one frame)", MAX_DEAD);
         vkDeviceWaitIdle(v.dev);
+        dead_free(f);   /* (the GPU is idle: all of them can go now) */
         f->dead[0].kind = kind;
         f->dead[0].h = h;
         f->ndead = 1;
@@ -338,8 +360,8 @@ static void dead_free(frame *f)
         case DEAD_IMAGE: vkDestroyImage(v.dev, (VkImage)h, NULL); break;
         case DEAD_VIEW: vkDestroyImageView(v.dev, (VkImageView)h, NULL); break;
         case DEAD_BUFFER: vkDestroyBuffer(v.dev, (VkBuffer)h, NULL); break;
-        case DEAD_MEMORY: vkFreeMemory(v.dev, (VkDeviceMemory)h, NULL); break;
-        case DEAD_SET: { VkDescriptorSet s = (VkDescriptorSet)h; vkFreeDescriptorSets(v.dev, v.dpool, 1, &s); break; }
+        case DEAD_MEMORY: vkFreeMemory(v.dev, (VkDeviceMemory)h, NULL); g_res.mem--; break;
+        case DEAD_SET: { VkDescriptorSet s = (VkDescriptorSet)h; vkFreeDescriptorSets(v.dev, v.dpool, 1, &s); g_res.sets--; break; }
         }
     }
     f->ndead = 0;
@@ -356,8 +378,12 @@ static VkDescriptorSet image_set(VkImageView view)
     ai.descriptorPool = v.dpool;
     ai.descriptorSetCount = 1;
     ai.pSetLayouts = &v.img_layout;
-    if (vkAllocateDescriptorSets(v.dev, &ai, &s) != VK_SUCCESS)
+    if (vkAllocateDescriptorSets(v.dev, &ai, &s) != VK_SUCCESS) {
+        if (g_res.set_fail++ < 8)
+            log_printf("gfx: Vulkan descriptor set allocation failed (%ld sets live)", g_res.sets);
         return VK_NULL_HANDLE;
+    }
+    g_res.sets++;
     memset(&ii, 0, sizeof ii);
     ii.imageView = view;
     ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -383,8 +409,12 @@ static VkDescriptorSet sampler_set(VkSampler smp)
     ai.descriptorPool = v.dpool;
     ai.descriptorSetCount = 1;
     ai.pSetLayouts = &v.smp_layout;
-    if (vkAllocateDescriptorSets(v.dev, &ai, &s) != VK_SUCCESS)
+    if (vkAllocateDescriptorSets(v.dev, &ai, &s) != VK_SUCCESS) {
+        if (g_res.set_fail++ < 8)
+            log_printf("gfx: Vulkan descriptor set allocation failed (%ld sets live)", g_res.sets);
         return VK_NULL_HANDLE;
+    }
+    g_res.sets++;
     memset(&ii, 0, sizeof ii);
     ii.sampler = smp;
     memset(&w, 0, sizeof w);
@@ -1533,7 +1563,7 @@ static gfx_tex *vk_tex_create_fmt(int w, int h, VkFormat fmt)
         !(t->set = image_set(t->view))) {
         if (t->view) vkDestroyImageView(v.dev, t->view, NULL);
         if (t->img) vkDestroyImage(v.dev, t->img, NULL);
-        if (t->mem) vkFreeMemory(v.dev, t->mem, NULL);
+        if (t->mem) { vkFreeMemory(v.dev, t->mem, NULL); g_res.mem--; }
         free(t);
         return NULL;
     }
@@ -1909,6 +1939,7 @@ static void vk_compose_target(int ti)
                    g_stat.passes / 300.0, g_stat.uploads / 300.0, g_stat.upload_bytes / 300.0 / 1024.0,
                    g_stat.clears / 300.0, g_stat.draws / 300.0, g_stat.by_state / 300.0, g_stat.by_tex / 300.0,
                    g_stat.by_full / 300.0);
+        log_printf("gfx: live Vulkan memory allocations %ld, descriptor sets %ld", g_res.mem, g_res.sets);
         if (g_stat.gpu_n)
             log_printf("gfx: GPU %.2f ms per frame, the scene %.2f ms", g_stat.gpu_ms / g_stat.gpu_n,
                        g_stat.gpu_scene_n ? g_stat.gpu_scene_ms / g_stat.gpu_scene_n : 0.0);
