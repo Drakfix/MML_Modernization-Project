@@ -22,7 +22,7 @@ import time
 
 import patch_manifest as M
 
-VERSION = "0.6.5-beta"
+VERSION = "0.7.0-beta"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)

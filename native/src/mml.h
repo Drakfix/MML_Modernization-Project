@@ -1,6 +1,6 @@
 #pragma once
 
-#define MML_NATIVE_BUILD "0.6.5-beta"
+#define MML_NATIVE_BUILD "0.7.0-beta"
 
 /* Horizontal factor that keeps 2D elements correctly proportioned on the
  * current display (0.75 on 16:9; 1.0 when widescreen is off). */

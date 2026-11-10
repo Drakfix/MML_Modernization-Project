@@ -9,11 +9,12 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.6.5 beta.** The 0.1 releases are kept on the
+**Current version: 0.7.0 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
 
+- [What's new in 0.7](#whats-new-in-07)
 - [What's new in 0.6](#whats-new-in-06)
 - [Features](#features)
 - [Requirements](#requirements)
@@ -29,6 +30,25 @@ copy.
 - [How it works](#how-it-works)
 - [Building from source](#building-from-source)
 - [Credits and licenses](#credits-and-licenses)
+
+## What's new in 0.7
+
+- **Rockman DASH,** the Japanese PC version, is supported on Windows and Android, with both
+  engines. Setup installs the patch in the US version, in Rockman DASH, or in both. On Android,
+  both versions can be imported side by side, each with its own saves, and the start menu picks
+  the one to play. A **Menu buttons** setting chooses the US or the Japanese confirm and back
+  buttons in Rockman DASH.
+- **English subtitles for the cutscenes** (experimental), which the original release never had.
+  They are the work of the
+  [Rockman DASH PSP English project](https://github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher)
+  and are downloaded from its repository by Setup or by the Android start menu.
+- **Japanese voices for the US version** (experimental), built from your own copy of Rockman
+  DASH: the cutscenes, the in-game lines and the title screen.
+
+**Experimental.** The subtitles and the Japanese voices have not been checked through the whole
+game yet. The subtitles are timed to the English voice acting. With the Japanese voices they
+follow the same cutscene timing, so they stay close, but they are not always exactly in sync with
+the Japanese line being spoken.
 
 ## What's new in 0.6
 
@@ -99,7 +119,7 @@ copy.
 - **New intro video,** with an option to skip it entirely.
 - **Timing fix** for the cutscene audio drift on modern PCs.
 
-### Subtitles and Japanese voices (optional, US version)
+### Subtitles and Japanese voices (optional, US version, experimental)
 
 - **English subtitles for the cutscenes,** which were never subtitled in the original release.
   They show with the English voices and with the Japanese ones. They are the work of the
@@ -109,18 +129,25 @@ copy.
   cutscenes, the in-game lines and the title screen. The launcher, or the Android start menu,
   switches between the English and the Japanese voices.
 
+**Experimental.** The subtitles and the Japanese voices have not been checked through the whole
+game yet. The subtitles are timed to the English voice acting. With the Japanese voices they
+follow the same cutscene timing, so they stay close, but they are not always exactly in sync with
+the Japanese line being spoken.
+
 ## Requirements
 
 **Windows**
 
-- The **Mega Man Legends PC port** (2001 Capcom CD-ROM release). The installer checks the
-  game executable and only patches the supported build.
+- The **Mega Man Legends PC port** (2001 Capcom CD-ROM release), or **Rockman DASH**, the
+  Japanese PC version. The installer checks the game executable and only patches the supported
+  builds. Rockman DASH is also what the optional Japanese voices for the US version are built from.
 - **Windows 10 or 11** (64-bit) and a GPU with Direct3D 11. Vulkan 1.1 for the Vulkan renderer.
 - A controller is optional. Mouse and keyboard are fully supported.
 
 **Android**
 
-- A copy of the **Mega Man Legends PC port** (the same files as above), copied to the device.
+- A copy of the **Mega Man Legends PC port** or of **Rockman DASH** (the same files as above),
+  copied to the device.
 - **Android 9 or newer** on a 64-bit (arm64) device with **Vulkan 1.1**.
 - About **2.5 GB** of free space (the game is copied into the app).
 - A **controller** or a handheld with built-in controls. Touch controls are not available yet.
@@ -132,6 +159,11 @@ copy.
 3. Click **Install**.
 4. Start the game with `MML Launcher.exe` in the game folder, or with the optional desktop
    shortcut.
+
+Setup installs the patch in the US version, in Rockman DASH (the Japanese PC version), or in
+both. Each version keeps its own folder, launcher, settings and saves. A game folder inside
+`Program Files` is protected by Windows: copy the game to another folder, such as `C:\Games`,
+and pick that copy.
 
 The installer:
 
@@ -158,6 +190,10 @@ The installer:
 4. Select **US version**, press A, pick the game folder in Android's folder picker, and allow
    access.
 5. Wait for the copy to finish (a few minutes), then press **Play**.
+
+For Rockman DASH, copy its folder (the one with `ROCKMAN.EXE`) and import it with **Japanese
+version** in the same way. It is kept apart from the US version, with its own saves, and
+**Version to play** picks the one that **Play** starts.
 
 On the same page, **Subtitles** downloads the English subtitles for the cutscenes (press A), and
 **Voices** builds the Japanese voices from an imported **Japanese version** (about 260 MB). Once
@@ -313,6 +349,12 @@ want to keep them.
 - With the Legacy controller backend, the controller still reaches the game while the in-game
   menu is open.
 - Android: no touch controls, and no mouse and keyboard support yet.
+- The subtitles and the Japanese voices are experimental: they have not been checked through
+  the whole game yet.
+- With the Japanese voices, the subtitles (timed to the English voice acting) are not always
+  exactly in sync with the Japanese line being spoken.
+- Japanese voices: lines that only the Japanese version voices stay silent, and a long Japanese
+  line can be cut off where the game moves on after the English line's length.
 - Linux (Proton/Wine) and the Steam Deck have not been tested yet.
 
 ## Roadmap
