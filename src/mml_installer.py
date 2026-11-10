@@ -18,7 +18,7 @@ import sys
 import patch_manifest as M
 
 APP_NAME = "Mega Man Legends - Modernization Project"
-VERSION = "0.6.4-beta"
+VERSION = "0.6.5-beta"
 
 
 def _res_dir():
