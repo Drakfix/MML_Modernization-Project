@@ -56,7 +56,7 @@ def find_game_dir():
 
 GAME_DIR = find_game_dir()
 GAME_EXE = game_exe_in(GAME_DIR) or "MEGAMAN.EXE"
-JAPANESE = GAME_EXE == "ROCKMAN.EXE"   # Rockman DASH: the Classic engine only, for now
+JAPANESE = GAME_EXE == "ROCKMAN.EXE"   # Rockman DASH (both engines run it)
 # The US version's optional extras from Setup: English subtitles for the cutscenes (the Rockman
 # DASH PSP English project's, downloaded), with either voices; Japanese voices (built into SPJ
 # from the player's Rockman DASH copy)
@@ -409,10 +409,7 @@ def start_game(s):
     with open(log, "a", encoding="utf-8") as f:
         f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} v{VERSION} width {width} {json.dumps(s)}\n")
     exe = os.environ.get("MML_EXE", GAME_EXE)   # dev trees test other builds
-    if s.get("engine") == "standalone" and JAPANESE:
-        with open(log, "a", encoding="utf-8") as f:
-            f.write("the Standalone engine runs the US version only, starting the classic game\n")
-    elif s.get("engine") == "standalone":
+    if s.get("engine") == "standalone":
         if os.path.exists(os.path.join(GAME_DIR, RUNNER64)):
             exe = RUNNER64
         else:
@@ -781,8 +778,7 @@ class App:
         have_runner = bool(GAME_DIR) and os.path.exists(os.path.join(GAME_DIR, RUNNER64))
         option("Game engine", "engine",
                [("Classic", "classic"), ("Standalone (64-bit)", "standalone")],
-               "Standalone runs the US version only (Classic is used)" if JAPANESE
-               else "Standalone = recompiled, no original code" if have_runner else "Standalone is not installed")
+               "Standalone = recompiled, no original code" if have_runner else "Standalone is not installed")
 
         # ---- Graphics ----
         page[0] = self.pages["graphics"]
