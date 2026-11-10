@@ -302,6 +302,31 @@ public class MmlActivity extends SDLActivity {
         }
     }
 
+    /* ---- updates (Updater.java), polled by native code (updater.c) ---- */
+    public static String updateCurrent() {
+        return Updater.current(mSingleton);
+    }
+
+    public static void updateCheck() {
+        Updater.check(mSingleton);
+    }
+
+    public static void updateInstall() {
+        Updater.install(mSingleton);
+    }
+
+    public static long[] updateStatus() {
+        return new long[] { Updater.sState, Updater.sDone, Updater.sTotal };
+    }
+
+    public static String updateMessage() {
+        return Updater.sMessage;
+    }
+
+    public static String updateVersion() {
+        return Updater.sVersion;
+    }
+
     /* a file bundled in the app (assets: the intro) to dest; false if it isn't there */
     public static boolean extractAsset(String name, String dest) {
         File out = new File(dest), part = new File(dest + ".part");

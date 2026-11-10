@@ -412,9 +412,14 @@ def run_gui():
         pass
 
     us_found, jp_found = detect_game_folder("MEGAMAN.EXE"), detect_jp_folder()
+    # --dir FOLDER: the launcher's update starts this installer on the game folder it is in
+    given = sys.argv[sys.argv.index("--dir") + 1] if "--dir" in sys.argv[:-1] else ""
+    jp_given = game_exe(given) == "ROCKMAN.EXE"
+    if game_exe(given) and not jp_given:
+        us_found = given
     state = {"shortcut": tk.BooleanVar(value=True),
-             "us_on": tk.BooleanVar(value=bool(us_found) or not jp_found),
-             "jp_on": tk.BooleanVar(value=False),       # the patch in the Rockman DASH folder too
+             "us_on": tk.BooleanVar(value=not jp_given and (bool(us_found) or not jp_found)),
+             "jp_on": tk.BooleanVar(value=jp_given),    # the patch in the Rockman DASH folder too
              "voices": tk.BooleanVar(value=False),      # the Japanese voices for the US version
              "subs": tk.BooleanVar(value=True)}
 
@@ -496,7 +501,7 @@ def run_gui():
     voices_check.pack(anchor="w", pady=(6, 0))
 
     # the Japanese version: patched too, and/or the source of the Japanese voices
-    jp_var = tk.StringVar(value="")
+    jp_var = tk.StringVar(value=given if jp_given else "")
     jp_check = check(p1, "Rockman DASH (Japanese version)", state["jp_on"], lambda: validate(), bold=True)
     jp_check.pack(anchor="w", pady=(14, 0))
     jp_in = tk.Frame(p1, bg=BG)

@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 
+import mml_update
 import patch_manifest as M
 
 VERSION = "0.7.1-beta"
@@ -229,6 +230,7 @@ KEY_DEFAULTS = {"key_up": "W,UP", "key_down": "S,DOWN", "key_left": "A,LEFT", "k
                 "key_select": "M", "key_orbit": "F5"}
 DEFAULTS.update(KEY_DEFAULTS)
 DEFAULTS["buttons_view"] = "pad"
+DEFAULTS["updates"] = "on"   # look for a new version when the launcher opens (mml_update.py)
 # Tk key names -> mml.ini key names (anything else: letters, digits, F1-F12 as they are)
 TK_KEYS = {"space": "SPACE", "Tab": "TAB", "Return": "ENTER", "BackSpace": "BACKSPACE", "Caps_Lock": "CAPSLOCK",
            "Shift_L": "LSHIFT", "Shift_R": "RSHIFT", "Control_L": "LCTRL", "Control_R": "RCTRL",
@@ -702,7 +704,7 @@ class App:
         c.create_text(COL_X, sub_y, text="M O D E R N I Z A T I O N    P R O J E C T", anchor="nw",
                       font=(HEAD, 11, "bold italic"), fill=ACCENT)
         status_y = sub_y + ls_small + 12
-        col_y = status_y + 2 * ls_small + 26
+        col_y = status_y + 3 * ls_small + 24   # (three status lines: the game, the controller, updates)
         c.create_text(ART_X + 4, 30, anchor="nw", fill=DIM, font=("Segoe UI", 10),
                       text="1997 Capcom PC port · widescreen · modern controls · fixed audio")
 
@@ -710,6 +712,13 @@ class App:
         self.exe_item = c.create_text(COL_X, status_y, anchor="nw", font=("Segoe UI", 10), fill=DIM, text="…")
         self.pad_item = c.create_text(COL_X, status_y + ls_small + 2, anchor="nw", font=("Segoe UI", 10),
                                       fill=DIM, text="…")
+        # the update line: empty until a newer release is found (check_updates), then a button
+        self.upd_item = c.create_text(COL_X, status_y + 2 * (ls_small + 2), anchor="nw", font=("Segoe UI", 10),
+                                      fill=AMBER, text="")
+        self.upd_rel, self.updating = None, False
+        c.tag_bind(self.upd_item, "<Button-1>", lambda e: self.install_update())
+        c.tag_bind(self.upd_item, "<Enter>", lambda e: c.configure(cursor="hand2" if self.upd_rel else ""))
+        c.tag_bind(self.upd_item, "<Leave>", lambda e: c.configure(cursor=""))
 
         # options column (frame hosted on the canvas) on an in-game style panel: a tab bar
         # over four pages
@@ -779,6 +788,8 @@ class App:
         option("Game engine", "engine",
                [("Classic", "classic"), ("Standalone (64-bit)", "standalone")],
                "Standalone = recompiled, no original code" if have_runner else "Standalone is not installed")
+        option("Updates", "updates", [("Check when the launcher opens", "on"), ("Never", "off")],
+               "only asks GitHub for the newest version")
 
         # ---- Graphics ----
         page[0] = self.pages["graphics"]
@@ -1288,6 +1299,51 @@ class App:
             self.root.after(3000, self.update_pad)
         threading.Thread(target=poll, daemon=True).start()
 
+    def check_updates(self):
+        """Ask GitHub for a newer release (a thread of its own); if there is one, the update line says so.
+        Quiet when there is none or when GitHub can't be reached. MML_UPDATE_AS pretends to be that version."""
+        if self.settings.get("updates") == "off" or not (FROZEN or os.environ.get("MML_UPDATE_AS")):
+            return
+
+        def look():
+            try:
+                rel = mml_update.check(os.environ.get("MML_UPDATE_AS", VERSION))
+            except Exception:
+                return
+            if rel:
+                self.root.after(0, lambda: self.show_update(rel))
+        threading.Thread(target=look, daemon=True).start()
+
+    def show_update(self, rel):
+        self.upd_rel = rel
+        self.canvas.itemconfigure(self.upd_item, fill=AMBER,
+                                  text=f"●  Update {rel['version']} available - click to install")
+
+    def install_update(self):
+        """Download the new installer, then start it and close the launcher (it replaces this exe)."""
+        if not self.upd_rel or self.updating:
+            return
+        self.updating = True
+        c, rel = self.canvas, self.upd_rel
+        c.itemconfigure(self.upd_item, fill=ACCENT, text=f"●  Downloading {rel['version']}...")
+
+        def progress(done, total):
+            pct = f" {done * 100 // total}%" if total else ""
+            self.root.after(0, lambda: c.itemconfigure(self.upd_item, text=f"●  Downloading {rel['version']}...{pct}"))
+
+        def work():
+            try:
+                path = mml_update.download(rel, progress)
+                args = [path] + (["--dir", GAME_DIR] if GAME_DIR else [])
+                subprocess.Popen(args, cwd=os.path.dirname(path), env=clean_child_env())
+            except Exception as e:
+                self.updating = False
+                self.root.after(0, lambda: c.itemconfigure(
+                    self.upd_item, fill=RED, text=f"●  The update failed ({e}) - click to try again"))
+                return
+            self.root.after(0, self.root.destroy)
+        threading.Thread(target=work, daemon=True).start()
+
     def launch(self):
         if not GAME_DIR:
             return
@@ -1336,6 +1392,7 @@ def main():
         app = App(root)
     if app.fit_scaling:   # still a hair too tall: keep this one anyway
         app.refresh_status()
+    app.check_updates()
     shot = os.environ.get("MML_GUI_SHOT")
     if shot:
         def grab():

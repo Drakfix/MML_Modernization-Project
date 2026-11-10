@@ -43,6 +43,7 @@
 #include "toast.h"
 #include "texreplace.h"
 #include "ui_style.h"
+#include "updater.h"
 #include "voice_build.h"
 
 #define MAX_PRESETS 4096
@@ -58,6 +59,9 @@ enum {
     /* the US version's extras: the English subtitles (A downloads them), the Japanese voices (A
        builds them from the Japanese version); then on / off */
     IT_GF_SUBS, IT_GF_VOICES,
+    /* the start menu's updates (updater.h): check / install; the versions (keep these last: menu.c
+       tells them apart by being >= IT_UP_ACTION) */
+    IT_UP_ACTION, IT_UP_VERSION, IT_UP_LATEST,
 };
 
 /* an IT_CHOICE's choice: "section.key=value;section.key=value" written when chosen (a choice
@@ -112,8 +116,8 @@ static const item g_game_items[] = {
 };
 
 /* ---- the start menu's pages: everything the launcher has ---- */
-static const char *const START_PAGES[] = { "DISPLAY", "GRAPHICS", "CONTROLS", "BUTTONS", "FILES" };
-#define PAGE_FILES 4   /* (only where there is an importer) */
+static const char *const START_PAGES[] = { "DISPLAY", "GRAPHICS", "CONTROLS", "BUTTONS", "APP" };
+#define PAGE_FILES 4   /* the app's own page: the game files and the updates (only where there is an importer) */
 
 static const choice CH_RENDERER[] = { { "Direct3D 11", "video.renderer=mml;video.backend=d3d11" },
                                       { "Vulkan", "video.renderer=mml;video.backend=vulkan" },
@@ -133,6 +137,7 @@ static const choice CH_TILT[] = { { "Walks", "controls.walk_tilt=55" }, { "Runs"
 static const choice CH_ROLL[] = { { "Classic", "controls.roll_speed=512;controls.roll_anim=0" },
                                   { "Fast", "controls.roll_speed=768;controls.roll_anim=50" },
                                   { "Snappy", "controls.roll_speed=896;controls.roll_anim=80" } };
+static const choice CH_UPDATES[] = { { "On", "general.check_updates=1" }, { "Off", "general.check_updates=0" } };
 static const choice CH_ACTION[] = { { "Jump", "=jump" }, { "Shoot", "=shoot" }, { "Special", "=special" },
                                     { "Talk / check", "=talk" }, { "Roll", "=roll" }, { "Aim / lock-on", "=aim" },
                                     { "Modern on/off", "=orbit" }, { "Menu", "=menu" }, { "Select", "=select" },
@@ -204,6 +209,12 @@ static const item g_start_items[] = {
       "the English voice acting, transcribed and timed. A downloads them from there, then turns them on and off." },
     { PAGE_FILES, IT_GF_VOICES, "Voices", "US version: Japanese plays the Japanese voice acting. A builds it from "
       "your Japanese version (import it first; about 260 MB), then switches between English and Japanese." },
+    { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer version on GitHub, downloads it and asks Android to install it. "
+      "Android may ask you to allow installs from this app once, and to confirm.", NULL, 0, PL_OTHER },
+    { PAGE_FILES, IT_UP_VERSION, "Installed", "The version of this app.", NULL, 0, PL_OTHER },
+    { PAGE_FILES, IT_UP_LATEST, "Newest", "The newest version published on GitHub.", NULL, 0, PL_OTHER },
+    { PAGE_FILES, IT_CHOICE, "Check on start", "Looks for a new version when the app opens. Only the version is asked for, "
+      "nothing about you is sent.", CH_UPDATES, NCH(CH_UPDATES), PL_OTHER },
 };
 
 /* the tables in use: the in-game menu's, or the start menu's before the game */
@@ -236,7 +247,11 @@ static struct {
     int tk_kind, tk_state, subs_there, subs_on, voices_built, voices_jp;
     float tk_progress;
     char tk_line[200];
-    int scroll;                             /* the first row shown (long pages) */
+    /* the start menu's updates (updater.h) */
+    int up_state, up_started, up_manual;
+    float up_progress;
+    char up_line[200], up_ver[48];
+    int scroll;                            /* the first row shown (long pages) */
     int chv[MAX_ITEMS];                     /* IT_CHOICE values, by item */
     int pad_ui;                             /* button prompts for the pad (else the keyboard) */
     char ini[MAX_PATH], game_dir[MAX_PATH];
@@ -604,6 +619,20 @@ static void change_item(const item *it, int dir)
         }
         return;
     }
+    if (it->kind == IT_UP_VERSION || it->kind == IT_UP_LATEST)
+        return;
+    if (it->kind == IT_UP_ACTION) {
+        if (dir <= 0)
+            return;
+        if (M.up_state == UPD_AVAILABLE || M.up_state == UPD_READY) {
+            update_install_begin();
+        } else if (M.up_state != UPD_CHECKING && M.up_state != UPD_DOWNLOADING && M.up_state != UPD_INSTALLING) {
+            M.up_manual = 1;
+            update_check_begin();
+        }
+        M.up_started = 1;
+        return;
+    }
     if (it->kind != IT_CHOICE) {
         change(it->kind, dir);
         return;
@@ -676,6 +705,31 @@ static void value_text(int kind, char *out, size_t n)
         else
             strcpy_s(out, n, !M.voices_built ? "Not built" : M.voices_jp ? "Japanese" : "English");
         break;
+    case IT_UP_ACTION:
+        switch (M.up_state) {
+        case UPD_AVAILABLE: _snprintf_s(out, n, _TRUNCATE, "Install %s", M.up_ver); break;
+        case UPD_READY: strcpy_s(out, n, "Install"); break;
+        case UPD_UPTODATE: strcpy_s(out, n, "Check again"); break;
+        case UPD_FAILED: strcpy_s(out, n, "Try again"); break;
+        case UPD_CHECKING:
+        case UPD_DOWNLOADING:
+        case UPD_INSTALLING: strcpy_s(out, n, "Busy"); break;
+        default: strcpy_s(out, n, "Check now"); break;
+        }
+        break;
+    case IT_UP_VERSION: strcpy_s(out, n, update_current()); break;
+    case IT_UP_LATEST:
+        switch (M.up_state) {
+        case UPD_CHECKING: strcpy_s(out, n, "Checking"); break;
+        case UPD_UPTODATE: strcpy_s(out, n, "Up to date"); break;
+        case UPD_AVAILABLE:
+        case UPD_READY: strcpy_s(out, n, M.up_ver); break;
+        case UPD_DOWNLOADING: _snprintf_s(out, n, _TRUNCATE, "Downloading %d%%", (int)(M.up_progress * 100)); break;
+        case UPD_INSTALLING: strcpy_s(out, n, "Installing"); break;
+        case UPD_FAILED: strcpy_s(out, n, "Failed"); break;
+        default: strcpy_s(out, n, "Not checked"); break;
+        }
+        break;
     default: out[0] = 0; break;
     }
 }
@@ -713,6 +767,11 @@ static int gauge(int kind, int *total)
             return -1;
         *total = 10;
         return (int)(M.tk_progress * 10 + 0.5f);
+    case IT_UP_LATEST:
+        if (M.up_state != UPD_DOWNLOADING)
+            return -1;
+        *total = 10;
+        return (int)(M.up_progress * 10 + 0.5f);
     default: return -1;
     }
 }
@@ -1013,6 +1072,8 @@ static void draw(void *user, int w, int h)
                 gfx_ui_font_text(UI_FONT_DISPLAY, sx + (tw + slant - lw) / 2 - u * 0.06f, cy - lh / 2, PAGES[i],
                                  ui_col(COL_DIM), ui_col(COL_DIM), 0.42f);
             }
+            if (M.start && i == PAGE_FILES && (M.up_state == UPD_AVAILABLE || M.up_state == UPD_READY))   /* an update waits */
+                gfx_ui_circle(sx + tw - u * 0.3f, ty + u * 0.3f, u * 0.16f, ui_col(i == M.page ? COL_NAVY : COL_YELLOW));
         }
     }
 
@@ -1104,6 +1165,10 @@ static void draw(void *user, int w, int h)
             gfx_ui_tri(hx + s / 2, hy + u * 0.05f, hx + s, hy + s + u * 0.05f, hx, hy + s + u * 0.05f, ui_col(COL_WARN));
             ui_text(hx + s * 0.38f, hy + s * 0.18f, "!", COL_NAVY, 0.5f);
             wrapped(hx + s + u * 0.3f, hy, hw - s - u * 0.3f, M.note, COL_WARN, 0.72f);
+        } else if (M.start && M.page == PAGE_FILES && M.up_line[0] && !M.on_play && M.cursor >= 0 &&
+                   g_items[M.cursor].kind >= IT_UP_ACTION) {
+            /* (the update's progress or outcome, on its rows) */
+            wrapped(hx, hy, hw, M.up_line, M.up_state == UPD_FAILED ? COL_WARN : 0xFFB4C6D8, 0.72f);
         } else if (M.start && M.page == PAGE_FILES && M.gf_line[0] && !M.on_play &&
                    (gf_busy() || (M.cursor >= 0 && g_items[M.cursor].kind == (M.gf_jp ? IT_GF_JP : IT_GF_US)))) {
             /* (the import's progress or outcome, on its version's row) */
@@ -1305,6 +1370,18 @@ void menu_frame(void)
                 M.tk_state = st == TASK_DONE ? TASK_DONE : TASK_FAILED;
                 log_printf("menu: %s", M.tk_line);
             }
+        }
+        if (update_can() && M.up_started) {   /* the update goes on in its own thread */
+            char line[200], ver[48];
+            int st = update_poll(line, sizeof line, ver, sizeof ver, &M.up_progress);
+            strcpy_s(M.up_line, sizeof M.up_line, line);
+            strcpy_s(M.up_ver, sizeof M.up_ver, ver);
+            if (st != M.up_state) {
+                log_printf("menu: update %d -> %d (%s)", M.up_state, st, line);
+                if (st == UPD_AVAILABLE && M.up_state == UPD_CHECKING && !M.up_manual)
+                    note("A new version is out: see the APP page");
+            }
+            M.up_state = st;
         }
         if (M.block) {   /* (see above) */
             plat_take_back();
@@ -1596,6 +1673,10 @@ int menu_start(const char *ini, const char *game_dir)
             M.voices_built = voice_built(game_dir);
             GetPrivateProfileStringA("general", "voices", "english", p, sizeof p, ini);
             M.voices_jp = _stricmp(p, "japanese") == 0;
+        }
+        if (update_can() && GetPrivateProfileIntA("general", "check_updates", 1, ini)) {   /* (Check on start) */
+            M.up_started = 1;
+            update_check_begin();
         }
         set_page(gamefiles_can_import() && !M.gf_ready[M.edition] ? PAGE_FILES : 0);
         add_draw_once();

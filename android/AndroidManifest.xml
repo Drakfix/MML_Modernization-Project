@@ -11,8 +11,10 @@
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- the start menu's subtitle download (from the Rockman DASH PSP English project on GitHub) -->
+    <!-- the start menu's subtitle download (from the Rockman DASH PSP English project on GitHub) and the
+         updater (looks up the newest release on GitHub, downloads it, hands it to the system's installer) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
