@@ -36,8 +36,35 @@ def sha256(path):
     return h.hexdigest()
 
 
+class Edition:
+    """one release of the game the patch knows: its exe and the patch data for it"""
+    def __init__(self, exe, name, vanilla, patched, previous, size, patches, tail):
+        self.exe, self.name, self.vanilla, self.patched = exe, name, vanilla, patched
+        self.previous, self.size, self.patches, self.tail = previous, size, patches, tail
+
+
+def editions():
+    out = [Edition("MEGAMAN.EXE", "US", M.VANILLA_SHA256, M.PATCHED_SHA256, M.PREVIOUS_PATCHED_SHA256,
+                   M.EXE_SIZE, M.PATCHES, M.EXE_TAIL)]
+    if getattr(M, "JP_EXE", None):   # the Japanese version (Rockman DASH)
+        out.append(Edition(M.JP_EXE, "Japanese", M.JP_VANILLA_SHA256, M.JP_PATCHED_SHA256, [],
+                           M.JP_EXE_SIZE, M.JP_PATCHES, M.JP_EXE_TAIL))
+    return out
+
+
+GAME_EXES = ("MEGAMAN.EXE", "ROCKMAN.EXE")   # US, Japanese (Rockman DASH)
+
+
+def game_exe(path):
+    """the game's exe name in path (the US one first), or None"""
+    for exe in GAME_EXES:
+        if path and os.path.isfile(os.path.join(path, exe)):
+            return exe
+    return None
+
+
 def is_game_folder(path):
-    return bool(path) and os.path.isfile(os.path.join(path, "MEGAMAN.EXE"))
+    return game_exe(path) is not None
 
 
 def detect_game_folder():
@@ -95,38 +122,44 @@ def do_install(game_dir, add_desktop_shortcut, log):
     """Patch + install into game_dir. `log(msg, frac)` reports progress (frac 0..1).
     Returns (ok, message)."""
     res = _res_dir()
-    exe = os.path.join(game_dir, "MEGAMAN.EXE")
-    if not os.path.isfile(exe):
-        return False, "MEGAMAN.EXE was not found in that folder."
+    name = game_exe(game_dir)
+    if not name:
+        return False, "MEGAMAN.EXE (or ROCKMAN.EXE, the Japanese version) was not found in that folder."
+    ed = next((e for e in editions() if e.exe == name), None)
+    if ed is None:
+        return False, ("This is the Japanese version (ROCKMAN.EXE), which this build of the patch\n"
+                       "doesn't support. Nothing was changed.")
+    exe = os.path.join(game_dir, name)
 
     # 1. exe hash-check + backup + patch -----------------------------------------
     log("Checking your game version...", 0.05)
     digest = sha256(exe)
-    if digest == M.PATCHED_SHA256:
+    if digest == ed.patched:
         log("Game already patched - keeping it.", 0.30)
-    elif digest != M.VANILLA_SHA256 and digest not in M.PREVIOUS_PATCHED_SHA256:
-        return False, ("This MEGAMAN.EXE is a version the patch doesn't recognize, so nothing\n"
+    elif digest != ed.vanilla and digest not in ed.previous:
+        return False, (f"This {name} is a version the patch doesn't recognize, so nothing\n"
                        "was changed. Please report this to the project:\n  " + digest)
     else:
         # Vanilla, or patched by an earlier release: the current runs overwrite every
         # byte an earlier release touched, so both land on the same verified result.
-        vanilla = digest == M.VANILLA_SHA256
-        backup = os.path.join(game_dir, "MEGAMAN.EXE.vanilla-backup")
+        vanilla = digest == ed.vanilla
+        backup = os.path.join(game_dir, name + ".vanilla-backup")
         if vanilla and not os.path.exists(backup):
             shutil.copyfile(exe, backup)
         log("Backing up and patching the game..." if vanilla
             else "Upgrading the game patch from an earlier version...", 0.12)
         before = open(exe, "rb").read()
-        data = bytearray(before[:M.EXE_SIZE])
-        for off, hexbytes in M.PATCHES:
+        data = bytearray(before[:ed.size])
+        for off, hexbytes in ed.patches:
             blob = bytes.fromhex(hexbytes)
             data[off:off + len(blob)] = blob
-        data += bytes.fromhex(M.EXE_TAIL)
+        data += bytes.fromhex(ed.tail)
         open(exe, "wb").write(data)
-        if sha256(exe) != M.PATCHED_SHA256:
+        if sha256(exe) != ed.patched:
             open(exe, "wb").write(before)
             return False, "The patch did not verify - your game was put back the way it was."
-        log("Game patched and verified.", 0.30)
+        log("Game patched and verified." if ed.name == "US"
+            else f"Game patched and verified ({ed.name} version).", 0.30)
 
     # 2. quarantine foreign wrapper DLLs -----------------------------------------
     log("Checking for conflicting mods...", 0.40)
@@ -268,7 +301,7 @@ def run_gui():
              bg=BG, fg=TEXT, font=("Segoe UI", 11), justify="left").pack(anchor="w")
     tk.Label(p1, text="Nothing else needs to be installed. Your original files are backed up.",
              bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left").pack(anchor="w", pady=(4, 18))
-    tk.Label(p1, text="Your Mega Man Legends folder (the one with MEGAMAN.EXE):",
+    tk.Label(p1, text="Your Mega Man Legends folder (with MEGAMAN.EXE, or ROCKMAN.EXE for Rockman DASH):",
              bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w")
     rowf = tk.Frame(p1, bg=BG); rowf.pack(fill="x", pady=(6, 4))
     path_var = tk.StringVar(value=state["dir"])
@@ -282,17 +315,18 @@ def run_gui():
         d = path_var.get().strip('"').strip()
         state["dir"] = d
         if is_game_folder(d) and len(os.path.abspath(d)) > MAX_INTRO_DIR:
-            status.configure(text=f"✓  MEGAMAN.EXE found. Heads up: this folder path is long "
+            status.configure(text=f"✓  {game_exe(d)} found. Heads up: this folder path is long "
                                   f"({len(os.path.abspath(d))} characters). The game runs fine, but its "
                                   f"intro video can't play from folders longer than {MAX_INTRO_DIR} "
                                   f"characters. A shorter folder (like " + r"C:\Games\Mega Man Legends"
                                   + ") avoids that.", fg=AMBER)
             install_btn.configure(state="normal", bg=ACCENT_DK)
         elif is_game_folder(d):
-            status.configure(text="✓  MEGAMAN.EXE found - ready to install.", fg=GREEN)
+            status.configure(text=f"✓  {game_exe(d)} found - ready to install."
+                                  + (" (Japanese version)" if game_exe(d) == "ROCKMAN.EXE" else ""), fg=GREEN)
             install_btn.configure(state="normal", bg=ACCENT_DK)
         else:
-            status.configure(text="Pick the folder that contains MEGAMAN.EXE.", fg=RED if d else DIM)
+            status.configure(text="Pick the folder that contains MEGAMAN.EXE (or ROCKMAN.EXE).", fg=RED if d else DIM)
             install_btn.configure(state="disabled", bg=FIELD)
 
     def browse():

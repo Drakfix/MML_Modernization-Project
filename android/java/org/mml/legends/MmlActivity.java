@@ -94,7 +94,9 @@ public class MmlActivity extends SDLActivity {
      * The player picks the folder with the system's folder picker (only that folder is shared
      * with the app, no storage permission); what the game uses is copied into the app's own
      * storage on a thread of its own while native code polls importStatus. Files already there
-     * with the same size are kept, so an interrupted import carries on where it stopped. */
+     * with the same size are kept, so an interrupted import carries on where it stopped. The US
+     * version (MEGAMAN.EXE) goes into the game folder itself, the Japanese one (ROCKMAN.EXE) into
+     * a folder of its own in it (gamefiles.h), so both can be there. */
     static final int IMPORT_IDLE = 0, IMPORT_PICKING = 1, IMPORT_COPYING = 2, IMPORT_DONE = 3,
                      IMPORT_FAILED = 4, IMPORT_CANCELLED = 5;
     static final int REQ_PICK = 0x4D4D;
@@ -103,11 +105,14 @@ public class MmlActivity extends SDLActivity {
     static volatile long sDone, sTotal;
     static volatile String sMessage = "";
     static String sDest;
+    static boolean sJapanese;
 
-    public static void importGame(String dest) {
+    public static void importGame(String dest, boolean japanese) {
         sDest = dest;
+        sJapanese = japanese;
         sDone = sTotal = 0;
-        sMessage = "Pick your Mega Man Legends folder (the one with MEGAMAN.EXE)";
+        sMessage = japanese ? "Pick your Rockman DASH folder (with ROCKMAN.EXE)"
+                            : "Pick your Mega Man Legends folder (with MEGAMAN.EXE)";
         sState = IMPORT_PICKING;
         mSingleton.runOnUiThread(new Runnable() {
             public void run() {
@@ -190,29 +195,37 @@ public class MmlActivity extends SDLActivity {
         try {
             ContentResolver cr = mSingleton.getContentResolver();
             List<Entry> files = new ArrayList<>();
-            boolean exe = false, dat = false;
+            boolean dat = false, us = false, jp = false;
+            String exeName = sJapanese ? "ROCKMAN.EXE" : "MEGAMAN.EXE", cfgName = sJapanese ? "ROCKMAN.CFG" : "MEGAMAN.CFG";
             sMessage = "Looking through the folder";
             for (String[] ch : children(cr, tree, DocumentsContract.getTreeDocumentId(tree))) {
                 String up = ch[1].toUpperCase(Locale.ROOT);
                 boolean dir = DocumentsContract.Document.MIME_TYPE_DIR.equals(ch[2]);
                 if (dir) {
                     for (String d : DIRS)
-                        if (d.equals(up)) {
+                        if (d.equals(up) && !(sJapanese && d.equals("MODERNIZATION"))) {   /* (mods: shared) */
                             walk(cr, tree, ch[0], ch[1], files);
                             dat |= up.equals("DAT");
                         }
-                } else if (up.equals("MEGAMAN.EXE") || up.equals("MEGAMAN.CFG") || up.equals("CAPCOM.AVI") ||
-                           up.endsWith(".MCD") || up.endsWith(".MCD.QUICKSAVE")) {   /* (CAPCOM.AVI: the game checks it's there) */
-                    files.add(new Entry(ch[0], ch[1], Long.parseLong(ch[3])));
-                    exe |= up.equals("MEGAMAN.EXE");
+                } else {
+                    us |= up.equals("MEGAMAN.EXE");
+                    jp |= up.equals("ROCKMAN.EXE");
+                    if (up.equals(exeName) || up.equals(cfgName) || up.equals("CAPCOM.AVI") ||
+                        up.endsWith(".MCD") || up.endsWith(".MCD.QUICKSAVE"))   /* (CAPCOM.AVI: the game checks it's there) */
+                        files.add(new Entry(ch[0], ch[1], Long.parseLong(ch[3])));
                 }
             }
+            boolean exe = sJapanese ? jp : us;
             if (!exe || !dat) {
-                sMessage = "That folder has no " + (!exe ? "MEGAMAN.EXE" : "DAT folder") +
-                           ": pick the Mega Man Legends folder itself";
+                if (!exe && (sJapanese ? us : jp))
+                    sMessage = sJapanese ? "That's the US version (MEGAMAN.EXE): import it as the US version"
+                                         : "That's the Japanese version (ROCKMAN.EXE): import it as the Japanese version";
+                else
+                    sMessage = "That folder has no " + (!exe ? exeName : "DAT folder") + ": pick the game's own folder";
                 sState = IMPORT_FAILED;
                 return;
             }
+            new File(sDest).mkdirs();
             long total = 0;
             for (Entry e : files)
                 total += e.size;

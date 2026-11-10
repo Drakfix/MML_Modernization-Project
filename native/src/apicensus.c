@@ -19,11 +19,12 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "addr.h"
 #include "apicensus.h"
 #include "hook.h"
 #include "log.h"
 
-#define G_IAT_DIRECTDRAWCREATE 0x5083BCu
+#define G_IAT_DIRECTDRAWCREATE GA(0x5083BCu)
 
 enum { I_DD, I_DD4, I_D3D3, I_SURF4, I_DEV3, I_VP3, I_TEX2, I_PAL, I_CLIP, I_SURF1, I_MAT3, I_COUNT };
 static const char *const I_NAME[I_COUNT] = {
@@ -405,7 +406,7 @@ static HRESULT WINAPI w_direct_draw_create(GUID *g, LPDIRECTDRAW *out, IUnknown 
 void apicensus_install(void)
 {
     void *mine = (void *)w_direct_draw_create;
-    g_real_ddc = *(HRESULT(WINAPI **)(GUID *, LPDIRECTDRAW *, IUnknown *))G_IAT_DIRECTDRAWCREATE;
+    g_real_ddc = *(HRESULT(WINAPI **)(GUID *, LPDIRECTDRAW *, IUnknown *))(uintptr_t)G_IAT_DIRECTDRAWCREATE;
     mem_write(G_IAT_DIRECTDRAWCREATE, &mine, sizeof mine);
     g_on = 1;
     log_printf("apicensus: watching DirectDrawCreate");

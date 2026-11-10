@@ -168,13 +168,74 @@ BOOL CloseHandle(HANDLE hv)
 
 /* ---------------------------------------------------------------- paths */
 
-static char g_game_dir[MAX_PATH * 2] = ".";
+static char g_game_dir[MAX_PATH * 2] = ".", g_game_cwd[MAX_PATH * 2];
 
 void compat_set_game_dir(const char *dir)
 {
     snprintf(g_game_dir, sizeof g_game_dir, "%s", dir);
     if (chdir(dir) != 0)
         log_printf("compat: can't enter %s", dir);
+    if (!getcwd(g_game_cwd, sizeof g_game_cwd))   /* (the same folder as the system spells it) */
+        g_game_cwd[0] = 0;
+}
+
+/* The Japanese version where the player imports their own files (Android): its program, data and
+   saves sit in a folder of their own in the game folder, beside what both versions share (mml.ini,
+   Modernization, the log). While it plays, a path to one of its files in the game folder (or
+   relative to it, the current folder) goes into that folder. */
+static char g_edition_dir[64];
+
+void compat_set_edition_dir(const char *sub)
+{
+    snprintf(g_edition_dir, sizeof g_edition_dir, "%s", sub ? sub : "");
+}
+
+static int edition_file(const char *name, size_t len)
+{
+    static const char *const N[] = { "DAT", "BGM", "SPH", "CAPCOM.AVI", "ROCKMAN.EXE", "ROCKMAN_NATIVE.EXE",
+                                     "ROCKMAN.CFG" };
+    size_t i;
+    for (i = 0; i < sizeof N / sizeof N[0]; i++)
+        if (strlen(N[i]) == len && strncasecmp(name, N[i], len) == 0)
+            return 1;
+    return len >= 5 && strncasecmp(name, "DASH_", 5) == 0;   /* the saves (and quick-save notes) */
+}
+
+static size_t under(const char *p, const char *dir)
+{
+    size_t n = strlen(dir);
+    return n > 1 && strncmp(p, dir, n) == 0 && p[n] == '/' ? n + 1 : 0;
+}
+
+/* p, with '/' separators: in the edition's folder if it is one of its files */
+static void edition_path(char *p, size_t n)
+{
+    char tmp[MAX_PATH * 2];
+    const char *rel, *end;
+    size_t skip = 0;
+    if (!g_edition_dir[0])
+        return;
+    if (p[0] == '/' && !(skip = under(p, g_game_dir)) && !(skip = under(p, g_game_cwd)))
+        return;   /* (somewhere else) */
+    rel = p + skip;
+    while (rel[0] == '.' && rel[1] == '/')
+        rel += 2;
+    end = strchr(rel, '/');
+    if (!end && strcasecmp(rel, "ROCKMAN.CFG") == 0) {
+        /* The game's own settings, the controller's button bindings among them: the US version's
+           file where it is there, so both versions play with the same bindings (the menus' own
+           buttons are [controls] jp_buttons). Without it, the Japanese folder's own file. */
+        struct stat st;
+        snprintf(tmp, sizeof tmp, "%.*sMEGAMAN.CFG", (int)skip, p);
+        if (stat(tmp, &st) == 0) {
+            snprintf(p, n, "%s", tmp);
+            return;
+        }
+    }
+    if (!edition_file(rel, end ? (size_t)(end - rel) : strlen(rel)))
+        return;
+    snprintf(tmp, sizeof tmp, "%.*s%s/%s", (int)skip, p, g_edition_dir, rel);
+    snprintf(p, n, "%s", tmp);
 }
 
 DWORD GetModuleFileNameA(HMODULE m, LPSTR buf, DWORD n)
@@ -229,6 +290,7 @@ const char *compat_path(const char *win, char *out, size_t n)
             *p = '/';
     if (tmp[0] && tmp[1] == ':')   /* a drive letter: nothing like it here */
         memmove(tmp, tmp + 2, strlen(tmp + 2) + 1);
+    edition_path(tmp, sizeof tmp);
     if (stat(tmp, &st) == 0 || !tmp[0]) {   /* already right */
         snprintf(out, n, "%s", tmp);
         return out;
@@ -445,20 +507,23 @@ static int find_next(handle *h, LPWIN32_FIND_DATAA fd)
 
 HANDLE FindFirstFileA(LPCSTR pattern, LPWIN32_FIND_DATAA fd)
 {
-    char dir[MAX_PATH * 2], *slash;
+    char dir[MAX_PATH * 2], full[MAX_PATH * 2], *slash, *q;
     const char *mask;
     HANDLE hv;
     handle *h;
-    snprintf(dir, sizeof dir, "%s", pattern);
-    slash = strrchr(dir, '\\');
-    if (!slash || (strrchr(dir, '/') && strrchr(dir, '/') > slash))
-        slash = strrchr(dir, '/');
+    snprintf(full, sizeof full, "%s", pattern);
+    for (q = full; *q; q++)
+        if (*q == '\\')
+            *q = '/';
+    edition_path(full, sizeof full);   /* (DASH_*.MCD: the version's own saves) */
+    snprintf(dir, sizeof dir, "%s", full);
+    slash = strrchr(dir, '/');
     if (slash) {
         *slash = 0;
-        mask = pattern + (slash - dir) + 1;
+        mask = full + (slash - dir) + 1;
     } else {
         strcpy(dir, ".");
-        mask = pattern;
+        mask = full;
     }
     hv = h_new(H_FIND);
     if (!hv)

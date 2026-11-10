@@ -205,7 +205,7 @@ static double since_fire = 1e9;   /* 1/60 s since the fire button was last held 
  * they hold the pitch from Mega Man's chest to the point the camera looks at (AIM_DIST along the
  * view): the crosshair is drawn there too. The game's globals stay untouched (the camera and many
  * others read [0x77E964]). */
-#define G_FN_SHOT_PITCH   0x42A85Cu   /* cmp byte [0x77E958],0 / ... / mov eax,[0x77E964] at +0xC */
+#define G_FN_SHOT_PITCH   GA(0x42A85Cu)   /* cmp byte [0x77E958],0 / ... / mov eax,[0x77E964] at +0xC */
 #define G_AIMCAM_ON       0x77E958u
 #define G_AIMCAM_PITCH    0x77E964u
 #define G_CAM_PLACED      0x77E9E8u   /* s32 x, y, z: where cam_apply_angles put the camera */
@@ -465,6 +465,7 @@ static int face_toward(int x, int z)
  * camera calls it the same way (p3 0x5110B0, p4 0xFFFF). */
 #ifndef MML_RUNNER
 typedef uint32_t(__cdecl *world_collision_fn)(void *p1, void *p2, uint32_t p3, uint32_t p4);
+static uint32_t g_fn_world_collision;   /* G_FN_WORLD_COLLISION in the running program (controls_install) */
 static __declspec(naked) void world_collision_thunk(void)   /* called as world_collision_fn */
 {
     __asm {
@@ -476,7 +477,7 @@ static __declspec(naked) void world_collision_thunk(void)   /* called as world_c
         mov edx, [esp + 24]
         mov ebx, [esp + 28]
         mov ecx, [esp + 32]
-        mov esi, G_FN_WORLD_COLLISION
+        mov esi, g_fn_world_collision
         call esi
         pop ebp
         pop edi
@@ -1582,6 +1583,9 @@ float controls_crosshair(void)
 
 void controls_install(int modern, int intro_pad_skip)
 {
+#ifndef MML_RUNNER
+    g_fn_world_collision = G_FN_WORLD_COLLISION;
+#endif
     static const uint8_t cam_apply_bytes[] = { 0x56, 0x57, 0x55, 0x83, 0xEC, 0x1C };
     static const uint8_t cam_set_b_bytes[] = { 0x51, 0x56, 0x57, 0x83, 0xEC, 0x10 };
     static const uint8_t player_move_bytes[] = { 0x51, 0x56, 0x57, 0x55, 0x83, 0xEC, 0x04 };

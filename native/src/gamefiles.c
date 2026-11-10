@@ -145,7 +145,33 @@ static int exists(const char *dir, const char *name)
 
 int gamefiles_ready(const char *dir)
 {
-    return exists(dir, "MEGAMAN_NATIVE.EXE") && exists(dir, "DAT") && exists(dir, "BGM") && exists(dir, "SPH");
+    return (exists(dir, "MEGAMAN_NATIVE.EXE") || exists(dir, "ROCKMAN_NATIVE.EXE")) && exists(dir, "DAT") &&
+           exists(dir, "BGM") && exists(dir, "SPH");
+}
+
+void gamefiles_dir(const char *root, int jp, char *out, size_t n)
+{
+    if (jp && gamefiles_can_import())
+        _snprintf_s(out, n, _TRUNCATE, "%s\\%s", root, GAMEFILES_JP_DIR);
+    else
+        _snprintf_s(out, n, _TRUNCATE, "%s", root);
+}
+
+int gamefiles_edition(const char *root)
+{
+    char ini[MAX_PATH], v[32], jp[MAX_PATH];
+    int us_ok = gamefiles_ready(root), jp_ok;
+    if (!gamefiles_can_import())
+        return 0;
+    gamefiles_dir(root, 1, jp, sizeof jp);
+    jp_ok = gamefiles_ready(jp);
+    _snprintf_s(ini, sizeof ini, _TRUNCATE, "%s\\mml.ini", root);
+    GetPrivateProfileStringA("general", "edition", "", v, sizeof v, ini);
+    if (_stricmp(v, "japanese") == 0 && (jp_ok || !us_ok))
+        return 1;
+    if (_stricmp(v, "us") == 0 && (us_ok || !jp_ok))
+        return 0;
+    return !us_ok && jp_ok;   /* (not chosen yet: the one there is) */
 }
 
 int gamefiles_finish(const char *dir, char *msg, size_t n)
@@ -153,64 +179,69 @@ int gamefiles_finish(const char *dir, char *msg, size_t n)
 #ifdef MML_PATCH_DATA
     char path[MAX_PATH], hex[65];
     size_t len, i;
-    uint8_t *exe;
-    int known;
+    uint8_t *exe = NULL;
+    const pd_edition *ed = NULL;
+    int known, k;
     msg[0] = 0;
     if (!exists(dir, "DAT") || !exists(dir, "BGM") || !exists(dir, "SPH")) {
-        _snprintf_s(msg, n, _TRUNCATE, "The DAT, BGM or SPH folder is missing: pick the folder with MEGAMAN.EXE.");
+        _snprintf_s(msg, n, _TRUNCATE, "The DAT, BGM or SPH folder is missing: pick the game's own folder.");
         return 0;
     }
-    _snprintf_s(path, sizeof path, _TRUNCATE, "%s\\MEGAMAN.EXE", dir);
-    if (!(exe = read_all(path, &len))) {
-        _snprintf_s(msg, n, _TRUNCATE, "MEGAMAN.EXE wasn't found in that folder.");
+    for (k = 0; k < PD_NEDITIONS && !exe; k++) {   /* the US game, or the Japanese one (Rockman DASH) */
+        _snprintf_s(path, sizeof path, _TRUNCATE, "%s\\%s", dir, PD_EDITIONS[k].exe);
+        if ((exe = read_all(path, &len)) != NULL)
+            ed = &PD_EDITIONS[k];
+    }
+    if (!exe) {
+        _snprintf_s(msg, n, _TRUNCATE, PD_NEDITIONS > 1 ? "MEGAMAN.EXE (or ROCKMAN.EXE) wasn't found in that folder."
+                                                         : "MEGAMAN.EXE wasn't found in that folder.");
         return 0;
     }
     hash_of(exe, len, hex);
-    if (strcmp(hex, PD_PATCHED_SHA256) == 0) {
+    if (strcmp(hex, ed->patched) == 0) {
         known = 2;   /* patched already (our installer) */
     } else {
-        known = strcmp(hex, PD_VANILLA_SHA256) == 0;
-        for (i = 0; !known && i < sizeof PD_PREVIOUS / sizeof PD_PREVIOUS[0]; i++)
-            known = strcmp(hex, PD_PREVIOUS[i]) == 0;
+        known = strcmp(hex, ed->vanilla) == 0;
+        for (i = 0; !known && i < (size_t)ed->nprevious; i++)
+            known = strcmp(hex, ed->previous[i]) == 0;
     }
-    if (!known || len < PD_EXE_SIZE) {
-        _snprintf_s(msg, n, _TRUNCATE, "This MEGAMAN.EXE is a version the patch doesn't know (the original Windows PC "
-                    "release is the one supported).");
-        log_printf("gamefiles: unknown MEGAMAN.EXE (%u bytes, sha256 %s)", (unsigned)len, hex);
+    if (!known || len < ed->exe_size) {
+        _snprintf_s(msg, n, _TRUNCATE, "This %s is a version the patch doesn't know (the original Windows PC "
+                    "release is the one supported).", ed->exe);
+        log_printf("gamefiles: unknown %s (%u bytes, sha256 %s)", ed->exe, (unsigned)len, hex);
         free(exe);
         return 0;
     }
     if (known == 1) {   /* the runs over the original bytes, then the tail */
-        uint8_t *out = (uint8_t *)malloc(PD_PATCHED_SIZE);
+        uint8_t *out = (uint8_t *)malloc(ed->patched_size);
         if (!out) {
             free(exe);
             _snprintf_s(msg, n, _TRUNCATE, "Out of memory.");
             return 0;
         }
-        memcpy(out, exe, PD_EXE_SIZE);
-        for (i = 0; i < PD_NRUNS; i++)
-            memcpy(out + PD_RUNS[i].off, PD_BYTES + PD_RUNS[i].at, PD_RUNS[i].len);
-        memcpy(out + PD_EXE_SIZE, PD_TAIL, PD_PATCHED_SIZE - PD_EXE_SIZE);
+        memcpy(out, exe, ed->exe_size);
+        for (i = 0; i < (size_t)ed->nruns; i++)
+            memcpy(out + ed->runs[i].off, ed->bytes + ed->runs[i].at, ed->runs[i].len);
+        memcpy(out + ed->exe_size, ed->tail, ed->patched_size - ed->exe_size);
         free(exe);
         exe = out;
-        len = PD_PATCHED_SIZE;
+        len = ed->patched_size;
         hash_of(exe, len, hex);
-        if (strcmp(hex, PD_PATCHED_SHA256) != 0) {
+        if (strcmp(hex, ed->patched) != 0) {
             _snprintf_s(msg, n, _TRUNCATE, "The patch didn't give the expected result (see mml.log).");
             log_printf("gamefiles: patched exe hashes to %s", hex);
             free(exe);
             return 0;
         }
     }
-    _snprintf_s(path, sizeof path, _TRUNCATE, "%s\\MEGAMAN_NATIVE.EXE", dir);
+    _snprintf_s(path, sizeof path, _TRUNCATE, "%s\\%s", dir, ed->native);
     if (!write_all(path, exe, len)) {
-        _snprintf_s(msg, n, _TRUNCATE, "MEGAMAN_NATIVE.EXE couldn't be written (storage full?).");
+        _snprintf_s(msg, n, _TRUNCATE, "%s couldn't be written (storage full?).", ed->native);
         free(exe);
         return 0;
     }
     free(exe);
-    log_printf("gamefiles: MEGAMAN.EXE %s, MEGAMAN_NATIVE.EXE written", known == 2 ? "already patched" : "patched");
-    gamefiles_defaults(dir);
+    log_printf("gamefiles: %s %s, %s written", ed->exe, known == 2 ? "already patched" : "patched", ed->native);
     return 1;
 #else
     (void)dir;
@@ -219,22 +250,31 @@ int gamefiles_finish(const char *dir, char *msg, size_t n)
 #endif
 }
 
+/* CAPCOM.AVI next to a version's program: without one the game asks for its CD. Our intro plays
+   instead of it, so where a copy came without the file (a repack without videos) an empty one
+   stands in. */
+static void capcom_avi(const char *dir)
+{
+    char p[MAX_PATH];
+    if (!gamefiles_ready(dir) || exists(dir, "CAPCOM.AVI"))
+        return;
+    _snprintf_s(p, sizeof p, _TRUNCATE, "%s\\CAPCOM.AVI", dir);
+    if (write_all(p, (const uint8_t *)"", 0))
+        log_printf("gamefiles: no CAPCOM.AVI in %s: an empty one stands in (the game checks it's there)", dir);
+}
+
 void gamefiles_defaults(const char *dir)
 {
+    char jp[MAX_PATH];
     if (!exists(dir, "mml.ini") && gamefiles_bundled_file("mml.ini", dir))
         log_printf("gamefiles: the default mml.ini put in place");
-    if (!gamefiles_ready(dir))
+    gamefiles_dir(dir, 1, jp, sizeof jp);
+    if (!gamefiles_ready(dir) && !(gamefiles_can_import() && gamefiles_ready(jp)))
         return;
-    gamefiles_bundled_intro(dir);
-    /* The game won't start without CAPCOM.AVI next to it: without one it asks for its CD. Our intro
-       plays instead of it, so where a copy came without the file (a repack without videos) an
-       empty one stands in. */
-    if (!exists(dir, "CAPCOM.AVI")) {
-        char p[MAX_PATH];
-        _snprintf_s(p, sizeof p, _TRUNCATE, "%s\\CAPCOM.AVI", dir);
-        if (write_all(p, (const uint8_t *)"", 0))
-            log_printf("gamefiles: no CAPCOM.AVI: an empty one stands in (the game checks it's there)");
-    }
+    gamefiles_bundled_intro(dir);   /* (shared by both versions) */
+    capcom_avi(dir);
+    if (gamefiles_can_import())
+        capcom_avi(jp);
 }
 
 #ifndef __ANDROID__
@@ -251,9 +291,10 @@ int gamefiles_can_import(void)
     return 0;
 }
 
-void gamefiles_import_begin(const char *dir)
+void gamefiles_import_begin(const char *dir, int jp)
 {
     (void)dir;
+    (void)jp;
 }
 
 int gamefiles_import_poll(char *status, size_t n, float *progress)

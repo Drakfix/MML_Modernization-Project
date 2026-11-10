@@ -39,14 +39,18 @@ static FILE *file_of(uint32_t h)
 static void host_path(uint32_t guest, char *out, size_t n)
 {
     const char *p = (const char *)HPTR(guest);
+#ifdef _WIN32
     size_t k;
     for (k = 0; k + 1 < n && p[k]; k++)
-#ifdef _WIN32
         out[k] = p[k];
-#else
-        out[k] = p[k] == '\\' ? '/' : p[k];
-#endif
     out[k] = 0;
+#else
+    /* the path as the system has it: any letter case, and the version's own folder for its files
+       (compat_set_edition_dir) */
+    char tmp[MAX_PATH];
+    snprintf(tmp, sizeof tmp, "%s", compat_path(p, out, n));
+    snprintf(out, n, "%s", tmp);
+#endif
 }
 
 #ifdef _WIN32

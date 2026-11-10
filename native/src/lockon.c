@@ -34,11 +34,11 @@
 #include "mml.h"
 #include "recomp.h"
 
-#define G_SITE_TARGET_STORE  0x4E041Du   /* mov [0x5505E8],eax right after target_pick_nearest */
-#define G_FN_OBJ_FROM_ID     0x4E1877u   /* object* FUN_004E1877(EAX = id) */
+#define G_SITE_TARGET_STORE  GA(0x4E041Du)   /* mov [0x5505E8],eax right after target_pick_nearest */
+#define G_FN_OBJ_FROM_ID     GA(0x4E1877u)   /* object* FUN_004E1877(EAX = id) */
 #define G_VOLUMES            0x750DACu
 #define G_VOLUME_COUNT       0x77E94Cu
-#define G_PLAYER_SIDE_MASK   0x5505E2u
+#define G_PLAYER_SIDE_MASK   GA(0x5505E2u)
 #define G_CAM_POS            0x77E9E8u   /* s32 x, y, z: where cam_apply_angles put the camera */
 #define G_CAM_PITCH_ANGLE    0x77EA08u
 #define G_CAM_YAW_ANGLE      0x77EA0Au
@@ -62,6 +62,7 @@ static int16_t PS16(uint32_t o) { return GVAR(int16_t, G_PLAYER + o); }
 
 #ifndef MML_RUNNER
 typedef uint32_t(__cdecl *obj_from_id_fn)(uint32_t id);
+static uint32_t g_fn_obj_from_id;   /* G_FN_OBJ_FROM_ID in the running program (lockon_install) */
 static __declspec(naked) void obj_from_id_thunk(void)   /* called as obj_from_id_fn */
 {
     __asm {
@@ -72,7 +73,7 @@ static __declspec(naked) void obj_from_id_thunk(void)   /* called as obj_from_id
         push edi
         push ebp
         mov eax, [esp + 28]
-        mov esi, G_FN_OBJ_FROM_ID
+        mov esi, g_fn_obj_from_id
         call esi
         pop ebp
         pop edi
@@ -396,6 +397,9 @@ void lockon_test_reticle(int on)
 
 int lockon_install(void)
 {
+#ifndef MML_RUNNER
+    g_fn_obj_from_id = G_FN_OBJ_FROM_ID;
+#endif
     static const uint8_t store[] = { 0xA3, 0xE8, 0x05, 0x55, 0x00 };
     if (!hook_mid(G_SITE_TARGET_STORE, sizeof store, store, on_target_store)) {
         log_printf("lock-on: target hook failed");

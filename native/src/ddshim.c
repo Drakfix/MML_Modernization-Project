@@ -41,10 +41,10 @@
 #include "recomp.h"
 #include "shim.h"
 
-#define G_IAT_DIRECTDRAWCREATE    0x5083BCu
-#define G_IAT_DIRECTDRAWENUMERATE 0x5083C0u
-#define G_IAT_MCISENDSTRINGA      0x5083A4u
-#define G_CFG_FULLSCREEN          0x5303F8u   /* MEGAMAN.CFG line 1: 1 fullscreen, 0 windowed */
+#define G_IAT_DIRECTDRAWCREATE    GA(0x5083BCu)
+#define G_IAT_DIRECTDRAWENUMERATE GA(0x5083C0u)
+#define G_IAT_MCISENDSTRINGA      GA(0x5083A4u)
+#define G_CFG_FULLSCREEN          GA(0x5303F8u)   /* MEGAMAN.CFG line 1: 1 fullscreen, 0 windowed */
 
 /* ------------------------------------------------------------------ stubs */
 
@@ -1850,6 +1850,11 @@ static HRESULT WINAPI d_set_coop(void **i, HWND w, DWORD flags)
         dd->hwnd = w;
         g_game_hwnd = w;
         prepare_window(w);
+#ifdef _WIN32
+        if (addr_game == GAME_JP)   /* its title is Shift-JIS text, shown garbled outside Japanese
+                                       Windows: the same title in Unicode ("Rockman" in katakana) */
+            SetWindowTextW(w, L"\x30ED\x30C3\x30AF\x30DE\x30F3");
+#endif
     }
     return DD_OK;
 }

@@ -17,7 +17,10 @@ GAME = os.environ.get("MML_GAME_DIR")
 if not GAME:
     raise SystemExit("Set MML_GAME_DIR to your game folder (with MEGAMAN.EXE.orig).")
 PROJ_DIR = os.environ.get("MML_GHIDRA_DIR", os.path.join(GAME, "ghidra_decomp"))
-EXE = os.path.join(GAME, "MEGAMAN.EXE.orig")
+# MML_GHIDRA_EXE / MML_GHIDRA_PROGRAM: another program, e.g. the Japanese ROCKMAN.EXE (vanilla) in a
+# project of its own (MML_GHIDRA_DIR)
+EXE = os.environ.get("MML_GHIDRA_EXE", os.path.join(GAME, "MEGAMAN.EXE.orig"))
+NAME = os.environ.get("MML_GHIDRA_PROGRAM", "MEGAMAN.EXE")
 
 os.environ.setdefault("GHIDRA_INSTALL_DIR", r"C:\tools\ghidra_12.1.2_PUBLIC")
 t0 = time.time()
@@ -37,7 +40,7 @@ cspec = lang.getCompilerSpecByID(CompilerSpecID("watcom"))
 proj = GhidraProject.createProject(PROJ_DIR, "mml_pc", False)
 try:
     program = proj.importProgram(File(EXE), lang, cspec)
-    program.setName("MEGAMAN.EXE")
+    program.setName(NAME)
     print("imported in %.1fs, cspec=%s" % (time.time() - t0, program.getCompilerSpec().getCompilerSpecID()))
 
     from ghidra.program.util import GhidraProgramUtilities
@@ -52,7 +55,7 @@ try:
     finally:
         program.endTransaction(tx, True)
     print("analysed in %.1fs, functions=%d" % (time.time() - t0, program.getFunctionManager().getFunctionCount()))
-    proj.saveAs(program, "/", "MEGAMAN.EXE", True)
+    proj.saveAs(program, "/", NAME, True)
     print("saved")
 finally:
     proj.close()

@@ -115,9 +115,9 @@ static void on_h_set(regs_t *r)
  * texture coordinates belong, and walls next to the camera swam. Redo near
  * from the adjusted H right after each write. */
 #define G_GTE_NEAR    0x77EBC0u   /* float: near distance */
-#define G_NEAR_FACTOR 0x50A518u   /* float 0.03125 */
-#define G_SITE_NEAR_AFTER_SET     0x4EF0EDu   /* fild dword [0x77EBC4], right after fstp near */
-#define G_SITE_NEAR_AFTER_DEFAULT 0x4EF0A1u   /* mov ebx,0x3333, right after mov near,31.25 */
+#define G_NEAR_FACTOR GA(0x50A518u)   /* float 0.03125 */
+#define G_SITE_NEAR_AFTER_SET     GA(0x4EF0EDu)   /* fild dword [0x77EBC4], right after fstp near */
+#define G_SITE_NEAR_AFTER_DEFAULT GA(0x4EF0A1u)   /* mov ebx,0x3333, right after mov near,31.25 */
 
 static void on_near_written(regs_t *r)
 {
@@ -149,8 +149,8 @@ static void install_widescreen(void)
 
     /* All five sites must look right before we touch any of them. */
     for (i = 0; i < sizeof x_sites / sizeof x_sites[0]; i++) {
-        if (!mem_expect(x_sites[i] + 2, &vanilla, 4)) {
-            log_printf("widescreen: site %08X unexpected, skipped", (unsigned)x_sites[i]);
+        if (!mem_expect(GA(x_sites[i]) + 2, &vanilla, 4)) {
+            log_printf("widescreen: site %08X unexpected, skipped", (unsigned)GA(x_sites[i]));
             return;
         }
     }
@@ -172,7 +172,7 @@ static void install_widescreen(void)
             log_printf("widescreen: near-distance hooks failed, close model edges will be off");
     }
     for (i = 0; i < sizeof x_sites / sizeof x_sites[0]; i++)
-        mem_write(x_sites[i] + 2, &shadow, 4);
+        mem_write(GA(x_sites[i]) + 2, &shadow, 4);
     g_widescreen_on = 1;
     log_printf("widescreen: ON, %s (screen %dx%d, ratio %.4f, closer %.6f)",
                g_native_wide ? "native surface" : "anamorphic", sw, sh, g_ratio, g_closer);
@@ -196,8 +196,8 @@ static DWORD g_tick_base;
  * game's float frame-limiter threshold precise. */
 static LARGE_INTEGER g_qpc_base, g_qpc_freq;
 
-#define G_SPIN_RET 0x4A7132u   /* game_frame: do { t = GetTickCount(); } while (t < threshold); */
-#define G_DRAW_RET 0x4A7095u   /* game_frame: t = GetTickCount(); if (t < threshold) draw */
+#define G_SPIN_RET GA(0x4A7132u)   /* game_frame: do { t = GetTickCount(); } while (t < threshold); */
+#define G_DRAW_RET GA(0x4A7095u)   /* game_frame: t = GetTickCount(); if (t < threshold) draw */
 /* game_frame skips drawing whenever a logic step ends past the next deadline, with no limit: a
    game that stays behind (a slow machine, a heavy scene) never draws again and the image freezes
    while the game carries on. At most this many draws are skipped in a row; past that, the
@@ -401,6 +401,7 @@ static void on_frame(regs_t *r)
             GetClientRect(w, &rc);
         log_printf("frame hook alive: 300 frames, limiter threshold %.1f ms, gfx path flags %08X, fg client %ldx%ld",
                    GVAR(float, G_FRAME_LIMITER_TH), GVAR(unsigned, 0x88787Cu), rc.right, rc.bottom);
+        input_jp_buttons_check();
         {
             static const char *shims[] = { "apphelp.dll", "AcLayers.dll", "AcGenral.dll", "AcXtrnal.dll",
                                            "AcSpecfc.dll", "ddraw.dll", "dxgi.dll", "d3d9.dll" };
@@ -545,7 +546,7 @@ static void disable_dev_keys(void)
     size_t i;
     for (i = 0; i < sizeof keys / sizeof keys[0]; i++) {
         uint8_t cmp[3] = { 0x83, 0xFE, keys[i].vk }, off = 0xFF;   /* cmp esi, imm8 */
-        if (mem_expect(keys[i].at, cmp, 3) && mem_write(keys[i].at + 2, &off, 1))
+        if (mem_expect(GA(keys[i].at), cmp, 3) && mem_write(GA(keys[i].at) + 2, &off, 1))
             log_printf("devkeys: %s disabled", keys[i].name);
         else
             log_printf("devkeys: %s compare not found, left alone", keys[i].name);
@@ -611,6 +612,7 @@ void mml_init(void)
     log_open(g_game_dir);
     log_printf("mml.dll %s loaded into %s", MML_NATIVE_BUILD, g_game_dir);
 #endif
+    addr_detect();   /* US or Japanese program: every GA() after this translates for it */
 
     ini_string("video", "aspect", "16:9", aspect, sizeof aspect);
     g_closer = ini_float("video", "closer_factor", g_closer);
@@ -669,6 +671,8 @@ void mml_init(void)
             input_install();
         else
             log_printf("input: legacy controller path selected (DirectInput joystick via Xidi)");
+        ini_string("controls", "jp_buttons", "us", in, sizeof in);
+        input_jp_buttons(_stricmp(in, "japanese") != 0);
     }
     ambience_install(g_ini);   /* room ambience loops ([general] ambience_loop) */
     {

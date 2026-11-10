@@ -25,13 +25,13 @@
 #define G_GTE_ROT   0x77EAF8u  /* float[9] */
 #define G_GTE_TRANS 0x77EB1Cu  /* s32[3] */
 /* terrain emitters live here; their GTE matrix is the plain world -> camera one */
-#define TERRAIN_CODE_LO 0x433000u
-#define TERRAIN_CODE_HI 0x436000u
+#define TERRAIN_CODE_LO GA(0x433000u)
+#define TERRAIN_CODE_HI GA(0x436000u)
 
-#define SITE_RTPS     0x4EFE61u   /* after RTPS's divide; 4 pushes before it */
-#define SITE_RTPT_V0  0x4EFEDFu   /* after each of RTPT's divides; 2 pushes */
-#define SITE_RTPT_V1  0x4EFF3Du
-#define SITE_RTPT_V2  0x4EFF9Bu
+#define SITE_RTPS     GA(0x4EFE61u)   /* after RTPS's divide; 4 pushes before it */
+#define SITE_RTPT_V0  GA(0x4EFEDFu)   /* after each of RTPT's divides; 2 pushes */
+#define SITE_RTPT_V1  GA(0x4EFF3Du)
+#define SITE_RTPT_V2  GA(0x4EFF9Bu)
 
 static LARGE_INTEGER g_build_start, g_qpf;
 static double g_build_ms;

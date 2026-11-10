@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "addr.h"   /* GA(): fixed addresses of the US program, translated to the running one */
+
 #ifdef MML_RUNNER
 extern uintptr_t g_membase;   /* guest_mem.c */
 #define G_MEMBASE g_membase

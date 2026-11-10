@@ -29,21 +29,34 @@ FROZEN = getattr(sys, "frozen", False)
 BASE = os.path.dirname(os.path.abspath(sys.executable)) if FROZEN else HERE
 
 
+GAME_EXES = ("MEGAMAN.EXE", "ROCKMAN.EXE")   # US, Japanese (Rockman DASH)
+
+
+def game_exe_in(d):
+    """the game's exe name in folder d (the US one first), or None"""
+    for exe in GAME_EXES:
+        if d and os.path.exists(os.path.join(d, exe)):
+            return exe
+    return None
+
+
 def find_game_dir():
     env = os.environ.get("MML_GAME_DIR")
-    if env and os.path.exists(os.path.join(env, "MEGAMAN.EXE")):
+    if env and game_exe_in(env):
         return os.path.abspath(env)
     p = BASE
     for _ in range(4):
-        if os.path.exists(os.path.join(p, "MEGAMAN.EXE")):
+        if game_exe_in(p):
             return p
         p = os.path.dirname(p)
-    if os.path.exists(os.path.join(os.getcwd(), "MEGAMAN.EXE")):
+    if game_exe_in(os.getcwd()):
         return os.getcwd()
     return None
 
 
 GAME_DIR = find_game_dir()
+GAME_EXE = game_exe_in(GAME_DIR) or "MEGAMAN.EXE"
+JAPANESE = GAME_EXE == "ROCKMAN.EXE"   # Rockman DASH: the Classic engine only, for now
 SETTINGS = os.path.join(GAME_DIR or BASE, "Modernization", "settings.json")
 
 
@@ -175,7 +188,7 @@ LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
               "2560x1920": "app(4)", "3200x2400": "app(5)"}   # 0.1.x settings.json values
 RUNNER64 = "mml_run64.exe"   # the standalone game: recompiled, 64-bit, no original code
 DEFAULTS = {"renderer": "mml", "window": "fullscreen", "engine": "classic",
-            "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play",
+            "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play", "jp_buttons": "us",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
             "lod": "full", "fps": "60", "reticle": "FFD840", "aim": "character", "crosshair": "on",
             "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
@@ -380,8 +393,11 @@ def start_game(s):
     os.makedirs(os.path.dirname(log), exist_ok=True)
     with open(log, "a", encoding="utf-8") as f:
         f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} v{VERSION} width {width} {json.dumps(s)}\n")
-    exe = os.environ.get("MML_EXE", "MEGAMAN.EXE")   # dev trees test other builds
-    if s.get("engine") == "standalone":
+    exe = os.environ.get("MML_EXE", GAME_EXE)   # dev trees test other builds
+    if s.get("engine") == "standalone" and JAPANESE:
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("the Standalone engine runs the US version only, starting the classic game\n")
+    elif s.get("engine") == "standalone":
         if os.path.exists(os.path.join(GAME_DIR, RUNNER64)):
             exe = RUNNER64
         else:
@@ -496,6 +512,7 @@ def controls_ini(s):
     return {
         "mode": s["controls"],
         "input": s["input"],
+        "jp_buttons": "japanese" if s.get("jp_buttons") == "japanese" else "us",
         "orbit_start": 1 if s["orbit_start"] == "on" else 0,
         "camera_speed_x": speed,
         "camera_speed_y": speed,
@@ -735,7 +752,8 @@ class App:
         have_runner = bool(GAME_DIR) and os.path.exists(os.path.join(GAME_DIR, RUNNER64))
         option("Game engine", "engine",
                [("Classic", "classic"), ("Standalone (64-bit)", "standalone")],
-               "Standalone = recompiled, no original code" if have_runner else "Standalone is not installed")
+               "Standalone runs the US version only (Classic is used)" if JAPANESE
+               else "Standalone = recompiled, no original code" if have_runner else "Standalone is not installed")
 
         # ---- Graphics ----
         page[0] = self.pages["graphics"]
@@ -762,6 +780,9 @@ class App:
         r = pair()
         option("Modern controls at start", "orbit_start", [("Off", "off"), ("On", "on")], row=r, side="left")
         option("Controller", "input", [("Any (SDL)", "sdl"), ("Legacy", "legacy")], row=r, side="right")
+        if JAPANESE:
+            option("Menu buttons", "jp_buttons", [("US", "us"), ("Japanese", "japanese")],
+                   "US = Cross confirms, Triangle goes back; Japanese = Circle confirms, Cross goes back")
         option("Camera speed", "cam_speed",
                [("50%", "50"), ("75%", "75"), ("100%", "100"), ("125%", "125"), ("150%", "150"), ("200%", "200")])
         r = pair()
@@ -1215,8 +1236,14 @@ class App:
         if not GAME_DIR:
             c.itemconfigure(self.exe_item, text="●  Game not found - put this launcher in the game folder", fill=RED)
         else:
-            digest = sha256(os.path.join(GAME_DIR, "MEGAMAN.EXE"))
-            if digest == M.PATCHED_SHA256:
+            digest = sha256(os.path.join(GAME_DIR, GAME_EXE))
+            if JAPANESE and digest == getattr(M, "JP_PATCHED_SHA256", None):
+                c.itemconfigure(self.exe_item, text="●  Game: Modernized (Japanese version)  ✓", fill=GREEN)
+            elif JAPANESE and digest == getattr(M, "JP_VANILLA_SHA256", None):
+                c.itemconfigure(self.exe_item, text="●  Game: vanilla exe - run the installer first", fill=AMBER)
+            elif JAPANESE:
+                c.itemconfigure(self.exe_item, text="●  Game: unknown Japanese exe build - see README", fill=AMBER)
+            elif digest == M.PATCHED_SHA256:
                 c.itemconfigure(self.exe_item, text="●  Game: Modernized  ✓", fill=GREEN)
             elif digest in M.PREVIOUS_PATCHED_SHA256:
                 c.itemconfigure(self.exe_item, text="●  Game: older Modernization version - run the new installer", fill=AMBER)

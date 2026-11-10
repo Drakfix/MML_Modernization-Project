@@ -38,17 +38,17 @@ int gamefiles_can_import(void)
     return 1;
 }
 
-void gamefiles_import_begin(const char *dir)
+void gamefiles_import_begin(const char *dir, int jp)
 {
     JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
     jclass c = env ? activity_class(env) : NULL;
-    jmethodID m = c ? (*env)->GetStaticMethodID(env, c, "importGame", "(Ljava/lang/String;)V") : NULL;
+    jmethodID m = c ? (*env)->GetStaticMethodID(env, c, "importGame", "(Ljava/lang/String;Z)V") : NULL;
     char real[MAX_PATH];
     if (m) {
         jstring s = (*env)->NewStringUTF(env, compat_path(dir, real, sizeof real));
-        (*env)->CallStaticVoidMethod(env, c, m, s);
+        (*env)->CallStaticVoidMethod(env, c, m, s, jp ? JNI_TRUE : JNI_FALSE);
         (*env)->DeleteLocalRef(env, s);
-        log_printf("gamefiles: the folder picker");
+        log_printf("gamefiles: the folder picker (the %s version, into %s)", jp ? "Japanese" : "US", real);
     }
     clear_exception(env);
     if (c)

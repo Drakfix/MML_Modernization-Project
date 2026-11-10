@@ -47,17 +47,17 @@
 #define G_CELL_SVEC   0x5598F4u   /* 4 SVECTORs {x, y, z, pad} of the cell being emitted */
 #define G_CELL_W      0x559920u   /* s32[9]: SZ per grid slot of a subdivided cell */
 #define G_EMIT_HEADER 0x559944u   /* u32: packet header being emitted, top byte = opcode */
-#define G_CELL_TOPO   0x511744u   /* terrain_cell_topology: 4 quads then 4 triangles */
+#define G_CELL_TOPO   GA(0x511744u)   /* terrain_cell_topology: 4 quads then 4 triangles */
 #define VT_DRAW_PRIMITIVE 28
 
 /* hook sites: right after the depth writer returns */
-#define SITE_CELL_A   0x4349D5u   /* emitter 0x4346C6, packet in EDI */
-#define SITE_CELL_B   0x43506Fu   /* its twin 0x434D25, packet in EDI */
-#define SITE_SUB_QUAD 0x4356EEu   /* subdivided cell 0x43530E, quads, packet in EBP */
-#define SITE_SUB_TRI  0x43583Au   /* same, triangles */
+#define SITE_CELL_A   GA(0x4349D5u)   /* emitter 0x4346C6, packet in EDI */
+#define SITE_CELL_B   GA(0x43506Fu)   /* its twin 0x434D25, packet in EDI */
+#define SITE_SUB_QUAD GA(0x4356EEu)   /* subdivided cell 0x43530E, quads, packet in EBP */
+#define SITE_SUB_TRI  GA(0x43583Au)   /* same, triangles */
 
-#define SITE_QUAD_FALLBACK 0x4F0266u   /* mov [eax+8],1.0f in the quad depth writer */
-#define SITE_TRI_FALLBACK  0x4F0180u   /* same in the triangle writer */
+#define SITE_QUAD_FALLBACK GA(0x4F0266u)   /* mov [eax+8],1.0f in the quad depth writer */
+#define SITE_TRI_FALLBACK  GA(0x4F0180u)   /* same in the triangle writer */
 
 #define OP_TRI  0xA4
 #define OP_QUAD 0xAC

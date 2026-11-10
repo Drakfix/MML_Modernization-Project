@@ -30,7 +30,7 @@
 #include "log.h"
 #include "recomp.h"
 
-#define G_FN_NEAR_CLIP 0x4F04FBu   /* watcall: EAX SVECTOR* verts, EDX u8[2]* uvs, EBX out records,
+#define G_FN_NEAR_CLIP GA(0x4F04FBu)   /* watcall: EAX SVECTOR* verts, EDX u8[2]* uvs, EBX out records,
                                     * ECX unused here, [esp+4] count (3 or 4); ret 4; returns count out */
 #define G_GTE_ROT      0x77EAF8u   /* float[9] row-major */
 #define G_GTE_TRANS    0x77EB1Cu   /* s32[3] */

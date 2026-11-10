@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <string.h>
 
+#include "addr.h"
 #include "guest.h"
 #include "hook.h"
 #include "log.h"
@@ -26,9 +27,11 @@ static uint8_t *stub_alloc(size_t n)
 }
 #endif
 
+/* (the expected bytes are the US program's: addr_expect fits their call distances and
+   addresses to the Japanese one) */
 int mem_expect(uintptr_t addr, const void *bytes, size_t n)
 {
-    return memcmp(GUEST(addr), bytes, n) == 0;
+    return addr_expect((uint32_t)addr, (const uint8_t *)bytes, n);
 }
 
 static struct { uintptr_t addr; size_t n; char kind; } g_patches[1024];
@@ -144,7 +147,7 @@ static uint8_t *make_stub(uintptr_t site, size_t steal, const uint8_t *expect, h
 
 int hook_mid(uintptr_t site, size_t steal, const uint8_t *expect, hook_fn fn)
 {
-    uint8_t jmp[16];
+    uint8_t jmp[16], here[16];
     uint32_t target;
     size_t i;
 
@@ -156,6 +159,9 @@ int hook_mid(uintptr_t site, size_t steal, const uint8_t *expect, hook_fn fn)
         log_printf("hook %08X: unexpected bytes, not hooking", (unsigned)site);
         return 0;
     }
+    memcpy(here, GUEST(site), steal);   /* the stub replays what is there (the Japanese program's
+                                           call distances and addresses differ from expect's) */
+    expect = here;
 #ifdef MML_RUNNER
     /* no machine code runs: the recompiled game calls fn at the site itself (rt_hook), and the
        JMP only marks the site (to a stand-in address for fn, recomp.h) */

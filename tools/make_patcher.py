@@ -77,6 +77,32 @@ avi_sha = hashlib.sha256(open(CUSTOM_AVI, "rb").read()).hexdigest()
 
 table = ",\n".join(f'    (0x{off:X}, "{data.hex()}")' for off, data in runs)
 
+# The Japanese version (Rockman DASH, ROCKMAN.EXE): the same patches carried over to its program
+# by tools/jp/patch_jp_exe.py, from the maintainer's Japanese copy (MML_JP_GAME_DIR). Without it
+# the package installs on the US version only.
+JP_DIR = os.environ.get("MML_JP_GAME_DIR")
+jp_lines = ["JP_EXE = None   # (built without a Japanese copy: MML_JP_GAME_DIR)"]
+if JP_DIR and os.path.isfile(os.path.join(JP_DIR, "ROCKMAN.EXE")):
+    sys.path.insert(0, os.path.join(REPO, "tools", "jp"))
+    from patch_jp_exe import build as build_jp, runs as jp_runs   # noqa: E402
+    jp_exe = os.path.join(JP_DIR, "ROCKMAN.EXE")
+    jvan = open(jp_exe, "rb").read()
+    jpat, _ = build_jp(VANILLA, PATCHED, jp_exe)
+    jr = [(s, jpat[s:e]) for s, e in jp_runs(jvan, jpat)]
+    jp_table = ",\n".join(f'    (0x{off:X}, "{data.hex()}")' for off, data in jr)
+    jp_lines = [
+        'JP_EXE = "ROCKMAN.EXE"',
+        f'JP_VANILLA_SHA256 = "{hashlib.sha256(jvan).hexdigest()}"',
+        f'JP_PATCHED_SHA256 = "{hashlib.sha256(jpat).hexdigest()}"',
+        f"JP_EXE_SIZE = {len(jvan)}",
+        f"JP_PATCHES = [\n{jp_table}\n]",
+        f'JP_EXE_TAIL = "{jpat[len(jvan):].hex()}"',
+    ]
+    print(f"Japanese version: {len(jr)} patch runs for ROCKMAN.EXE")
+else:
+    print("WARNING: no MML_JP_GAME_DIR with ROCKMAN.EXE - the package supports the US version only")
+jp_block = "\n".join(jp_lines)
+
 # our stack's dll hashes (so the applier can tell OUR files from a repack's wrappers)
 our_dlls = {}
 for fn in ["ddraw.dll", "dinput.dll", "dsound.dll", "dsoal-aldrv.dll"]:
@@ -99,6 +125,8 @@ PATCHES = [
 ]
 # appended after the original file (new PE sections, e.g. the mml.dll import)
 EXE_TAIL = "{tail.hex()}"
+# the Japanese version (Rockman DASH): the same fields for ROCKMAN.EXE
+{jp_block}
 HOOK_DLL_NAMES = [
     "ddraw.dll", "dinput.dll", "dinput8.dll", "dsound.dll", "d3d8.dll", "d3d9.dll",
     "d3d11.dll", "dxgi.dll", "winmm.dll", "dciman32.dll", "dxwrapper.dll",

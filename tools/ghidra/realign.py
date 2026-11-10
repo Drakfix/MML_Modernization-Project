@@ -50,27 +50,39 @@ def refit(at):
         CreateFunctionCmd.fixupFunctionBody(program, f, monitor)
 
 
+# The Japanese program (Rockman DASH, its own project): the same three places, where its code moved
+# them (tools/jp/addr_map.py, the table mml.dll uses)
+if program.getName() == "ROCKMAN.EXE":
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(HERE, "..", "jp"))   # (HERE: tools/ghidra, from the server)
+    from addr_map import jp as U
+else:
+    def U(x):
+        return x
+
+
 # Balloon Fantasy: called from 0x4D5365 / 0x4D5587. A 6-byte table at 0x4D512F (copied by
 # the function itself) became function FUN_004d512f and swallowed the real entry 0x4D5135.
-clear(0x4D512F, 0x4D5137)
-listing.createData(A(0x4D512F), ArrayDataType(ByteDataType(), 6, 1))
-code(0x4D5135)
-if fm.getFunctionAt(A(0x4D5135)) is None:
-    CreateFunctionCmd(A(0x4D5135)).applyTo(program, monitor)
+clear(U(0x4D512F), U(0x4D5137))
+listing.createData(A(U(0x4D512F)), ArrayDataType(ByteDataType(), 6, 1))
+code(U(0x4D5135))
+if fm.getFunctionAt(A(U(0x4D5135))) is None:
+    CreateFunctionCmd(A(U(0x4D5135))).applyTo(program, monitor)
 
 # 0x497DB1 AND [0x55A66C],0x7F falls through to INC byte [ECX+5] (0x497DB8) and CALL 0x47EBCB
 # (0x497DBB, also a branch target); they were decoded from 0x497DBA, one byte into the INC.
-clear(0x497DB8, 0x497DD2)
-code(0x497DB8)
-refit(0x497DB1)
+clear(U(0x497DB8), U(0x497DD2))
+code(U(0x497DB8))
+refit(U(0x497DB1))
 
 # 0x4607B6 INC byte [EAX+9] falls through to JMP (0x4607B9); the switch case right after it
 # (0x4607BE, a jump table target from 0x460709) was never decoded: a data item at 0x4607BD
 # (a read reference from a mis-decoded operand) blocked both.
-clear(0x4607B9, 0x4607D4)
-code(0x4607B9)
-code(0x4607BE)
-refit(0x4607B6)
+clear(U(0x4607B9), U(0x4607D4))
+code(U(0x4607B9))
+code(U(0x4607BE))
+refit(U(0x4607B6))
 
 
 def check():

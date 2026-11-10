@@ -29,8 +29,8 @@
 #include "recomp.h"
 #include "toast.h"
 
-#define G_FN_SAVE_GATHER 0x42AE02u
-#define G_FN_SAVE_SEAL   0x42B162u
+#define G_FN_SAVE_GATHER GA(0x42AE02u)
+#define G_FN_SAVE_SEAL   GA(0x42B162u)
 #define G_SAVE_BLOCK     0x75164Cu
 #define G_SAVE_SIZE      0x1F00u
 #define G_SAVE_SLOT      0x55CD04u   /* byte: slot picked in the save menu, 0..9 */
@@ -39,7 +39,7 @@
  * copied from the area-name table 0x530085 by the save's area byte (+0x100).
  * Saves made away from the save points carry area 0, whose label is "No
  * data!", the same text an empty slot shows. */
-#define G_SLOT_LABEL(i)  (0x52E6C4u + 0x1Fu * (i))
+#define G_SLOT_LABEL(i)  (GA(0x52E6C4u) + 0x1Fu * (i))
 #define G_SLOT_HEADER(i) (0x55BDF0u + 0x180u * (i))   /* +0x109: 1 = the file couldn't be read */
 
 #define QUICK_SLOT 9                    /* the 10th slot: DASH_14.MCD */
@@ -150,8 +150,11 @@ static void label_slot(void)
 {
     static const uint8_t no_data[13] = { 0x22, 0x3D, 0x0A, 0x32, 0x2F, 0x42, 0x2F, 0x0D, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A };
     static const uint8_t quick[13] = { 0x25, 0x43, 0x37, 0x31, 0x39, 0x0A, 0x41, 0x2F, 0x44, 0x33, 0x0A, 0x0A, 0x0A };
-    uint8_t *label = (uint8_t *)GUEST(G_SLOT_LABEL(QUICK_SLOT));
+    uint8_t *label;
     const uint8_t *hdr = (const uint8_t *)GUEST(G_SLOT_HEADER(QUICK_SLOT));
+    if (addr_game != GAME_US)   /* (the Japanese labels are in its own characters: not mapped yet) */
+        return;
+    label = (uint8_t *)GUEST(G_SLOT_LABEL(QUICK_SLOT));
     if (hdr[0x109] == 0 && hdr[0x100] == 0 && memcmp(label, no_data, sizeof no_data) == 0)
         memcpy(label, quick, sizeof quick);
 }

@@ -38,6 +38,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "addr.h"
 #include "hook.h"
 #include "log.h"
 #include "lod.h"
@@ -59,11 +60,11 @@ static const struct { uintptr_t at; uint8_t rel; } g_terrain[] = {
     { 0x434653, 0x05 },   /* cmp edi,0xAF0  ; jle -> skip the +0x1C mesh */
 };
 
-#define G_NCLIP_TRUNC_CALL 0x4EFD6Bu   /* in gte_nclip: call 0x4F915C (round toward zero), then fistp */
-#define G_FPU_TRUNC        0x4F915Cu
+#define G_NCLIP_TRUNC_CALL GA(0x4EFD6Bu)   /* in gte_nclip: call 0x4F915C (round toward zero), then fistp */
+#define G_FPU_TRUNC        GA(0x4F915Cu)
 
 #ifndef MML_RUNNER
-static const uintptr_t g_fpu_trunc = G_FPU_TRUNC;
+static uintptr_t g_fpu_trunc;   /* G_FPU_TRUNC in the running program (lod_install) */
 
 /* st(0) = cross product in, rounded value out; preserves every register */
 static __declspec(naked) void nclip_round(void)
@@ -117,14 +118,14 @@ static int full_terrain(void)
     size_t i, n = sizeof g_terrain / sizeof g_terrain[0];
     for (i = 0; i < n; i++) {
         uint8_t expect[2] = { 0x7E, g_terrain[i].rel };
-        if (!mem_expect(g_terrain[i].at, expect, sizeof expect)) {
-            log_printf("lod: terrain site %08X unexpected, ground LODs left alone", (unsigned)g_terrain[i].at);
+        if (!mem_expect(GA(g_terrain[i].at), expect, sizeof expect)) {
+            log_printf("lod: terrain site %08X unexpected, ground LODs left alone", (unsigned)GA(g_terrain[i].at));
             return 0;
         }
     }
     for (i = 0; i < n; i++) {
         static const uint8_t jmp = 0xEB;
-        mem_write(g_terrain[i].at, &jmp, 1);
+        mem_write(GA(g_terrain[i].at), &jmp, 1);
     }
     log_printf("lod: always full-detail ground");
     return 1;
@@ -141,11 +142,11 @@ static int full_terrain(void)
 int lod_no_subdiv(void)
 {
     static const uint8_t expect[2] = { 0x7F, 0x34 }, jmp = 0xEB;
-    if (!mem_expect(0x434660, expect, sizeof expect)) {
+    if (!mem_expect(GA(0x434660u), expect, sizeof expect)) {
         log_printf("lod: near branch unexpected");
         return 0;
     }
-    mem_write(0x434660, &jmp, 1);
+    mem_write(GA(0x434660u), &jmp, 1);
     log_printf("lod: near ground cells not subdivided");
     return 1;
 }
@@ -175,19 +176,22 @@ static int keep_small_triangles(void)
 
 int lod_install(int small_tris)
 {
+#ifndef MML_RUNNER
+    g_fpu_trunc = G_FPU_TRUNC;
+#endif
     static const uint32_t never = 0x7FFFFFFF;
     size_t i, n = sizeof g_sites / sizeof g_sites[0];
 
     for (i = 0; i < n; i++) {
         uint8_t expect[6] = { 0x81, g_sites[i].modrm };
         memcpy(expect + 2, &g_sites[i].imm, 4);
-        if (!mem_expect(g_sites[i].at, expect, sizeof expect)) {
-            log_printf("lod: site %08X unexpected, model LODs left alone", (unsigned)g_sites[i].at);
+        if (!mem_expect(GA(g_sites[i].at), expect, sizeof expect)) {
+            log_printf("lod: site %08X unexpected, model LODs left alone", (unsigned)GA(g_sites[i].at));
             return 0;
         }
     }
     for (i = 0; i < n; i++)
-        mem_write(g_sites[i].at + 2, &never, 4);
+        mem_write(GA(g_sites[i].at) + 2, &never, 4);
     log_printf("lod: always full-detail models (%u thresholds raised)", (unsigned)n);
     full_terrain();
     if (small_tris)
@@ -209,15 +213,15 @@ void lod_set(int full, int near_whole)
         g_lod_ok = 1;
         for (i = 0; i < n && g_lod_ok; i++) {
             uint8_t a[2] = { 0x81, g_sites[i].modrm };
-            g_lod_ok = mem_expect(g_sites[i].at, a, 2);
+            g_lod_ok = mem_expect(GA(g_sites[i].at), a, 2);
         }
     }
     if (!g_lod_ok)
         return;
     for (i = 0; i < n; i++)
-        mem_write(g_sites[i].at + 2, full ? &never : &g_sites[i].imm, 4);
+        mem_write(GA(g_sites[i].at) + 2, full ? &never : &g_sites[i].imm, 4);
     for (i = 0; i < sizeof g_terrain / sizeof g_terrain[0]; i++)
-        mem_write(g_terrain[i].at, full ? &jmp : &jle, 1);
-    mem_write(0x434660, (full && near_whole) ? &jmp : &jg, 1);
+        mem_write(GA(g_terrain[i].at), full ? &jmp : &jle, 1);
+    mem_write(GA(0x434660u), (full && near_whole) ? &jmp : &jg, 1);
     log_printf("lod: %s", full ? "full detail" : "the game's own detail swaps");
 }

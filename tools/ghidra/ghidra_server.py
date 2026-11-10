@@ -93,7 +93,7 @@ from ghidra.program.model.listing import CodeUnit
 from ghidra.util.task import ConsoleTaskMonitor
 
 proj = GhidraProject.openProject(PROJ_DIR, "mml_pc", True)
-program = proj.openProgram("/", "MEGAMAN.EXE", False)
+program = proj.openProgram("/", os.environ.get("MML_GHIDRA_PROGRAM", "MEGAMAN.EXE"), False)   # (create_project.py)
 flat = FlatProgramAPI(program)
 monitor = ConsoleTaskMonitor()
 fm = program.getFunctionManager()
@@ -297,7 +297,7 @@ def c_symbols(path):
 def c_py(*code):
     buf = io.StringIO()
     env = {"program": program, "flat": flat, "fm": fm, "listing": listing, "st": st,
-           "addr": addr, "func_at": func_at, "monitor": monitor, "decomp": decomp}
+           "addr": addr, "func_at": func_at, "monitor": monitor, "decomp": decomp, "HERE": HERE}
     t = program.startTransaction("gq py")
     ok = False
     try:

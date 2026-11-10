@@ -8,10 +8,10 @@
 #include "log.h"
 #include "packets.h"
 
-#define G_SITE_WALK_DISPATCH  0x4F7923u   /* jmp [ecx*4 + 0x4F7624]; packet at [esp+0x64] */
-#define G_SITE_WALK_LINK      0x4F7ABCu   /* following a link node (bit 0 set) in [esp+0x64] */
-#define G_SITE_HUD_EMIT_LINK  0x4365DAu   /* hud_emit_sprite, right before it links EDX = packet into ctx+0x78 */
-#define G_SITE_DEFERRED_DRAW  0x4F7AE8u   /* call 0x4F44C7 for each deferred packet (EAX), after the walk */
+#define G_SITE_WALK_DISPATCH  GA(0x4F7923u)   /* jmp [ecx*4 + 0x4F7624]; packet at [esp+0x64] */
+#define G_SITE_WALK_LINK      GA(0x4F7ABCu)   /* following a link node (bit 0 set) in [esp+0x64] */
+#define G_SITE_HUD_EMIT_LINK  GA(0x4365DAu)   /* hud_emit_sprite, right before it links EDX = packet into ctx+0x78 */
+#define G_SITE_DEFERRED_DRAW  GA(0x4F7AE8u)   /* call 0x4F44C7 for each deferred packet (EAX), after the walk */
 #define WALK_PKT_SLOT         0x64
 #define RECENT                1024
 #define BUCKET_WORLD_DEFAULT  4

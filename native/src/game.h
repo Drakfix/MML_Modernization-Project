@@ -2,25 +2,27 @@
 /* Addresses in MEGAMAN.EXE (2001 PC CD build, no ASLR, image base 0x400000).
  * Names match RE-notes/ghidra/symbols.csv. */
 
-#define G_IAT_GETTICKCOUNT      0x508328u   /* import slot for kernel32!GetTickCount */
+#include "addr.h"
+
+#define G_IAT_GETTICKCOUNT      GA(0x508328u)   /* import slot for kernel32!GetTickCount */
 #define G_GTE_H_FLOAT           0x77EBDCu   /* float: projection plane distance */
 #define G_FRAME_LIMITER_TH      0x55BDB4u   /* float: next-frame threshold in ms */
 #define G_FRAME_PARITY          0x77EAC6u   /* u8: which of the two buffer sets a logic step builds into */
 #define G_DEFERRED_COUNT        0x88777Cu   /* packets queued at 0x77EBE4 to draw after the walk (shadows,
                                              * translucent planes); the walk draws them and resets this */
 #define G_FRAME_STEP            0x77EAC1u   /* byte: 2 = 30 fps */
-#define G_FRAME_MS              0x50A398u   /* double: 16.667 */
+#define G_FRAME_MS              GA(0x50A398u)   /* double: 16.667 */
 #define G_GFX_CUR_CTX           0x77EA74u   /* gfx_ctx*: +0x78 = HUD bucket */
-#define G_FONT_WIDTHS           0x52DFA0u   /* u8[]: glyph advance by font tile code */
-#define G_INTRO_PLAYING         0x551FA8u   /* byte: 1 while CAPCOM.AVI plays */
+#define G_FONT_WIDTHS           GA(0x52DFA0u)   /* u8[]: glyph advance by font tile code */
+#define G_INTRO_PLAYING         GA(0x551FA8u)   /* byte: 1 while CAPCOM.AVI plays */
 
 /* camera */
 #define G_CAM_PITCH             0x77EA08u   /* u16, 12-bit angle (4096 = 360 deg) */
 #define G_CAM_YAW               0x77EA0Au
 #define G_GAME_STATE            0x6DD9BCu   /* byte: game coroutine state (2 title, 4 title menu, 5 game); +1 sub-state */
 #define G_CAM_RIG               0x77E950u   /* camera rig: +4 active (1), +5 mode (0 follow), +6 scripted */
-#define G_FN_WORLD_COLLISION    0x42CE61u   /* world_line_collision: point vs level cells, 0 = free */
-#define G_CAM_COLLISION_PARAMS  0x5110B0u   /* p3 the follow camera passes to it */
+#define G_FN_WORLD_COLLISION    GA(0x42CE61u)   /* world_line_collision: point vs level cells, 0 = free */
+#define G_CAM_COLLISION_PARAMS  GA(0x5110B0u)   /* p3 the follow camera passes to it */
 #define G_CAM_RIG_YAW           0x77E960u   /* follow-cam azimuth = eased(facing + 0x800) */
 #define G_CAM_TARGET_X          0x77E998u   /* s32 16.16 */
 #define G_CAM_TARGET_Z          0x77E9A0u
@@ -53,29 +55,29 @@
 #define G_PLAYER_FACING         0x5F83B8u   /* 16.16 angle; 12-bit integer part in the high word */
 
 /* hook sites */
-#define G_SITE_H_DEFAULT        0x4EF097u   /* in gte_set_h_default, right after H = 1000.0 */
-#define G_SITE_H_SET            0x4EF0E1u   /* in gte_set_h, right after fst H */
-#define G_SITE_WALKER_CALL      0x4A70E5u   /* game_frame: call gfx_walk_display_list (once per frame) */
-#define G_SITE_INTRO_CALL       0x4A6F7Eu   /* call intro_play_avi */
-#define G_FN_CAM_APPLY          0x42961Bu   /* cam_apply_angles: EAX pos*, EDX dist, EBX yaw, ECX -pitch */
-#define G_RET_CAM_COMMON_BLEND  0x42A2BBu   /* return addresses of camera_apply_common's two cam_apply_angles */
-#define G_RET_CAM_COMMON        0x42A2E0u   /* calls (the gameplay camera; other callers: cam_follow_* etc.) */
-#define G_FN_CAM_SET_B          0x4298F6u   /* cam_set_angles_b: yaw in EDX */
-#define G_FN_PLAYER_MOVE        0x4B53D3u   /* runs each frame while the player has control */
-#define G_FN_PLAYER_UPDATE      0x4A9A31u   /* player_update(EAX = object): pre + state handlers */
-#define G_FN_PLAYER_APPLY_VEL   0x4B527Bu   /* player_apply_velocity(EAX p, DX fwd, BX vert, CX side) along facing - +0x116 */
+#define G_SITE_H_DEFAULT        GA(0x4EF097u)   /* in gte_set_h_default, right after H = 1000.0 */
+#define G_SITE_H_SET            GA(0x4EF0E1u)   /* in gte_set_h, right after fst H */
+#define G_SITE_WALKER_CALL      GA(0x4A70E5u)   /* game_frame: call gfx_walk_display_list (once per frame) */
+#define G_SITE_INTRO_CALL       GA(0x4A6F7Eu)   /* call intro_play_avi */
+#define G_FN_CAM_APPLY          GA(0x42961Bu)   /* cam_apply_angles: EAX pos*, EDX dist, EBX yaw, ECX -pitch */
+#define G_RET_CAM_COMMON_BLEND  GA(0x42A2BBu)   /* return addresses of camera_apply_common's two cam_apply_angles */
+#define G_RET_CAM_COMMON        GA(0x42A2E0u)   /* calls (the gameplay camera; other callers: cam_follow_* etc.) */
+#define G_FN_CAM_SET_B          GA(0x4298F6u)   /* cam_set_angles_b: yaw in EDX */
+#define G_FN_PLAYER_MOVE        GA(0x4B53D3u)   /* runs each frame while the player has control */
+#define G_FN_PLAYER_UPDATE      GA(0x4A9A31u)   /* player_update(EAX = object): pre + state handlers */
+#define G_FN_PLAYER_APPLY_VEL   GA(0x4B527Bu)   /* player_apply_velocity(EAX p, DX fwd, BX vert, CX side) along facing - +0x116 */
 #define G_SUPPORT_OBJ           0x5F8A58u   /* second player-like object (input from 0x572D32) */
-#define G_TARGET                0x5505E8u   /* object*: nearest enemy, picked every frame (target_and_hits_update 0x4E0405) */
+#define G_TARGET                GA(0x5505E8u)   /* object*: nearest enemy, picked every frame (target_and_hits_update 0x4E0405) */
 #define G_TARGET_FLAGS          0x559A40u   /* bit 1: targeting allowed (state 14 checks it) */
-#define G_FN_PAD_POLL           0x4F8E15u   /* pad_poll: joystick half, then keyboard half */
-#define G_SITE_JOY_GATE         0x4F8E26u   /* pad_poll: cmp dword [G_JOY_DEVICE],0 */
-#define G_SITE_PAD_POLL_KB      0x4F8F22u   /* pad_poll: start of the keyboard half */
-#define G_JOY_DEVICE            0x551F40u   /* IDirectInputDevice* joystick (Xidi) or NULL */
+#define G_FN_PAD_POLL           GA(0x4F8E15u)   /* pad_poll: joystick half, then keyboard half */
+#define G_SITE_JOY_GATE         GA(0x4F8E26u)   /* pad_poll: cmp dword [G_JOY_DEVICE],0 */
+#define G_SITE_PAD_POLL_KB      GA(0x4F8F22u)   /* pad_poll: start of the keyboard half */
+#define G_JOY_DEVICE            GA(0x551F40u)   /* IDirectInputDevice* joystick (Xidi) or NULL */
 #define G_PAD_HELD              0x5708DAu   /* u16 pad held buttons (active high), copied to player +0x11C */
 #define G_PAD_BUF_PTR           0x887A48u   /* -> pad state 0x5708B4: status, type, u16 buttons (active low) */
-#define G_PAD_MASKS             0x551F84u   /* u16[14]: game button index -> PS1 bit (Up Down Left Right Tri X Sq O L1 L2 R1 R2 Start Select) */
+#define G_PAD_MASKS             GA(0x551F84u)   /* u16[14]: game button index -> PS1 bit (Up Down Left Right Tri X Sq O L1 L2 R1 R2 Start Select) */
 #define G_JOY_BINDINGS          0x887A34u   /* {dinput button, game button}[9] */
 #define G_JOY_BINDING_COUNT     9
 #define G_KB_BINDINGS           0x887A0Cu   /* {scancode, game button}[20], scancode 0 ends the list */
-#define G_SITE_AFTER_POLL       0x4A694Fu   /* FUN_004A694A: mov eax,0x5708B4 right after the pad_poll call */
-#define G_SITE_PLAYER_TURN_RET  0x4B55B6u   /* player_turn epilogue: mov eax,ecx; pop edi; pop esi; ret */
+#define G_SITE_AFTER_POLL       GA(0x4A694Fu)   /* FUN_004A694A: mov eax,0x5708B4 right after the pad_poll call */
+#define G_SITE_PLAYER_TURN_RET  GA(0x4B55B6u)   /* player_turn epilogue: mov eax,ecx; pop edi; pop esi; ret */

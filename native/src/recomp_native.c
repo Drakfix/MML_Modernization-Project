@@ -54,7 +54,7 @@ static uint32_t t_ds, t_es;    /* as the machine code had them (ES is 0 until th
 static uint8_t *g_exec;   /* stubs and trampolines */
 static size_t g_exec_used;
 static struct {
-    int info;              /* index into g_recomp_funcs */
+    int info;              /* index into g_rfuncs */
     uint32_t tramp;        /* original entry (stolen bytes + jump back) */
     rfunc fn;              /* what runs instead (the recompiled function, or a runtime replacement) */
 } g_roots[MAX_ROOTS];
@@ -207,7 +207,7 @@ static void cen_describe(uint32_t a, char *out, size_t n)
     GetModuleFileNameA(m, path, sizeof path);
     name = strrchr(path, '\\') ? strrchr(path, '\\') + 1 : path;
     if (a >= g_exe_lo && a < g_exe_hi && (fi = find_func_slow(a)) >= 0) {
-        _snprintf_s(out, n, _TRUNCATE, "%s:%s+%X", name, g_recomp_funcs[fi].name, a - g_recomp_funcs[fi].addr);
+        _snprintf_s(out, n, _TRUNCATE, "%s:%s+%X", name, g_rfuncs[fi].name, a - g_rfuncs[fi].addr);
         return;
     }
     if (a >= g_mml_lo && a < g_mml_hi) {   /* our own: the map file names it (census_report.py) */
@@ -341,7 +341,7 @@ int native_root(RCtx *c, uint32_t *target)
     int r = stub_root(*target);
     if (r < 0)
         return 0;
-    g_rt_bypass = g_recomp_funcs[g_roots[r].info].addr;
+    g_rt_bypass = g_rfuncs[g_roots[r].info].addr;
     *target = g_roots[r].fn(c);
     g_rt_bypass = 0;
     return 1;
@@ -579,7 +579,7 @@ void rt_call_native(RCtx *c, uint32_t target)
                 memcpy(&id, b + 1, 4);
                 if (id < (uint32_t)g_nroots)
                     log_printf("recomp:   root %u: %s (%08X), trampoline %08X", id,
-                               g_recomp_funcs[g_roots[id].info].name, g_recomp_funcs[g_roots[id].info].addr,
+                               g_rfuncs[g_roots[id].info].name, g_rfuncs[g_roots[id].info].addr,
                                (uint32_t)g_roots[id].tramp);
             }
         }
@@ -698,7 +698,7 @@ static void ctx_regs(const RCtx *c, uint32_t r[8])
 static void __cdecl on_enter(void)
 {
     int root = (int)t_id, fi = g_roots[root].info;
-    const RFuncInfo *info = &g_recomp_funcs[fi];
+    const RFuncInfo *info = &g_rfuncs[fi];
     t_new_esp = t_esp;
     t_target = g_roots[root].tramp;
     if (g_mode == MODE_REPLACE) {
@@ -748,7 +748,7 @@ static void __cdecl on_enter(void)
 static void __cdecl on_post(void)
 {
     static const char *names[8] = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" };
-    const RFuncInfo *info = &g_recomp_funcs[g_roots[g_pending_root].info];
+    const RFuncInfo *info = &g_rfuncs[g_roots[g_pending_root].info];
     uint32_t got[8];
     int i, bad = 0;
     char msg[512];
@@ -931,7 +931,7 @@ static int is_root(uint32_t addr)
 {
     int r;
     for (r = 0; r < g_nroots; r++)
-        if (g_recomp_funcs[g_roots[r].info].addr == addr)
+        if (g_rfuncs[g_roots[r].info].addr == addr)
             return 1;
     return 0;
 }
@@ -951,7 +951,7 @@ static int install_root_fn(uint32_t addr, rfunc fn)
         log_printf("recomp: %08X isn't in the generated code", addr);
         return 0;
     }
-    info = &g_recomp_funcs[fi];
+    info = &g_rfuncs[fi];
     if (info->steal < 5 || !mem_expect(addr, info->entry_bytes, info->steal)) {
         log_printf("recomp: can't hook %s (%08X)", info->name, addr);
         return 0;
@@ -998,7 +998,7 @@ static int install_root_bytes(uint32_t addr, rfunc fn, int fi, unsigned steal, c
     *(int32_t *)(tramp + info->steal + 1) = (int32_t)((addr + info->steal) - ((uintptr_t)tramp + info->steal + 5));
     g_roots[r].info = fi;
     g_roots[r].tramp = (uint32_t)(uintptr_t)tramp;
-    g_roots[r].fn = fn ? fn : g_recomp_funcs[fi].fn;
+    g_roots[r].fn = fn ? fn : g_rfuncs[fi].fn;
     memset(patch, 0x90, sizeof patch);
     patch[0] = 0xE9;
     *(int32_t *)(patch + 1) = (int32_t)((uintptr_t)stub - (addr + 5));
@@ -1006,7 +1006,7 @@ static int install_root_bytes(uint32_t addr, rfunc fn, int fi, unsigned steal, c
         return 0;
     g_nroots++;
     if (g_mode == MODE_DIFF)
-        log_printf("recomp: %s (%08X) checked against the original", g_recomp_funcs[fi].name, addr);
+        log_printf("recomp: %s (%08X) checked against the original", g_rfuncs[fi].name, addr);
     return 1;
 }
 
@@ -1023,25 +1023,25 @@ static void mark_modded(void)
 {
     size_t k;
     int i, j, changed = 1, n = 0;
-    g_modded = (uint8_t *)calloc((size_t)g_recomp_nfuncs, 1);
+    g_modded = (uint8_t *)calloc((size_t)g_rnfuncs, 1);
     if (!g_modded)
         return;
     for (k = 0; k < mem_patch_count(); k++) {
         uintptr_t a;
         size_t len;
         mem_patch_get(k, &a, &len);
-        for (i = 0; i < g_recomp_nfuncs; i++)
-            if (a < g_recomp_funcs[i].hi && a + len > g_recomp_funcs[i].lo)
+        for (i = 0; i < g_rnfuncs; i++)
+            if (a < g_rfuncs[i].hi && a + len > g_rfuncs[i].lo)
                 g_modded[i] = 1;
     }
     while (changed) {
         changed = 0;
-        for (i = 0; i < g_recomp_nfuncs; i++)
-            for (j = 0; !g_modded[i] && j < g_recomp_funcs[i].ncallees; j++)
-                if (g_modded[g_recomp_funcs[i].callees[j]])
+        for (i = 0; i < g_rnfuncs; i++)
+            for (j = 0; !g_modded[i] && j < g_rfuncs[i].ncallees; j++)
+                if (g_modded[g_rfuncs[i].callees[j]])
                     g_modded[i] = 1, changed = 1;
     }
-    for (i = 0; i < g_recomp_nfuncs; i++)
+    for (i = 0; i < g_rnfuncs; i++)
         n += g_modded[i];
     log_printf("recomp: %d functions reach code patched by mml.dll (%u patches)", n, (unsigned)mem_patch_count());
     {   /* the list, for the translator (Modernization\recomp_patches.txt: address, length, new bytes) */
@@ -1095,13 +1095,13 @@ void native_install(const char *ini)
         if (GetPrivateProfileIntA("debug", "recomp_entry", 1, ini))
             install_start();
     }
-    if (g_mode == MODE_REPLACE && g_modded && g_recomp_patch_aware) {
-        memset(g_modded, 0, (size_t)g_recomp_nfuncs);   /* the recompiled code applies our patches itself */
+    if (g_mode == MODE_REPLACE && g_modded && g_rpatch_aware) {
+        memset(g_modded, 0, (size_t)g_rnfuncs);   /* the recompiled code applies our patches itself */
         log_printf("recomp: the generated code applies mml.dll's hooks and patches itself");
     }
     if (g_mode == MODE_REPLACE && g_modded) {
         int i;
-        for (i = 0; i < g_recomp_nfuncs; i++)
+        for (i = 0; i < g_rnfuncs; i++)
             g_rc_native[i] = g_modded[i];
     }
     {   /* [debug] recomp_native=lo-hi,...: these run as machine code (for bisecting a bad translation) */
@@ -1110,12 +1110,12 @@ void native_install(const char *ini)
         GetPrivateProfileStringA("debug", "recomp_native", "", ranges, sizeof ranges, ini);
         for (q = strtok_s(ranges, ", ", &nx); q; q = strtok_s(NULL, ", ", &nx)) {
             uint32_t lo = (uint32_t)strtoul(q, &q, 16), hi = *q == '-' ? (uint32_t)strtoul(q + 1, NULL, 16) : lo;
-            for (i = 0; i < g_recomp_nfuncs; i++)
+            for (i = 0; i < g_rnfuncs; i++)
                 /* by the containing function's start: its extra entry points (jump targets inside it)
                    go with it, or recompiled code would jump into machine code mid-function. Code
                    that is only jumped to (shared tails) stays recompiled for the same reason. */
-                if (g_recomp_funcs[i].lo >= lo && g_recomp_funcs[i].lo <= hi && !g_rc_native[i] &&
-                    find_func(g_recomp_funcs[i].lo) >= 0 && g_recomp_funcs[find_func(g_recomp_funcs[i].lo)].steal) {
+                if (g_rfuncs[i].lo >= lo && g_rfuncs[i].lo <= hi && !g_rc_native[i] &&
+                    find_func(g_rfuncs[i].lo) >= 0 && g_rfuncs[find_func(g_rfuncs[i].lo)].steal) {
                     g_rc_native[i] = 1;
                     if (g_modded)
                         g_modded[i] = 1;   /* and not hooked */
@@ -1133,15 +1133,15 @@ void native_install(const char *ini)
     }
     if (_stricmp(roots, "all") == 0) {   /* every function that can be hooked (diff: pure and not modded) */
         int i;
-        for (i = 0; i < g_recomp_nfuncs; i++)
-            if (g_recomp_funcs[i].steal >= 5 && !g_modded[i] && (g_mode == MODE_REPLACE || g_recomp_funcs[i].pure) &&
-                !is_root(g_recomp_funcs[i].addr))
-                install_root(g_recomp_funcs[i].addr);
+        for (i = 0; i < g_rnfuncs; i++)
+            if (g_rfuncs[i].steal >= 5 && !g_modded[i] && (g_mode == MODE_REPLACE || g_rfuncs[i].pure) &&
+                !is_root(g_rfuncs[i].addr))
+                install_root(g_rfuncs[i].addr);
     } else {
         for (p = strtok_s(roots, ", ", &next); p; p = strtok_s(NULL, ", ", &next))
             install_root((uint32_t)strtoul(p, NULL, 16));
     }
-    log_printf("recomp: %d generated functions, %d roots hooked", g_recomp_nfuncs, g_nroots);
+    log_printf("recomp: %d generated functions, %d roots hooked", g_rnfuncs, g_nroots);
 }
 #else
 typedef int recomp_native_unused;   /* the runner: nothing here (an empty file would warn) */

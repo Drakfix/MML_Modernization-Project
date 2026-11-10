@@ -32,8 +32,8 @@
 #include "mml.h"
 #include "recomp.h"
 
-#define G_FN_INTRO_PLAY_AVI  0x4F9933u   /* watcall EAX file name, EDX hwnd, EBX flag */
-#define G_INTRO_PLAYING_FLAG 0x551FA8u
+#define G_FN_INTRO_PLAY_AVI  GA(0x4F9933u)   /* watcall EAX file name, EDX hwnd, EBX flag */
+#define G_INTRO_PLAYING_FLAG GA(0x551FA8u)
 
 /* SDL3 audio, borrowed from the SDL3.dll input.c loaded */
 typedef struct { uint32_t format; int channels; int freq; } sdl_audio_spec;

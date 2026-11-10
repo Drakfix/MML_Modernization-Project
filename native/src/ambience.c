@@ -20,13 +20,13 @@
 #include "log.h"
 #include "recomp.h"
 
-#define G_SITE_ROOM_SOUND   0x4D889Bu   /* FUN_004D8875: xor eax,eax; xor ebx,ebx; mov ecx,[edx+4d] */
+#define G_SITE_ROOM_SOUND   GA(0x4D889Bu)   /* FUN_004D8875: xor eax,eax; xor ebx,ebx; mov ecx,[edx+4d] */
 #define G_ROOM_STATE        0x77E784u   /* +0x4D: stage (high byte), +0x4E: room (high byte) */
-#define G_ROOM_SOUND_TABLE  0x53A180u   /* per stage: int32 sound per room */
-#define G_SOUND_INFO        0x539914u   /* per bank ID - 0x80: {bank, slot, ?, channel} */
+#define G_ROOM_SOUND_TABLE  GA(0x53A180u)   /* per stage: int32 sound per room */
+#define G_SOUND_INFO        GA(0x539914u)   /* per bank ID - 0x80: {bank, slot, ?, channel} */
 #define G_BANK_ID           0x562204u   /* per loaded bank (stride 0x808): which bank it holds */
 #define G_BANK_ENTRIES      0x56220Cu   /* + slot * 0x10 + bank * 0x808 */
-#define G_FN_SOUND_STOP     0x4FA36Bu   /* watcall EAX = entry */
+#define G_FN_SOUND_STOP     GA(0x4FA36Bu)   /* watcall EAX = entry */
 
 static uint32_t g_looping_entry, g_looping_id, g_looping_part;
 
@@ -56,12 +56,13 @@ static uint32_t bank_entry(uint32_t id)
 #ifndef MML_RUNNER
 /* called as sound_stop_fn: cdecl (entry) -> watcall EAX = entry */
 typedef void(__cdecl *sound_stop_fn)(uint32_t entry);
+static uint32_t g_fn_sound_stop;   /* G_FN_SOUND_STOP in the running program (ambience_install) */
 static __declspec(naked) void sound_stop_thunk(void)
 {
     __asm {
         mov eax, [esp + 4]
         push esi
-        mov esi, G_FN_SOUND_STOP
+        mov esi, g_fn_sound_stop
         call esi
         pop esi
         ret
@@ -113,6 +114,9 @@ static void on_room_sound(regs_t *r)
 
 int ambience_install(const char *ini)
 {
+#ifndef MML_RUNNER
+    g_fn_sound_stop = G_FN_SOUND_STOP;
+#endif
     static const uint8_t site[7] = { 0x31, 0xC0, 0x31, 0xDB, 0x8B, 0x4A, 0x4D };
     if (!GetPrivateProfileIntA("general", "ambience_loop", 1, ini))
         return 0;

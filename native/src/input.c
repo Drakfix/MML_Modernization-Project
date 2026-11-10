@@ -440,6 +440,77 @@ int input_sdl_pad(pad_t *out)
     return g_connected;
 }
 
+/* The Japanese program follows the Japanese convention where the US one was changed: Circle
+   confirms and Cross goes back in menus (US: Cross and Triangle), and the player's action test
+   reads Circle where the US one reads Cross. [controls] jp_buttons=us (the default) gives these
+   instructions the US buttons back (each differs only in its button bits; a row is the US
+   address, the Japanese instruction, the US one); japanese leaves them. */
+static const struct { uint32_t at; uint8_t n; const char *jp, *us; } g_jp_buttons[] = {
+    { 0x437924u, 9, "\x66\xF7\x05\xDE\x08\x57\x00\x08\x20", "\x66\xF7\x05\xDE\x08\x57\x00\x08\x40" },   /* confirm: Cross or Start */
+    { 0x437CF2u, 9, "\x66\xF7\x05\xDE\x08\x57\x00\x08\x20", "\x66\xF7\x05\xDE\x08\x57\x00\x08\x40" },
+    { 0x437D9Du, 7, "\xF6\x05\xDF\x08\x57\x00\x40", "\xF6\x05\xDF\x08\x57\x00\x10" },   /* back: Triangle */
+    { 0x49FEF5u, 7, "\xF6\x05\xDF\x08\x57\x00\x40", "\xF6\x05\xDF\x08\x57\x00\x10" },
+    { 0x4A174Au, 7, "\xF6\x81\xBB\x00\x00\x00\x20", "\xF6\x81\xBB\x00\x00\x00\x40" },   /* player: Cross (+0xBB) */
+    { 0x4A19A0u, 3, "\xF6\xC7\x20", "\xF6\xC7\x40" },
+    { 0x4A21ECu, 7, "\xF6\x81\xBB\x00\x00\x00\x20", "\xF6\x81\xBB\x00\x00\x00\x40" },
+    { 0x4A222Eu, 7, "\x80\xA1\xBB\x00\x00\x00\xDF", "\x80\xA1\xBB\x00\x00\x00\xBF" },
+    { 0x4A26D4u, 3, "\xF6\xC6\x20", "\xF6\xC6\x40" },
+    { 0x4A372Du, 2, "\xA8\x20", "\xA8\x40" },
+    { 0x4A3C40u, 7, "\xF6\x86\xBB\x00\x00\x00\x20", "\xF6\x86\xBB\x00\x00\x00\x40" },
+    { 0x4A3E38u, 3, "\xF6\xC3\x20", "\xF6\xC3\x40" },
+    { 0x4A40F0u, 7, "\xF6\x86\xBB\x00\x00\x00\x20", "\xF6\x86\xBB\x00\x00\x00\x40" },
+    { 0x4A4347u, 7, "\xF6\x81\xBB\x00\x00\x00\x20", "\xF6\x81\xBB\x00\x00\x00\x40" },
+    { 0x4A4684u, 2, "\xA8\x20", "\xA8\x40" },
+    { 0x4A47DFu, 3, "\xF6\xC7\x20", "\xF6\xC7\x40" },
+    { 0x4A4B61u, 2, "\xA8\x20", "\xA8\x40" },
+    { 0x4A50A0u, 2, "\xA8\x20", "\xA8\x40" },
+    { 0x4A61DBu, 7, "\xF6\x80\xBB\x00\x00\x00\x20", "\xF6\x80\xBB\x00\x00\x00\x40" },
+    { 0x4E3A6Du, 5, "\x66\xF7\xC7\x08\x40", "\x66\xF7\xC7\x08\x10" },   /* back: Triangle or Start */
+    { 0x4E3F27u, 4, "\x66\xA9\x08\x40", "\x66\xA9\x08\x10" },
+    { 0x4E4D9Du, 5, "\x66\xF7\xC2\x09\x40", "\x66\xF7\xC2\x09\x10" },
+    { 0x4E4DBEu, 5, "\x66\xF7\xC2\x28\x28", "\x66\xF7\xC2\x28\x48" },   /* Cross, Start or R1 */
+    { 0x4E5D8Du, 7, "\xF6\x05\xDF\x08\x57\x00\x40", "\xF6\x05\xDF\x08\x57\x00\x10" },
+    { 0x4E5DA6u, 9, "\x66\xF7\x05\xDE\x08\x57\x00\x08\x20", "\x66\xF7\x05\xDE\x08\x57\x00\x08\x40" },
+    { 0x4E5F34u, 7, "\xF6\x05\xDF\x08\x57\x00\x40", "\xF6\x05\xDF\x08\x57\x00\x10" },
+    { 0x4E5F5Du, 9, "\x66\xF7\x05\xDE\x08\x57\x00\x08\x20", "\x66\xF7\x05\xDE\x08\x57\x00\x08\x40" },
+    { 0x4E6113u, 7, "\xF6\x05\xDF\x08\x57\x00\x40", "\xF6\x05\xDF\x08\x57\x00\x10" },
+    { 0x4E613Fu, 9, "\x66\xF7\x05\xDE\x08\x57\x00\x08\x20", "\x66\xF7\x05\xDE\x08\x57\x00\x08\x40" },
+};
+
+void input_jp_buttons(int us_layout)
+{
+    size_t i, n = sizeof g_jp_buttons / sizeof g_jp_buttons[0];
+    if (addr_game != GAME_JP)
+        return;
+    if (!us_layout) {
+        log_printf("input: Japanese program, buttons as the Japanese version has them");
+        return;
+    }
+    for (i = 0; i < n; i++)   /* all or none */
+        if (!mem_expect(GA(g_jp_buttons[i].at), g_jp_buttons[i].jp, g_jp_buttons[i].n)) {
+            log_printf("input: Japanese button test at %06X unexpected, buttons left as they are",
+                       (unsigned)GA(g_jp_buttons[i].at));
+            return;
+        }
+    for (i = 0; i < n; i++)
+        mem_write(GA(g_jp_buttons[i].at), g_jp_buttons[i].us, g_jp_buttons[i].n);
+    log_printf("input: Japanese program, buttons as in the US version (%u tests: Cross confirms, "
+               "Triangle goes back)", (unsigned)n);
+}
+
+void input_jp_buttons_check(void)
+{
+    size_t i, n = sizeof g_jp_buttons / sizeof g_jp_buttons[0], us = 0, jp = 0;
+    if (addr_game != GAME_JP)
+        return;
+    for (i = 0; i < n; i++) {
+        us += mem_expect(GA(g_jp_buttons[i].at), g_jp_buttons[i].us, g_jp_buttons[i].n) != 0;
+        jp += mem_expect(GA(g_jp_buttons[i].at), g_jp_buttons[i].jp, g_jp_buttons[i].n) != 0;
+    }
+    log_printf("input: the Japanese button tests now: %u as the US version, %u as the Japanese one, %u neither",
+               (unsigned)us, (unsigned)jp, (unsigned)(n - us - jp));
+}
+
 int input_install(void)
 {
     static const uint8_t entry_bytes[] = { 0x53, 0x51, 0x52, 0x83, 0xEC, 0x50 };

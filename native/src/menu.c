@@ -51,7 +51,9 @@ enum {
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
     IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR,
     IT_CHOICE,   /* one of a list, each choice a set of mml.ini values (the start menu's) */
-    IT_GF_STATUS, IT_GF_IMPORT,   /* the start menu's game files: where they stand; import them */
+    /* the start menu's game files: the version to play; the US and the Japanese copy (where they
+       stand, A imports) */
+    IT_GF_EDITION, IT_GF_US, IT_GF_JP,
 };
 
 /* an IT_CHOICE's choice: "section.key=value;section.key=value" written when chosen (a choice
@@ -119,7 +121,8 @@ static const choice CH_ASPECT[] = { { "16:9 Wide", "video.aspect=16:9" }, { "4:3
 static const choice CH_INTRO[] = { { "Play", "general.intro=play" }, { "Skip", "general.intro=skip" } };
 static const choice CH_CONTROLS[] = { { "Modern", "controls.mode=modern" }, { "Vanilla (1997)", "controls.mode=vanilla" } };
 static const choice CH_ORBIT[] = { { "Off", "controls.orbit_start=0" }, { "On", "controls.orbit_start=1" } };
-static const choice CH_INPUT[] = { { "Any (SDL)", "controls.input=sdl" }, { "Legacy", "controls.input=legacy" } };
+static const choice CH_JPBTN[] = { { "US", "controls.jp_buttons=us" }, { "Japanese", "controls.jp_buttons=japanese" } };
+static const choice CH_INPUT[] ={ { "Any (SDL)", "controls.input=sdl" }, { "Legacy", "controls.input=legacy" } };
 static const choice CH_DEADZONE[] = { { "Small", "controls.deadzone=12" }, { "Default", "controls.deadzone=24" },
                                       { "Large", "controls.deadzone=32" } };
 static const choice CH_TILT[] = { { "Walks", "controls.walk_tilt=55" }, { "Runs", "controls.walk_tilt=0" } };
@@ -160,6 +163,9 @@ static const item g_start_items[] = {
       CH_ORBIT, NCH(CH_ORBIT), 0, NULL, 1 },
     { 2, IT_CHOICE, "Controller", "Any (SDL) handles every controller. Legacy uses the old DirectInput path.",
       CH_INPUT, NCH(CH_INPUT), PL_WIN },
+    { 2, IT_CHOICE, "Menu buttons", "Japanese version only. US: the bottom button (A / Cross) confirms and the top "
+      "one (Y / Triangle) goes back. Japanese: the right one (B / Circle) confirms and the bottom one goes back.",
+      CH_JPBTN, NCH(CH_JPBTN) },
     { 2, IT_CAMSPEED, "Camera speed", "How fast the right stick turns the camera." },
     { 2, IT_INVERT_X, "Invert camera X", "Flips left and right on the camera stick." },
     { 2, IT_INVERT_Y, "Invert camera Y", "Flips up and down on the camera stick and the mouse." },
@@ -183,10 +189,12 @@ static const item g_start_items[] = {
     { 3, IT_CHOICE, "R3 (right stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_r3", 6 },
     { 3, IT_CHOICE, "Back", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_back", 8 },
     { 3, IT_CHOICE, "Start", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_start", 7 },
-    { PAGE_FILES, IT_GF_STATUS, "Game files", "Your own copy of Mega Man Legends for Windows PC, copied into this app "
-      "once. Nothing of the game comes with the app." },
-    { PAGE_FILES, IT_GF_IMPORT, "Import", "Pick the folder with MEGAMAN.EXE (copy it from your PC to this device "
-      "first). The game, its music and your saves are copied; the folder itself isn't changed." },
+    { PAGE_FILES, IT_GF_EDITION, "Version to play", "The copy Play starts. Each version keeps its own saves; "
+      "settings and mods are shared." },
+    { PAGE_FILES, IT_GF_US, "US version", "A imports Mega Man Legends for Windows PC: copy its folder (with "
+      "MEGAMAN.EXE) to this device, then pick it. That folder isn't changed." },
+    { PAGE_FILES, IT_GF_JP, "Japanese version", "A imports Rockman DASH for Windows PC: copy its folder (with "
+      "ROCKMAN.EXE) to this device, then pick it. It's kept apart from the US version." },
 };
 
 /* the tables in use: the in-game menu's, or the start menu's before the game */
@@ -211,7 +219,8 @@ static struct {
     int on_play;                            /* the start menu: the PLAY button has the focus */
     double back_at;                         /* in the game: the last Back press (twice quits) */
     /* the start menu's game files (gamefiles.h) */
-    int gf_ready, gf_state;
+    int gf_ready[2], gf_state, gf_jp;       /* each version there (US, Japanese); the one importing */
+    int edition;                            /* the version to play (gamefiles_edition) */
     float gf_progress;
     char gf_line[200];
     int scroll;                             /* the first row shown (long pages) */
@@ -237,6 +246,11 @@ static struct {
     int kick_dir, sel_page;
     LARGE_INTEGER qpf;
 } M;
+
+static int gf_busy(void)
+{
+    return M.gf_state == IMPORT_PICKING || M.gf_state == IMPORT_COPYING;
+}
 
 static double now_s(void)
 {
@@ -526,13 +540,21 @@ static void change(int kind, int dir)
 
 static void change_item(const item *it, int dir)
 {
-    if (it->kind == IT_GF_STATUS)
+    if (it->kind == IT_GF_EDITION) {
+        M.edition = !M.edition;
+        WritePrivateProfileStringA("general", "edition", M.edition ? "japanese" : "us", M.ini);
+        M.kick_dir = dir;
+        M.kick_at = now_s();
         return;
-    if (it->kind == IT_GF_IMPORT) {
-        if (M.gf_state != IMPORT_COPYING && M.gf_state != IMPORT_PICKING && dir > 0) {
+    }
+    if (it->kind == IT_GF_US || it->kind == IT_GF_JP) {
+        if (!gf_busy() && dir > 0) {
+            char d[MAX_PATH];
+            M.gf_jp = it->kind == IT_GF_JP;
             M.gf_state = IMPORT_PICKING;
             M.gf_line[0] = 0;
-            gamefiles_import_begin(M.game_dir);
+            gamefiles_dir(M.game_dir, M.gf_jp, d, sizeof d);
+            gamefiles_import_begin(d, M.gf_jp);
         }
         return;
     }
@@ -584,18 +606,18 @@ static void value_text(int kind, char *out, size_t n)
     case IT_RETICLE: strcpy_s(out, n, RETICLES[M.reticle].name); break;
     case IT_AIM: strcpy_s(out, n, M.aim_camera ? "Camera" : "Character"); break;
     case IT_CROSSHAIR: strcpy_s(out, n, M.crosshair ? "On" : "Off"); break;
-    case IT_GF_STATUS:
-        if (M.gf_state == IMPORT_COPYING)
+    case IT_GF_EDITION: strcpy_s(out, n, M.edition ? "Japanese" : "US"); break;
+    case IT_GF_US:
+    case IT_GF_JP: {
+        int k = kind == IT_GF_JP;
+        if (gf_busy() && M.gf_jp == k && M.gf_state == IMPORT_COPYING)
             _snprintf_s(out, n, _TRUNCATE, "Copying %d%%", (int)(M.gf_progress * 100));
-        else if (M.gf_state == IMPORT_PICKING)
+        else if (gf_busy() && M.gf_jp == k)
             strcpy_s(out, n, "Choosing a folder");
         else
-            strcpy_s(out, n, M.gf_ready ? "Ready" : "Not found");
+            strcpy_s(out, n, M.gf_ready[k] ? "Ready" : "Not imported");
         break;
-    case IT_GF_IMPORT:
-        strcpy_s(out, n, M.gf_state == IMPORT_COPYING || M.gf_state == IMPORT_PICKING ? "Busy" :
-                         M.gf_ready ? "Import again" : "Choose folder");
-        break;
+    }
     default: out[0] = 0; break;
     }
 }
@@ -604,7 +626,8 @@ static void value_text(int kind, char *out, size_t n)
 static int toggle_state(int kind)
 {
     switch (kind) {
-    case IT_GF_STATUS: return M.gf_state == IMPORT_COPYING || M.gf_state == IMPORT_PICKING ? -1 : M.gf_ready;
+    case IT_GF_US:
+    case IT_GF_JP: return gf_busy() && M.gf_jp == (kind == IT_GF_JP) ? -1 : M.gf_ready[kind == IT_GF_JP];
     case IT_VSYNC: return M.vsync;
     case IT_HDTEX: return M.hdtex;
     case IT_INVERT_X: return M.inv_x;
@@ -619,8 +642,9 @@ static int gauge(int kind, int *total)
     case IT_CAMSPEED: *total = 6; return M.cam_speed + 1;
     case IT_MOUSE: *total = 5; return M.mouse;
     case IT_MSAA: *total = 2; return M.msaa == 1 ? 0 : M.msaa == 4 ? 1 : 2;
-    case IT_GF_STATUS:
-        if (M.gf_state != IMPORT_COPYING)
+    case IT_GF_US:
+    case IT_GF_JP:
+        if (M.gf_state != IMPORT_COPYING || M.gf_jp != (kind == IT_GF_JP))
             return -1;
         *total = 10;
         return (int)(M.gf_progress * 10 + 0.5f);
@@ -650,8 +674,8 @@ static float dpad_glyph(float x, float cy, float s)
     return s;
 }
 
-/* word-wrapped help text; returns the height used */
-static float wrapped(float x, float y, float maxw, const char *s, uint32_t col, float scale)
+/* word-wrapped help text (draw 0: only measured); returns the height used */
+static float wrap_text(float x, float y, float maxw, const char *s, uint32_t col, float scale, int draw)
 {
     char buf[256];
     float lh = gfx_ui_font_line(UI_FONT_BODY, scale) * 1.05f, yy = y;
@@ -670,13 +694,24 @@ static float wrapped(float x, float y, float maxw, const char *s, uint32_t col, 
                 break;
         }
         buf[n] = 0;
-        ui_text(x, yy, buf, col, scale);
+        if (draw)
+            ui_text(x, yy, buf, col, scale);
         yy += lh;
         s += n;
         while (*s == ' ')
             s++;
     }
     return yy - y;
+}
+
+static float g_help_h = 1e9f;   /* the room the help has (set where it is drawn) */
+
+/* help text, smaller where it would run past its room */
+static float wrapped(float x, float y, float maxw, const char *s, uint32_t col, float scale)
+{
+    while (scale > 0.5f && wrap_text(x, y, maxw, s, col, scale, 0) > g_help_h)
+        scale -= 0.03f;
+    return wrap_text(x, y, maxw, s, col, scale, 1);
 }
 
 /* the items a page shows here, in order (list may be NULL); their count */
@@ -998,12 +1033,15 @@ static void draw(void *user, int w, int h)
         float hy = rows_y + maxrows * rowh + u * 0.4f, hx = x + pad * 1.2f, hw = pw - pad * 2.4f;
         gfx_ui_hgrad(hx, hy, hw, 1.5f, ui_col(0xA05CC8FF), ui_col(0x005CC8FF));
         hy += u * 0.35f;
+        g_help_h = (y + ph - foot_h - pad * 0.5f) - hy - u * 0.1f;   /* (down to the button prompts' line) */
         if (M.note[0] && t < M.note_until) {
             float s = u * 0.55f;
             gfx_ui_tri(hx + s / 2, hy + u * 0.05f, hx + s, hy + s + u * 0.05f, hx, hy + s + u * 0.05f, ui_col(COL_WARN));
             ui_text(hx + s * 0.38f, hy + s * 0.18f, "!", COL_NAVY, 0.5f);
             wrapped(hx + s + u * 0.3f, hy, hw - s - u * 0.3f, M.note, COL_WARN, 0.72f);
-        } else if (M.start && M.page == PAGE_FILES && M.gf_line[0]) {
+        } else if (M.start && M.page == PAGE_FILES && M.gf_line[0] && !M.on_play &&
+                   (gf_busy() || (M.cursor >= 0 && g_items[M.cursor].kind == (M.gf_jp ? IT_GF_JP : IT_GF_US)))) {
+            /* (the import's progress or outcome, on its version's row) */
             wrapped(hx, hy, hw, M.gf_line, M.gf_state == IMPORT_FAILED ? COL_WARN : 0xFFB4C6D8, 0.72f);
         } else if (M.start && M.on_play) {
             wrapped(hx, hy, hw, "Starts the game with these settings. They're saved, and the in-game menu "
@@ -1149,20 +1187,28 @@ void menu_frame(void)
     if (M.block && !keys && !buttons)
         M.block = 0;
     if (M.start) {
-        if (M.gf_state == IMPORT_PICKING || M.gf_state == IMPORT_COPYING) {   /* the import goes on */
-            char line[200];
+        if (gf_busy()) {   /* the import goes on */
+            char line[200], d[MAX_PATH];
             int st = gamefiles_import_poll(line, sizeof line, &M.gf_progress);
+            /* The folder picker takes the pad while it is open: the A (or B) that closes it is
+               still down when we are back, and would count as a press here (A on the row would
+               open the picker again, B would close the app). Nothing counts until all is let go. */
+            M.block = 1;
             if (line[0])
                 strcpy_s(M.gf_line, sizeof M.gf_line, line);
             if (st == IMPORT_DONE) {
                 M.gf_state = IMPORT_IDLE;
                 strcpy_s(M.gf_line, sizeof M.gf_line, "Checking the game...");
-                if (gamefiles_finish(M.game_dir, line, sizeof line)) {
-                    M.gf_ready = 1;
+                gamefiles_dir(M.game_dir, M.gf_jp, d, sizeof d);
+                if (gamefiles_finish(d, line, sizeof line)) {
+                    M.gf_ready[M.gf_jp] = 1;
+                    gamefiles_defaults(M.game_dir);   /* (the intro, CAPCOM.AVI) */
+                    M.edition = M.gf_jp;   /* (the one just imported plays) */
+                    WritePrivateProfileStringA("general", "edition", M.edition ? "japanese" : "us", M.ini);
                     strcpy_s(M.gf_line, sizeof M.gf_line, "Ready. Press Start to play.");
-                    log_printf("menu: game files imported");
+                    log_printf("menu: game files imported (the %s version)", M.gf_jp ? "Japanese" : "US");
                 } else {
-                    M.gf_ready = 0;
+                    M.gf_ready[M.gf_jp] = 0;
                     M.gf_state = IMPORT_FAILED;
                     strcpy_s(M.gf_line, sizeof M.gf_line, line);
                 }
@@ -1171,14 +1217,20 @@ void menu_frame(void)
                 log_printf("menu: game files: %s", M.gf_line);
             }
         }
+        if (M.block) {   /* (see above) */
+            plat_take_back();
+            return;
+        }
         if (plat_take_back() || (pressed & K_BACK)) {   /* B or Android's Back: close the app */
             M.quit = 1;
             return;
         }
         if ((pressed & K_PLAY) || (M.on_play && (pressed & K_OK))) {
-            if (gamefiles_can_import() && !M.gf_ready) {   /* nothing to play yet */
+            if (gamefiles_can_import() && !M.gf_ready[M.edition]) {   /* nothing to play yet */
                 set_page(PAGE_FILES);
-                note("Import your game files first");
+                note(M.gf_ready[!M.edition] ? (M.edition ? "Import the Japanese version first, or play the US one"
+                                                         : "Import the US version first, or play the Japanese one")
+                                            : "Import your game files first");
                 return;
             }
             M.play = 1;
@@ -1435,13 +1487,22 @@ int menu_start(const char *ini, const char *game_dir)
     NPAGES = gamefiles_can_import() ? PAGE_FILES + 1 : PAGE_FILES;
     M.start = 1;
     load_values(ini, game_dir);
-    M.gf_ready = gamefiles_ready(game_dir);
-    set_page(gamefiles_can_import() && !M.gf_ready ? PAGE_FILES : 0);
-    add_draw_once();
-    M.ready = M.open = 1;
-    M.shown = 1;
-    log_printf("menu: the start menu");
-    menu_music_start(game_dir, ini);
+    {
+        char jp[MAX_PATH], music[MAX_PATH];
+        gamefiles_dir(game_dir, 1, jp, sizeof jp);
+        M.gf_ready[0] = gamefiles_ready(game_dir);
+        M.gf_ready[1] = gamefiles_can_import() && gamefiles_ready(jp);
+        M.edition = gamefiles_edition(game_dir);
+        set_page(gamefiles_can_import() && !M.gf_ready[M.edition] ? PAGE_FILES : 0);
+        add_draw_once();
+        M.ready = M.open = 1;
+        M.shown = 1;
+        log_printf("menu: the start menu (US version %s, Japanese version %s; the %s one plays)",
+                   M.gf_ready[0] ? "there" : "not there", M.gf_ready[1] ? "there" : "not there",
+                   M.edition ? "Japanese" : "US");
+        gamefiles_dir(game_dir, M.edition, music, sizeof music);   /* (its BGM folder) */
+        menu_music_start(music, ini);
+    }
     while (!M.play) {
         if (!plat_pump() || M.quit) {
             menu_music_stop();

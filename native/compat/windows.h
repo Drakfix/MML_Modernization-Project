@@ -402,6 +402,9 @@ BOOL SetCurrentDirectoryA(LPCSTR dir);
 DWORD GetModuleFileNameA(HMODULE m, LPSTR buf, DWORD n);   /* our "exe": mml_run.exe in the game folder */
 const char *compat_path(const char *win_path, char *out, size_t n);   /* a Windows path as the real one */
 void compat_set_game_dir(const char *dir);
+/* a folder in the game folder that holds the version being played (its program, data and saves):
+   their paths go there from now on (gamefiles.h GAMEFILES_JP_DIR) */
+void compat_set_edition_dir(const char *sub);
 /* time */
 BOOL QueryPerformanceCounter(LARGE_INTEGER *c);
 BOOL QueryPerformanceFrequency(LARGE_INTEGER *f);

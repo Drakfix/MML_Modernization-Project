@@ -127,12 +127,26 @@ static int runner_main(void)
     if (!start_menu(dir))
         return 0;
 #endif
-    _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\MEGAMAN_NATIVE.EXE", dir);
-    if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES)
-        _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\MEGAMAN.EXE", dir);
+#ifndef _WIN32
+    if (gamefiles_edition(dir) == 1) {   /* the imported Japanese version, in its own folder (gamefiles.h) */
+        _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\%s\\ROCKMAN_NATIVE.EXE", dir, GAMEFILES_JP_DIR);
+        compat_set_edition_dir(GAMEFILES_JP_DIR);
+        log_printf("runner: the Japanese version (the %s folder)", GAMEFILES_JP_DIR);
+    } else
+#endif
+    {   /* the imported copy's (gamefiles.c), else the installed one: the US, then the Japanese */
+        static const char *const names[] = { "MEGAMAN_NATIVE.EXE", "MEGAMAN.EXE", "ROCKMAN_NATIVE.EXE",
+                                             "ROCKMAN.EXE" };
+        size_t i;
+        for (i = 0; i < sizeof names / sizeof names[0]; i++) {
+            _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\%s", dir, names[i]);
+            if (GetFileAttributesA(exe) != INVALID_FILE_ATTRIBUTES)
+                break;
+        }
+    }
     if (!load_image(exe)) {
         log_printf("runner: no game exe in %s", dir);
-        MessageBoxA(NULL, "MEGAMAN_NATIVE.EXE or MEGAMAN.EXE wasn't found next to mml_run.exe.", "mml_run",
+        MessageBoxA(NULL, "MEGAMAN.EXE (or ROCKMAN.EXE) wasn't found next to mml_run.exe.", "mml_run",
                     MB_OK | MB_ICONERROR);
         return 1;
     }

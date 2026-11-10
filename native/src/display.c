@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "addr.h"
 #include "ddshim.h"
 #include "display.h"
 #include "hook.h"
@@ -32,10 +33,10 @@
 #include "packets.h"
 #include "toast.h"
 
-#define G_SITE_MODE_WIDTH   0x4F7EF3u   /* push 0x280 -> SetDisplayMode width (flip-chain path) */
-#define G_SITE_VIEWPORT_W   0x4F81C1u   /* mov [esp+0xd8],0x280 -> D3DVIEWPORT2.dwWidth */
-#define G_SITE_CLEAR_W      0x4F7F8Du   /* mov eax,0x280 -> width of the Z-buffer FUN_004F134B creates */
-#define G_CLEAR_RECT        0x551D24u   /* D3DRECT {0,0,640,480} the walker clears each frame */
+#define G_SITE_MODE_WIDTH   GA(0x4F7EF3u)   /* push 0x280 -> SetDisplayMode width (flip-chain path) */
+#define G_SITE_VIEWPORT_W   GA(0x4F81C1u)   /* mov [esp+0xd8],0x280 -> D3DVIEWPORT2.dwWidth */
+#define G_SITE_CLEAR_W      GA(0x4F7F8Du)   /* mov eax,0x280 -> width of the Z-buffer FUN_004F134B creates */
+#define G_CLEAR_RECT        GA(0x551D24u)   /* D3DRECT {0,0,640,480} the walker clears each frame */
 #define VT_DRAW_PRIMITIVE           28
 #define VT_DRAW_INDEXED_PRIMITIVE   29
 #define D3DFVF_XYZRHW 0x004

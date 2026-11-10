@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "addr.h"
 #include "log.h"
 #include "plat.h"
 #include "recomp_rt.h"
@@ -50,7 +51,7 @@ static void exe_path(char *out, size_t n)
 #ifdef _WIN32
     GetModuleFileNameA(NULL, out, (DWORD)n);
 #else
-    snprintf(out, n, "%s\\MEGAMAN.EXE", shim_game_dir());
+    snprintf(out, n, "%s\\%s", shim_game_dir(), addr_game == GAME_JP ? "ROCKMAN.EXE" : "MEGAMAN.EXE");
 #endif
 }
 

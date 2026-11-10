@@ -24,10 +24,10 @@
 #include "hook.h"
 #include "log.h"
 
-#define SITE_LAYER_TILES  0x4E7C74u   /* xor edx,edx; mov dl,[ebp+0x31]: layer in EBP, about to emit tiles */
-#define SITE_LAYER_LINK   0x4E7DD4u   /* call gfx_add_prim_alt: EDX first packet, EBX last, EBP layer */
-#define SITE_COLS_BOUND   0x4E7D3Cu   /* cmp esi,0x140 */
-#define SITE_ROWS_BOUND   0x4E7D14u   /* cmp dword [esp+0x18],0xF0 */
+#define SITE_LAYER_TILES  GA(0x4E7C74u)   /* xor edx,edx; mov dl,[ebp+0x31]: layer in EBP, about to emit tiles */
+#define SITE_LAYER_LINK   GA(0x4E7DD4u)   /* call gfx_add_prim_alt: EDX first packet, EBX last, EBP layer */
+#define SITE_COLS_BOUND   GA(0x4E7D3Cu)   /* cmp esi,0x140 */
+#define SITE_ROWS_BOUND   GA(0x4E7D14u)   /* cmp dword [esp+0x18],0xF0 */
 #define LAYER_POOL        0x56F80Cu   /* layers, 0x38 bytes each */
 #define LAYER_SIZE        0x38
 #define MAX_LAYERS        64

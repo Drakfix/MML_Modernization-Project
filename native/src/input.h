@@ -29,6 +29,10 @@ typedef struct {
  * game folder; returns 1 if the SDL path is active. On 0 the game keeps
  * reading the pad through its DirectInput joystick (Xidi). */
 int input_install(void);
+/* the Japanese program: 1 = its button tests made the US ones ([controls] jp_buttons=us: Cross
+   confirms, Triangle goes back), 0 = left as they are (Circle confirms, Cross goes back) */
+void input_jp_buttons(int us_layout);
+void input_jp_buttons_check(void);   /* (the log: which way the tests are now) */
 
 /* 1 while SDL drives the controller. */
 int input_sdl_active(void);

@@ -38,6 +38,27 @@ const int g_recomp_nfuncs = 0;
 const int g_recomp_patch_aware = 0;
 #endif
 
+const RFuncInfo *g_rfuncs = g_recomp_funcs;
+int g_rnfuncs, g_rpatch_aware;
+
+int recomp_select(void)
+{
+#ifdef RECOMP_HAVE_JP
+    if (addr_game == GAME_JP) {
+        g_rfuncs = g_recomp_funcs_jp;
+        g_rnfuncs = g_recomp_nfuncs_jp;
+        g_rpatch_aware = g_recomp_patch_aware_jp;
+        return g_rnfuncs;
+    }
+#endif
+    if (addr_game != GAME_US)
+        return 0;
+    g_rfuncs = g_recomp_funcs;
+    g_rnfuncs = g_recomp_nfuncs;
+    g_rpatch_aware = g_recomp_patch_aware;
+    return g_rnfuncs;
+}
+
 #define B2(n) n, n + 1, n + 1, n + 2
 #define B4(n) B2(n), B2(n + 1), B2(n + 1), B2(n + 2)
 #define B6(n) B4(n), B4(n + 1), B4(n + 1), B4(n + 2)
@@ -48,7 +69,7 @@ const uint8_t g_popcnt8[256] = { B6(0), B6(1), B6(1), B6(2) };   /* bits set in 
 
 
 int g_mode;
-uint8_t *g_rc_native;          /* per function (g_recomp_nfuncs): run the machine code instead (RC_CALL) */
+uint8_t *g_rc_native;          /* per function (g_rnfuncs): run the machine code instead (RC_CALL) */
 uint32_t g_exe_lo, g_exe_hi;   /* the game's image */
 uintptr_t g_mml_lo, g_mml_hi;  /* our own module's image */
 /* Our own stacks: the private one, and the running thread's (costack). A stub entered while ESP is
@@ -177,12 +198,12 @@ static uint32_t g_func_lo, g_func_hi;
 
 int find_func_slow(uint32_t a)
 {
-    int lo = 0, hi = g_recomp_nfuncs - 1;
+    int lo = 0, hi = g_rnfuncs - 1;
     while (lo <= hi) {
         int m = (lo + hi) / 2;
-        if (g_recomp_funcs[m].addr == a)
+        if (g_rfuncs[m].addr == a)
             return m;
-        if (g_recomp_funcs[m].addr < a)
+        if (g_rfuncs[m].addr < a)
             lo = m + 1;
         else
             hi = m - 1;
@@ -200,15 +221,15 @@ int find_func(uint32_t a)
 static void build_func_index(void)
 {
     int i;
-    if (!g_recomp_nfuncs || g_recomp_nfuncs >= 0xFFFF)
+    if (!g_rnfuncs || g_rnfuncs >= 0xFFFF)
         return;
-    g_func_lo = g_recomp_funcs[0].addr;
-    g_func_hi = g_recomp_funcs[g_recomp_nfuncs - 1].addr + 1;
+    g_func_lo = g_rfuncs[0].addr;
+    g_func_hi = g_rfuncs[g_rnfuncs - 1].addr + 1;
     g_func_at = (uint16_t *)calloc(g_func_hi - g_func_lo, sizeof *g_func_at);
     if (!g_func_at)
         return;
-    for (i = 0; i < g_recomp_nfuncs; i++)
-        g_func_at[g_recomp_funcs[i].addr - g_func_lo] = (uint16_t)(i + 1);
+    for (i = 0; i < g_rnfuncs; i++)
+        g_func_at[g_rfuncs[i].addr - g_func_lo] = (uint16_t)(i + 1);
 }
 
 int g_rt_errors;
@@ -605,7 +626,7 @@ uint32_t rt_dispatch(RCtx *c, uint32_t target)
         int i = find_func(target);
         g_recent[g_nrecent++ & 15] = target;
         if (i >= 0 && !g_rc_native[i]) {
-            target = g_recomp_funcs[i].fn(c);
+            target = g_rfuncs[i].fn(c);
             continue;
         }
         /* A function whose entry mml.dll may patch with a JMP checks for one and follows it. When
@@ -648,7 +669,7 @@ uint32_t rt_dispatch(RCtx *c, uint32_t target)
 #endif
         /* a jump into the game's code that no generated function starts at: the machine code there
            may not return to us (system DLL entries reached through import thunks are fine) */
-        if (i < 0 && target >= g_recomp_funcs[0].lo && target < g_recomp_funcs[g_recomp_nfuncs - 1].hi &&
+        if (i < 0 && target >= g_rfuncs[0].lo && target < g_rfuncs[g_rnfuncs - 1].hi &&
             g_rt_errors++ < 20)
             log_printf("recomp: jump to %08X, outside every recompiled function", target);
         if (rt_shim(c, target) || rt_direct(c, target) || rt_impl(c, target))
@@ -865,11 +886,11 @@ void recomp_run(void)
  * between them by loading ESP. Here each slot runs on a host stack of its own (and has its own
  * guest context); the slot fields in memory are kept as the game's code leaves them. */
 #define CO_SLOTS 2
-#define CO_STATE(i) (*(volatile uint16_t *)HPTR(0x5513FCu + 8u * (unsigned)(i)))
-#define CO_COUNT(i) (*(volatile uint16_t *)HPTR(0x5513FEu + 8u * (unsigned)(i)))
-#define CO_SP(i) (*(volatile uint32_t *)HPTR(0x551400u + 8u * (unsigned)(i)))
-#define CO_CUR (*(volatile uint32_t *)HPTR(0x55140Cu))
-#define CO_TOP (*(volatile uint32_t *)HPTR(0x551414u))
+#define CO_STATE(i) (*(volatile uint16_t *)HPTR(GA(0x5513FCu) + 8u * (unsigned)(i)))
+#define CO_COUNT(i) (*(volatile uint16_t *)HPTR(GA(0x5513FEu) + 8u * (unsigned)(i)))
+#define CO_SP(i) (*(volatile uint32_t *)HPTR(GA(0x551400u) + 8u * (unsigned)(i)))
+#define CO_CUR (*(volatile uint32_t *)HPTR(GA(0x55140Cu)))
+#define CO_TOP (*(volatile uint32_t *)HPTR(GA(0x551414u)))
 
 static costack *g_co_stack[CO_SLOTS];
 static int g_co_fresh[CO_SLOTS];          /* the slot needs a new stack (created, restarted or ended) */
@@ -930,7 +951,7 @@ static void co_thread(void *param)
     c->fdepth0 = 0;
     if (fi >= 0 && !g_rc_native[fi]) {
         R32_SET(c, REG_ESP, co_top(i));   /* where the game's scheduler leaves ESP for a new thread */
-        rt_dispatch_from(c, g_recomp_funcs[fi].fn(c));
+        rt_dispatch_from(c, g_rfuncs[fi].fn(c));
     } else {
         R32_SET(c, REG_ESP, co_top(i) - 4);
         rt_call_native(c, g_co_entry[i]);
@@ -1133,13 +1154,25 @@ void recomp_install(const char *ini)
 #endif
     if (g_mode == MODE_OFF)
         return;
+    if (!recomp_select() && addr_game == GAME_JP) {   /* (this build has only the US program's code) */
+        log_printf("recomp: no recompiled code for the Japanese program in this build");
+#ifdef MML_RUNNER
+        MessageBoxA(NULL, "This build of the Standalone engine has no code for the Japanese version.\n"
+                    "Choose the Classic engine in the launcher to play it.",
+                    "Mega Man Legends", MB_OK | MB_ICONWARNING);
+        ExitProcess(1);
+#endif
+        return;
+    }
+    if (addr_game == GAME_JP)
+        log_printf("recomp: the Japanese program's recompiled code");
 #ifndef RECOMP_DIFF
     if (g_mode == MODE_DIFF) {
         log_printf("recomp: diff mode needs a build with RECOMP_DIFF=1 (memory writes aren't logged otherwise)");
         return;
     }
 #endif
-    if (!g_recomp_nfuncs) {
+    if (!g_rnfuncs) {
         log_printf("recomp: this build has no recompiled code");
         return;
     }
@@ -1155,7 +1188,7 @@ void recomp_install(const char *ini)
         g_exe_lo = nt->OptionalHeader.ImageBase;
         g_exe_hi = g_exe_lo + nt->OptionalHeader.SizeOfImage;
     }
-    g_rc_native = (uint8_t *)calloc((size_t)g_recomp_nfuncs, 1);
+    g_rc_native = (uint8_t *)calloc((size_t)g_rnfuncs, 1);
     if (!g_rc_native) {
         log_printf("recomp: no memory for the function table");
         return;
@@ -1189,6 +1222,6 @@ void recomp_install(const char *ini)
 #ifndef MML_RUNNER
     native_install(ini);   /* entries from machine code, the game's threads, the program start */
 #else
-    log_printf("recomp: %d generated functions", g_recomp_nfuncs);   /* the runner calls recomp_run */
+    log_printf("recomp: %d generated functions", g_rnfuncs);   /* the runner calls recomp_run */
 #endif
 }

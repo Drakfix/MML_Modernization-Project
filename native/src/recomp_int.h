@@ -3,14 +3,25 @@
  * left out of the standalone runner). */
 #include <stdint.h>
 
+#include "addr.h"
 #include "recomp_rt.h"
 
 enum { MODE_OFF, MODE_DIFF, MODE_REPLACE };
 extern int g_mode;
 
+/* the generated code: the US program's, and with RECOMP_HAVE_JP the Japanese one's too */
 extern const RFuncInfo g_recomp_funcs[];
 extern const int g_recomp_nfuncs;
 extern const int g_recomp_patch_aware;   /* the code calls our hooks and reads patched bytes itself */
+#ifdef RECOMP_HAVE_JP
+extern const RFuncInfo g_recomp_funcs_jp[];
+extern const int g_recomp_nfuncs_jp;
+extern const int g_recomp_patch_aware_jp;
+#endif
+/* the running program's (recomp_select, from addr_game) */
+extern const RFuncInfo *g_rfuncs;
+extern int g_rnfuncs, g_rpatch_aware;
+int recomp_select(void);   /* 0: no generated code for this program */
 
 extern int g_rt_errors;
 extern uint32_t g_rt_bypass;
@@ -24,10 +35,10 @@ extern uint32_t g_recent[16];            /* recent indirect / machine-code targe
 extern unsigned g_nrecent;
 
 /* The exe's entry point: JMP to the Watcom C runtime's startup */
-#define G_ENTRY      0x4FA900u
-#define G_CRT_START  0x4FFB41u
+#define G_ENTRY      GA(0x4FA900u)
+#define G_CRT_START  GA(0x4FFB41u)
 
-int find_func(uint32_t a);        /* index into g_recomp_funcs of the function starting at a, or -1 */
+int find_func(uint32_t a);        /* index into g_rfuncs of the function starting at a, or -1 */
 int find_func_slow(uint32_t a);   /* the same, without the index (before it exists) */
 void rt_dispatch_from(RCtx *c, uint32_t target);   /* rt_dispatch unless target is 0 */
 uint32_t flags_from_ctx(const RCtx *c);
