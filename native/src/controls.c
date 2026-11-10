@@ -196,7 +196,7 @@ static int g_lock_test;   /* Z-targeting: locked on, facing toward the target */
 static volatile LONG face_hold, face_dir, cam_aim, aim_ready;
 static int g_aim_camera, g_crosshair;
 static double aim_hold;
-static double since_fire = 1e9;   /* 1/60 s since the fire button was last held with camera aim on */
+static double since_fire = 1e9;   /* 1/60 s since the last shot with camera aim on (crosshair) */
 
 /* Vertical aim. Every shot spawner (the buster's FUN_004B08D5 and the special weapons) builds its
  * velocity from a pitch it gets from FUN_0042A85C: the aim camera's pitch [0x77E964] when the aim
@@ -642,8 +642,14 @@ static void input_update(void)
     {
         unsigned acts = actions_of(&p) | (unsigned)g_kbm_acts;
         int ok = g_aim_camera && st_active && st_allowed && !aiming, was = cam_aim;
-        firing = ok && (ACT(acts, ACT_SHOOT) || ACT(acts, ACT_SPECIAL));
-        since_fire = firing ? 0 : since_fire < 1e9 ? since_fire + ticks : since_fire;
+        int pst = P8(PL_STATE), can_shoot = !(P8(PL_INPUT_FLAGS) & 0x60) &&
+                  (pst <= 2 || pst == 6 || pst == 7 || pst == 8);
+        /* a fire button only counts where Mega Man can shoot: the same buttons advance text
+           and answer prompts (Circle is the special weapon by default) */
+        firing = ok && can_shoot && (ACT(acts, ACT_SHOOT) || ACT(acts, ACT_SPECIAL));
+        /* the crosshair follows real shots: the game's weapon-firing flags (+0x174 & 0xC0, set
+           by the shot code), not presses */
+        since_fire = ok && (P8(PL_FIRE_FLAGS) & 0xC0) ? 0 : since_fire < 1e9 ? since_fire + ticks : since_fire;
         if (firing)
             aim_hold = AIM_HOLD;
         else if (!ok)

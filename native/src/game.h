@@ -45,6 +45,7 @@
 #define PL_INPUT_FLAGS          0xBD        /* 0x40 input locked, 0x20 scripted input */
 #define PL_RUN_DIR              0x112       /* u8 run direction vs facing: 0 fwd, 1 left, 2 back, 3 right */
 #define PL_RUN_DIR_PREV         0x113
+#define PL_FIRE_FLAGS           0x174       /* u8: 0x80 buster / 0x40 special firing (set per shot) */
 #define PL_MOVE_ANGLE           0x116       /* s16 travel offset from facing */
 #define PL_HELD                 0x11C       /* u16 held buttons (PS1 bits) */
 #define PL_MASK_WALK            0x134       /* u16 walk-modifier button mask (0x2000) */
