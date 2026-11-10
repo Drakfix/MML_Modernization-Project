@@ -50,6 +50,8 @@
 #include "frame_rec.h"
 #include "bglayer.h"
 #include "watch.h"
+#include "voice.h"
+#include "subtitles.h"
 
 
 static char g_game_dir[MAX_PATH];
@@ -675,6 +677,15 @@ void mml_init(void)
         input_jp_buttons(_stricmp(in, "japanese") != 0);
     }
     ambience_install(g_ini);   /* room ambience loops ([general] ambience_loop) */
+    if (addr_game == GAME_US) {   /* (both are keyed by the US voice banks) */
+        char v[16];
+        int subs;
+        ini_string("general", "voices", "english", v, sizeof v);
+        /* the cutscenes' subtitles, with either voices (Setup downloads them), then the voices */
+        subs = subtitles_install(g_game_dir, GetPrivateProfileIntA("general", "subtitles", 1, g_ini));
+        voice_install(g_game_dir, _stricmp(v, "japanese") == 0, subs,   /* SPJ banks (tools/voice) */
+                      GetPrivateProfileIntA("debug", "voice_log", 0, g_ini));
+    }
     {
         char w[128];
         ini_string("debug", "watch", "", w, sizeof w);

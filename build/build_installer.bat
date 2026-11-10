@@ -18,6 +18,7 @@ echo Building the installer...
 python -m PyInstaller --noconfirm --onefile --windowed --name "MML-Setup" ^
   --icon "%ROOT%\art\mml.ico" --add-data "%ROOT%\dist\release\game-files;game-files" ^
   --add-data "%ROOT%\dist\release\CAPCOM.AVI;." --add-data "%ROOT%\art\mml.ico;." --paths "%ROOT%\src" ^
+  --paths "%ROOT%\tools\voice" --hidden-import build_jp_voices --hidden-import build_subtitles ^
   --distpath "%ROOT%\dist" --workpath "%TEMP%\mml_isetup" --specpath "%TEMP%\mml_isetup" ^
   "%ROOT%\src\mml_installer.py"
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)

@@ -309,4 +309,23 @@ int gamefiles_bundled_intro(const char *dir)
 {
     return exists(dir, "Modernization\\intro.mpg");
 }
+
+void gamefiles_subtitles_begin(const char *dir)
+{
+    (void)dir;
+}
+
+void gamefiles_voices_begin(const char *us_dir, const char *jp_dir)
+{
+    (void)us_dir;
+    (void)jp_dir;
+}
+
+int gamefiles_task_poll(char *status, size_t n, float *progress)
+{
+    if (n)
+        status[0] = 0;
+    *progress = 0;
+    return TASK_IDLE;
+}
 #endif

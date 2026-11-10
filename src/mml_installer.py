@@ -88,6 +88,107 @@ def detect_game_folder():
     return ""
 
 
+# ---- English subtitles for the cutscenes, Japanese voices (both optional, for the US version) ----
+# The subtitles are the Rockman DASH PSP English project's work (the English voice acting,
+# transcribed and timed): tools/voice/build_subtitles.py downloads that project's file from its
+# GitHub repository during setup (never shipped with the patch) and credits it. They show with
+# either voices. The Japanese voices are built from the player's own Rockman DASH PC copy by
+# tools/voice/build_jp_voices.py (bundled): nothing of either game is in the patch.
+_VOICE_TOOLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "voice")
+if not getattr(sys, "frozen", False) and _VOICE_TOOLS not in sys.path:
+    sys.path.insert(0, _VOICE_TOOLS)
+import build_jp_voices   # noqa: E402
+import build_subtitles   # noqa: E402
+
+SUBS_PROJECT = "Rockman DASH PSP English project"
+SUBS_REPO = build_subtitles.SOURCE_REPO
+
+
+def is_jp_folder(path):
+    """a Rockman DASH (Japanese PC) folder with what the voices are built from"""
+    return bool(path) and game_exe(path) == "ROCKMAN.EXE" and all(
+        os.path.isdir(os.path.join(path, d)) for d in ("SPH", "DAT"))
+
+
+def detect_jp_folder():
+    for root in (os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                 os.environ.get("ProgramFiles", r"C:\Program Files")):
+        d = os.path.join(root or "", "Capcom", "Rockman Dash")
+        if is_jp_folder(d):
+            return d
+    d = detect_game_folder()
+    return d if is_jp_folder(d) else ""
+
+
+def set_ini(path, section, values):
+    """[section] key=value in an ini file, everything else in it kept as it is"""
+    try:
+        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        lines = []
+    todo, out, cur, done_sec = dict(values), [], None, False
+
+    def rest():
+        for k, v in todo.items():
+            out.append(f"{k}={v}")
+        todo.clear()
+
+    for line in lines:
+        st = line.strip()
+        if st.startswith("[") and st.endswith("]"):
+            if cur == section.lower():
+                while out and not out[-1].strip():
+                    out.pop()
+                rest()
+                out.append("")
+                done_sec = True
+            cur = st[1:-1].strip().lower()
+        elif cur == section.lower() and "=" in st and not st.startswith(";"):
+            key = st.split("=", 1)[0].strip()
+            hit = next((k for k in todo if k.lower() == key.lower()), None)
+            if hit is not None:
+                out.append(f"{key}={todo.pop(hit)}")
+                continue
+        out.append(line)
+    if cur == section.lower():
+        rest()
+    elif not done_sec and todo:
+        out.extend(["", f"[{section}]"])
+        rest()
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out).rstrip("\n") + "\n")
+
+
+def install_subtitles(game_dir, log):
+    """The English subtitles for the cutscenes; returns a line for the finish page."""
+    import contextlib
+    import io
+    log(f"Downloading the English subtitles from the {SUBS_PROJECT}...", 0.92)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            build_subtitles.main(None, game_dir)
+    except BaseException as e:   # (the builders stop with SystemExit)
+        set_ini(os.path.join(game_dir, "mml.ini"), "general", {"subtitles": 0})
+        return (f"The subtitles couldn't be downloaded: {e}\n"
+                "Everything else is installed; run Setup again later to add the subtitles.")
+    set_ini(os.path.join(game_dir, "mml.ini"), "general", {"subtitles": 1})
+    return f"English subtitles: the work of the {SUBS_PROJECT},\n{SUBS_REPO}"
+
+
+def install_jp_voices(game_dir, jp_dir, log):
+    """The Japanese voices for the US version in game_dir; returns a line for the finish page."""
+    import contextlib
+    import io
+    log("Building the Japanese voices from your Rockman DASH copy...", 0.96)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            build_jp_voices.main(game_dir, jp_dir)
+    except BaseException as e:
+        return f"The Japanese voices couldn't be built: {e}"
+    set_ini(os.path.join(game_dir, "mml.ini"), "general", {"voices": "japanese"})
+    return "Japanese voices installed (the launcher switches between them and the English ones)."
+
+
 HOOK_DLL_NAMES = [n.lower() for n in M.HOOK_DLL_NAMES]
 
 
@@ -118,9 +219,10 @@ KEEP_IF_PRESENT = {"mml.ini"}
 MAX_INTRO_DIR = 116
 
 
-def do_install(game_dir, add_desktop_shortcut, log):
+def do_install(game_dir, add_desktop_shortcut, log, jp_dir=None, subtitles=False):
     """Patch + install into game_dir. `log(msg, frac)` reports progress (frac 0..1).
-    Returns (ok, message)."""
+    US version only: subtitles downloads the English subtitles for the cutscenes; jp_dir, a
+    Rockman DASH folder, has the Japanese voices built from it. Returns (ok, message)."""
     res = _res_dir()
     name = game_exe(game_dir)
     if not name:
@@ -222,14 +324,22 @@ def do_install(game_dir, add_desktop_shortcut, log):
 
     # 5. desktop shortcut ---------------------------------------------------------
     if add_desktop_shortcut:
-        log("Adding the Desktop shortcut...", 0.94)
+        log("Adding the Desktop shortcut...", 0.89)
         try:
             make_desktop_shortcut(game_dir)
         except Exception as e:
-            log(f"(couldn't add the shortcut: {e})", 0.95)
+            log(f"(couldn't add the shortcut: {e})", 0.89)
+
+    # 6. subtitles, Japanese voices (optional) --------------------------------------------
+    notes = []
+    if subtitles and ed.name == "US":
+        notes.append(install_subtitles(game_dir, log))
+    if jp_dir and ed.name == "US":
+        notes.append(install_jp_voices(game_dir, jp_dir, log))
+    note = "\n\n".join(notes)
 
     log("Done!", 1.0)
-    return True, "Installation complete."
+    return True, "Installation complete." + ("\n\n" + note if note else "")
 
 
 def make_desktop_shortcut(game_dir):
@@ -269,15 +379,23 @@ def run_gui():
     root.title(f"{APP_NAME} - Setup")
     root.configure(bg=BG)
     root.resizable(False, False)
-    root.geometry("640x460")
+    sc = max(1.0, root.winfo_fpixels("1i") / 96.0)   # (the display's scaling: fonts grow with it)
+
+    def px(v):
+        return int(v * sc)
+
+    def fit():   # the window as wide as designed, as tall as the page needs
+        root.update_idletasks()
+        root.geometry(f"{px(640)}x{max(px(460), root.winfo_reqheight())}")
     try:
         root.iconbitmap(os.path.join(_res_dir(), "mml.ico"))
     except Exception:
         pass
 
-    state = {"dir": detect_game_folder(), "shortcut": tk.BooleanVar(value=True), "busy": False}
+    state = {"dir": detect_game_folder(), "shortcut": tk.BooleanVar(value=True), "busy": False,
+             "jp_on": tk.BooleanVar(value=False), "subs": tk.BooleanVar(value=True)}
 
-    header = tk.Frame(root, bg=CARD, height=88)
+    header = tk.Frame(root, bg=CARD, height=px(88))
     header.pack(fill="x"); header.pack_propagate(False)
     tk.Label(header, text="MEGA MAN LEGENDS", bg=CARD, fg=TEXT,
              font=("Segoe UI", 17, "bold")).pack(anchor="w", padx=22, pady=(16, 0))
@@ -301,20 +419,25 @@ def run_gui():
              bg=BG, fg=TEXT, font=("Segoe UI", 11), justify="left").pack(anchor="w")
     tk.Label(p1, text="Nothing else needs to be installed. Your original files are backed up.",
              bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left").pack(anchor="w", pady=(4, 18))
-    tk.Label(p1, text="Your Mega Man Legends folder (with MEGAMAN.EXE, or ROCKMAN.EXE for Rockman DASH):",
-             bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+    tk.Label(p1, text="Your game folder (with MEGAMAN.EXE, or ROCKMAN.EXE for Rockman DASH):",
+             bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold"), justify="left", wraplength=px(590)).pack(anchor="w")
     rowf = tk.Frame(p1, bg=BG); rowf.pack(fill="x", pady=(6, 4))
     path_var = tk.StringVar(value=state["dir"])
     entry = tk.Entry(rowf, textvariable=path_var, bg=FIELD, fg=TEXT, insertbackground=TEXT,
                      relief="flat", font=("Segoe UI", 10))
     entry.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 8))
-    status = tk.Label(p1, text="", bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left", wraplength=560)
+    status = tk.Label(p1, text="", bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left", wraplength=px(560))
     status.pack(anchor="w")
 
     def validate(*_):
         d = path_var.get().strip('"').strip()
         state["dir"] = d
-        if is_game_folder(d) and len(os.path.abspath(d)) > MAX_INTRO_DIR:
+        validate_jp()
+        if is_game_folder(d) and state["jp_on"].get() and game_exe(d) == "MEGAMAN.EXE" and not jp_ok():
+            status.configure(text=f"✓  {game_exe(d)} found. Pick your Rockman DASH folder for the "
+                                  "Japanese voices below, or untick them.", fg=AMBER)
+            install_btn.configure(state="disabled", bg=FIELD)
+        elif is_game_folder(d) and len(os.path.abspath(d)) > MAX_INTRO_DIR:
             status.configure(text=f"✓  {game_exe(d)} found. Heads up: this folder path is long "
                                   f"({len(os.path.abspath(d))} characters). The game runs fine, but its "
                                   f"intro video can't play from folders longer than {MAX_INTRO_DIR} "
@@ -343,6 +466,81 @@ def run_gui():
                    bg=BG, fg=TEXT, selectcolor=FIELD, activebackground=BG, activeforeground=TEXT,
                    font=("Segoe UI", 10), bd=0, highlightthickness=0,
                    cursor="hand2").pack(anchor="w", pady=(22, 0))
+
+    # ---- optional: English subtitles, Japanese voices (US version only) ----
+    jp = tk.Frame(p1, bg=BG)
+    jp_var = tk.StringVar(value="")
+
+    def jp_ok():
+        return is_jp_folder(jp_var.get().strip('"').strip())
+
+    def validate_jp(*_):
+        d = state["dir"]
+        if game_exe(d) == "MEGAMAN.EXE":
+            jp.pack(fill="x", pady=(10, 0))
+        else:   # (the Japanese version: its own voices; the subtitles follow the US one's tracks)
+            jp.pack_forget()
+        on = state["jp_on"].get()
+        for w in (jp_entry, jp_browse):
+            w.configure(state="normal" if on else "disabled")
+        if on and not jp_var.get():
+            jp_var.set(detect_jp_folder())
+        if not on:
+            jp_status.configure(text="Built from your own copy of the Japanese PC game; nothing of it "
+                                     "comes with the patch.", fg=DIM)
+        elif jp_ok():
+            jp_status.configure(text="✓  Rockman DASH found.", fg=GREEN)
+        else:
+            jp_status.configure(text="Pick the Rockman DASH folder (with ROCKMAN.EXE, DAT and SPH).", fg=RED)
+        fit()
+
+    def jp_toggle():
+        validate_jp()
+        validate()
+
+    def jp_pick():
+        d = filedialog.askdirectory(title="Select your Rockman DASH folder")
+        if d:
+            jp_var.set(os.path.normpath(d))
+
+    def open_repo(_=None):
+        import webbrowser
+        webbrowser.open(SUBS_REPO)
+
+    def check(parent, text, var, command=None):
+        return tk.Checkbutton(parent, text="  " + text, variable=var, command=command, bg=BG, fg=TEXT,
+                              selectcolor=FIELD, activebackground=BG, activeforeground=TEXT,
+                              font=("Segoe UI", 10), bd=0, highlightthickness=0, cursor="hand2")
+
+    check(jp, "English subtitles for the cutscenes", state["subs"]).pack(anchor="w")
+    credit = tk.Frame(jp, bg=BG)
+    credit.pack(fill="x", padx=(26, 0))
+    tk.Label(credit, text=f"Downloaded during setup from the {SUBS_PROJECT}:",
+             bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left", wraplength=px(560)).pack(anchor="w")
+    link = tk.Label(credit, text=SUBS_REPO, bg=BG, fg=ACCENT, cursor="hand2",
+                    font=("Segoe UI", 9, "underline"))
+    link.pack(anchor="w")
+    link.bind("<Button-1>", open_repo)
+    tk.Label(credit, text="The subtitles are that project's work: the English voice acting, transcribed "
+                          "and timed. They show with the English voices and with the Japanese ones.",
+             bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left", wraplength=px(560)).pack(anchor="w")
+
+    check(jp, "Japanese voices, from my Rockman DASH (Japanese PC version) copy", state["jp_on"],
+          jp_toggle).pack(anchor="w", pady=(10, 0))
+    jp_in = tk.Frame(jp, bg=BG)
+    jp_in.pack(fill="x", padx=(26, 0))
+    jp_row = tk.Frame(jp_in, bg=BG)
+    jp_row.pack(fill="x", pady=(4, 2))
+    jp_entry = tk.Entry(jp_row, textvariable=jp_var, bg=FIELD, fg=TEXT, insertbackground=TEXT,
+                        relief="flat", font=("Segoe UI", 10), disabledbackground=CARD)
+    jp_entry.pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 8))
+    jp_browse = tk.Button(jp_row, text="Browse…", command=jp_pick, bg=FIELD, fg=TEXT, relief="flat",
+                          font=("Segoe UI", 10), activebackground="#2b3d50", cursor="hand2", padx=14)
+    jp_browse.pack(side="left", ipady=2)
+    jp_status = tk.Label(jp_in, text="", bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left",
+                         wraplength=px(540))
+    jp_status.pack(anchor="w")
+    jp_var.trace_add("write", lambda *_: (validate_jp(), validate()))
 
     # ---- page: installing ----
     p2 = tk.Frame(body, bg=BG); pages["installing"] = p2
@@ -381,7 +579,10 @@ def run_gui():
         root.update_idletasks()
 
         def worker():
-            ok, msg = do_install(state["dir"], state["shortcut"].get(), set_prog)
+            use_jp = state["jp_on"].get()
+            ok, msg = do_install(state["dir"], state["shortcut"].get(), set_prog,
+                                 jp_dir=jp_var.get().strip('"').strip() if use_jp else None,
+                                 subtitles=state["subs"].get())
             root.after(0, lambda: finish(ok, msg))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -391,9 +592,11 @@ def run_gui():
         if ok:
             done_icon.configure(text="✓", fg=GREEN)
             done_lbl.configure(text="All set!")
+            note = msg.split("\n\n", 1)[1] if "\n\n" in msg else ""
             done_sub.configure(text="Mega Man Legends is ready to play.\n"
                                     + ("A shortcut was added to your Desktop.\n" if state["shortcut"].get() else "")
-                                    + "You can also start it any time from MML Launcher.exe in the game folder.")
+                                    + "You can also start it any time from MML Launcher.exe in the game folder."
+                                    + ("\n\n" + note if note else ""), wraplength=px(580))
             play_btn.pack(side="right", ipady=4)
         else:
             done_icon.configure(text="✕", fg=RED)
@@ -417,6 +620,7 @@ def run_gui():
 
     show("welcome")
     validate()
+    fit()
     shot = os.environ.get("MML_SETUP_SHOT")
     if shot:
         def grab():

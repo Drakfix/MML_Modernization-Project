@@ -99,6 +99,16 @@ copy.
 - **New intro video,** with an option to skip it entirely.
 - **Timing fix** for the cutscene audio drift on modern PCs.
 
+### Subtitles and Japanese voices (optional, US version)
+
+- **English subtitles for the cutscenes,** which were never subtitled in the original release.
+  They show with the English voices and with the Japanese ones. They are the work of the
+  [Rockman DASH PSP English project](https://github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher)
+  and are downloaded from its repository during setup (see [Credits](#subtitles-and-japanese-voices)).
+- **Japanese voices,** built from your own copy of Rockman DASH (the Japanese PC version): the
+  cutscenes, the in-game lines and the title screen. The launcher, or the Android start menu,
+  switches between the English and the Japanese voices.
+
 ## Requirements
 
 **Windows**
@@ -132,6 +142,8 @@ The installer:
 - Installs the runtime, the standalone engine, the launcher, the compatibility wrappers and
   their licenses.
 - Installs the new intro and keeps the original as `CAPCOM.AVI.original`.
+- Optionally downloads the English subtitles for the cutscenes (on by default), and builds the
+  Japanese voices from a Rockman DASH folder you select.
 
 **Upgrading:** run the new installer on the same folder. Your saves and settings are kept.
 
@@ -143,8 +155,13 @@ The installer:
 2. Download `MML-<version>.apk` from the [latest release](../../releases) and install it
    (allow installing apps from your browser or file manager when Android asks).
 3. Open **Mega Man Legends**. The start menu opens on the **Files** page.
-4. Choose **Import**, pick the game folder in Android's folder picker, and allow access.
+4. Select **US version**, press A, pick the game folder in Android's folder picker, and allow
+   access.
 5. Wait for the copy to finish (a few minutes), then press **Play**.
+
+On the same page, **Subtitles** downloads the English subtitles for the cutscenes (press A), and
+**Voices** builds the Japanese voices from an imported **Japanese version** (about 260 MB). Once
+there, the same rows turn them on and off.
 
 The import checks and patches the executable the same way the Windows installer does, copies
 only what the game uses, and leaves the picked folder unchanged. The folder can be deleted
@@ -394,5 +411,33 @@ components; full licenses are in [licenses/](licenses) and sources in
 
 The Legacy controller configuration builds on the Xidi setup from KuroRaiden's
 *Mega Man Legends PC Fix* repack (@NC_KuroRaiden).
+
+### Subtitles and Japanese voices
+
+The cutscenes' English subtitles show with the English voices and with the Japanese ones. The
+Japanese voices are built on the player's own computer or device from their copy of Rockman DASH
+(the Japanese PC version). Nothing of either game comes with the patch.
+
+- **Subtitles:** the English subtitles are the work of the
+  [Rockman DASH PSP English project](https://github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher)
+  (JamesAZ0 and its contributors), who transcribed the US voice acting and timed the lines to it.
+  Setup (or the Android app's start menu) downloads its `script/subtitles_en.csv` (commit
+  `7d49ceb`) from that repository and converts it for the PC version; this repository and the
+  patch's downloads never contain it.
+  That project's work is under the MIT license (Copyright (c) 2026 The Rockman DASH PSP English
+  project contributors). The lines belong to Capcom.
+- **Through that project:** it credits OpenAI's Whisper, which it used to transcribe the English
+  voice acting for the timings, Estil's GameFAQs script, which it used to check the transcripts,
+  and OmbraRD's [DashEditor](https://github.com/OmbraRD/DashEditor), whose research into the
+  game's file formats was the starting point of its tools.
+- **The Japanese PSX English patch:** Gaiko's Mega Man Legends Japanese PSX English patch
+  (v1.1.13, [Romhacking.net](https://www.romhacking.net/translations/7838/)) led us to the PSP
+  project and its subtitle timing.
+
+### Research
+
+- [The Cutting Room Floor](https://tcrf.net/Mega_Man_Legends): its list of the regional
+  differences between Mega Man Legends and Rockman DASH guides the optional Japanese-version
+  features.
 
 Mega Man Legends is a trademark of Capcom. This project is not affiliated with Capcom.

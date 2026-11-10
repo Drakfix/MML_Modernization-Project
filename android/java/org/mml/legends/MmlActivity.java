@@ -131,6 +131,36 @@ public class MmlActivity extends SDLActivity {
         });
     }
 
+    /* ---- the English subtitles for the cutscenes (Subtitles.java), on a thread of its own;
+     * android_files.c polls subtitlesState: 1 running, 2 done, 3 failed ---- */
+    static volatile int sSubState;
+    static volatile String sSubMessage = "";
+
+    public static void downloadSubtitles(final String dir) {
+        sSubState = 1;
+        sSubMessage = "Downloading the subtitles from the Rockman DASH PSP English project";
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    Subtitles.install(new File(dir));
+                    sSubMessage = "Subtitles downloaded";
+                    sSubState = 2;
+                } catch (Exception e) {
+                    sSubMessage = "The subtitles couldn't be downloaded: " + e.getMessage();
+                    sSubState = 3;
+                }
+            }
+        }, "mml-subtitles").start();
+    }
+
+    public static int subtitlesState() {
+        return sSubState;
+    }
+
+    public static String subtitlesMessage() {
+        return sSubMessage;
+    }
+
     public static long[] importStatus() {
         return new long[] { sState, sDone, sTotal };
     }

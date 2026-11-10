@@ -36,7 +36,7 @@ static struct {
     ui_glyph glyph[UI_FONTS][LAST_CHAR + 1];
     ui_vert verts[MAX_VERTS];
     int nverts;
-    struct { gfx_ui_draw_fn fn; void *user; } draw[4];
+    struct { gfx_ui_draw_fn fn; void *user; } draw[8];
     int ndraw;
 } U;
 

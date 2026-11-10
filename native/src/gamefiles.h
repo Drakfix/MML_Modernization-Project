@@ -34,3 +34,12 @@ int gamefiles_bundled_intro(const char *dir);
    version's files the intro and CAPCOM.AVI (see gamefiles.c). Before anything reads mml.ini. */
 void gamefiles_defaults(const char *dir);
 int gamefiles_bundled_file(const char *name, const char *dir);   /* an app file into dir (platform) */
+
+/* ---- the platform's extras for the US version, one at a time (where there is no installer) ---- */
+enum { TASK_IDLE, TASK_RUNNING, TASK_DONE, TASK_FAILED };
+/* the English subtitles for the cutscenes, downloaded into dir\Modernization (Subtitles.java) */
+void gamefiles_subtitles_begin(const char *dir);
+/* the Japanese voices (SPJ, DAJ) built into us_dir from the Japanese version in jp_dir (voice_build.h) */
+void gamefiles_voices_begin(const char *us_dir, const char *jp_dir);
+/* the running one's state; status: a line for the screen; progress 0..1 */
+int gamefiles_task_poll(char *status, size_t n, float *progress);

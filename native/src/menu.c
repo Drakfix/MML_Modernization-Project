@@ -43,6 +43,7 @@
 #include "toast.h"
 #include "texreplace.h"
 #include "ui_style.h"
+#include "voice_build.h"
 
 #define MAX_PRESETS 4096
 
@@ -54,6 +55,9 @@ enum {
     /* the start menu's game files: the version to play; the US and the Japanese copy (where they
        stand, A imports) */
     IT_GF_EDITION, IT_GF_US, IT_GF_JP,
+    /* the US version's extras: the English subtitles (A downloads them), the Japanese voices (A
+       builds them from the Japanese version); then on / off */
+    IT_GF_SUBS, IT_GF_VOICES,
 };
 
 /* an IT_CHOICE's choice: "section.key=value;section.key=value" written when chosen (a choice
@@ -195,6 +199,11 @@ static const item g_start_items[] = {
       "MEGAMAN.EXE) to this device, then pick it. That folder isn't changed." },
     { PAGE_FILES, IT_GF_JP, "Japanese version", "A imports Rockman DASH for Windows PC: copy its folder (with "
       "ROCKMAN.EXE) to this device, then pick it. It's kept apart from the US version." },
+    { PAGE_FILES, IT_GF_SUBS, "Subtitles", "US version: English subtitles for the cutscenes, with either voices. "
+      "They are the work of the Rockman DASH PSP English project (github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher): "
+      "the English voice acting, transcribed and timed. A downloads them from there, then turns them on and off." },
+    { PAGE_FILES, IT_GF_VOICES, "Voices", "US version: Japanese plays the Japanese voice acting. A builds it from "
+      "your Japanese version (import it first; about 260 MB), then switches between English and Japanese." },
 };
 
 /* the tables in use: the in-game menu's, or the start menu's before the game */
@@ -223,6 +232,10 @@ static struct {
     int edition;                            /* the version to play (gamefiles_edition) */
     float gf_progress;
     char gf_line[200];
+    /* the US version's extras (gamefiles_task_poll): the one running (IT_GF_SUBS / IT_GF_VOICES, 0) */
+    int tk_kind, tk_state, subs_there, subs_on, voices_built, voices_jp;
+    float tk_progress;
+    char tk_line[200];
     int scroll;                             /* the first row shown (long pages) */
     int chv[MAX_ITEMS];                     /* IT_CHOICE values, by item */
     int pad_ui;                             /* button prompts for the pad (else the keyboard) */
@@ -547,8 +560,41 @@ static void change_item(const item *it, int dir)
         M.kick_at = now_s();
         return;
     }
+    if (it->kind == IT_GF_SUBS || it->kind == IT_GF_VOICES) {
+        int subs = it->kind == IT_GF_SUBS;
+        if (M.tk_state == TASK_RUNNING || gf_busy())
+            return;
+        if (subs ? M.subs_there : M.voices_built) {   /* there: on / off */
+            if (subs) {
+                M.subs_on = !M.subs_on;
+                WritePrivateProfileStringA("general", "subtitles", M.subs_on ? "1" : "0", M.ini);
+            } else {
+                M.voices_jp = !M.voices_jp;
+                WritePrivateProfileStringA("general", "voices", M.voices_jp ? "japanese" : "english", M.ini);
+            }
+            M.kick_dir = dir;
+            M.kick_at = now_s();
+        } else if (dir > 0 && !M.gf_ready[0]) {
+            note("Import the US version first");
+        } else if (dir > 0 && !subs && !M.gf_ready[1]) {
+            note("Import the Japanese version first: the voices are built from it");
+        } else if (dir > 0) {
+            M.tk_kind = it->kind;
+            M.tk_state = TASK_RUNNING;
+            M.tk_progress = 0;
+            M.tk_line[0] = 0;
+            if (subs) {
+                gamefiles_subtitles_begin(M.game_dir);
+            } else {
+                char jp[MAX_PATH];
+                gamefiles_dir(M.game_dir, 1, jp, sizeof jp);
+                gamefiles_voices_begin(M.game_dir, jp);
+            }
+        }
+        return;
+    }
     if (it->kind == IT_GF_US || it->kind == IT_GF_JP) {
-        if (!gf_busy() && dir > 0) {
+        if (!gf_busy() && M.tk_state != TASK_RUNNING && dir > 0) {
             char d[MAX_PATH];
             M.gf_jp = it->kind == IT_GF_JP;
             M.gf_state = IMPORT_PICKING;
@@ -618,6 +664,18 @@ static void value_text(int kind, char *out, size_t n)
             strcpy_s(out, n, M.gf_ready[k] ? "Ready" : "Not imported");
         break;
     }
+    case IT_GF_SUBS:
+        if (M.tk_state == TASK_RUNNING && M.tk_kind == kind)
+            strcpy_s(out, n, "Downloading");
+        else
+            strcpy_s(out, n, !M.subs_there ? "Not downloaded" : M.subs_on ? "On" : "Off");
+        break;
+    case IT_GF_VOICES:
+        if (M.tk_state == TASK_RUNNING && M.tk_kind == kind)
+            _snprintf_s(out, n, _TRUNCATE, "Building %d%%", (int)(M.tk_progress * 100));
+        else
+            strcpy_s(out, n, !M.voices_built ? "Not built" : M.voices_jp ? "Japanese" : "English");
+        break;
     default: out[0] = 0; break;
     }
 }
@@ -628,6 +686,8 @@ static int toggle_state(int kind)
     switch (kind) {
     case IT_GF_US:
     case IT_GF_JP: return gf_busy() && M.gf_jp == (kind == IT_GF_JP) ? -1 : M.gf_ready[kind == IT_GF_JP];
+    case IT_GF_SUBS: return M.tk_state == TASK_RUNNING && M.tk_kind == kind ? -1 : M.subs_there ? M.subs_on : 0;
+    case IT_GF_VOICES: return M.tk_state == TASK_RUNNING && M.tk_kind == kind ? -1 : M.voices_built && M.voices_jp;
     case IT_VSYNC: return M.vsync;
     case IT_HDTEX: return M.hdtex;
     case IT_INVERT_X: return M.inv_x;
@@ -648,6 +708,11 @@ static int gauge(int kind, int *total)
             return -1;
         *total = 10;
         return (int)(M.gf_progress * 10 + 0.5f);
+    case IT_GF_VOICES:
+        if (M.tk_state != TASK_RUNNING || M.tk_kind != kind)
+            return -1;
+        *total = 10;
+        return (int)(M.tk_progress * 10 + 0.5f);
     default: return -1;
     }
 }
@@ -1043,6 +1108,10 @@ static void draw(void *user, int w, int h)
                    (gf_busy() || (M.cursor >= 0 && g_items[M.cursor].kind == (M.gf_jp ? IT_GF_JP : IT_GF_US)))) {
             /* (the import's progress or outcome, on its version's row) */
             wrapped(hx, hy, hw, M.gf_line, M.gf_state == IMPORT_FAILED ? COL_WARN : 0xFFB4C6D8, 0.72f);
+        } else if (M.start && M.page == PAGE_FILES && M.tk_line[0] && !M.on_play && M.cursor >= 0 &&
+                   g_items[M.cursor].kind == M.tk_kind) {
+            /* (an extra's progress or outcome, on its row) */
+            wrapped(hx, hy, hw, M.tk_line, M.tk_state == TASK_FAILED ? COL_WARN : 0xFFB4C6D8, 0.72f);
         } else if (M.start && M.on_play) {
             wrapped(hx, hy, hw, "Starts the game with these settings. They're saved, and the in-game menu "
                     "(Back + Start) changes most of them while you play.", 0xFFB4C6D8, 0.72f);
@@ -1217,6 +1286,26 @@ void menu_frame(void)
                 log_printf("menu: game files: %s", M.gf_line);
             }
         }
+        if (M.tk_state == TASK_RUNNING) {   /* an extra goes on (the menu stays in use) */
+            char line[200];
+            int st = gamefiles_task_poll(line, sizeof line, &M.tk_progress);
+            if (line[0])
+                strcpy_s(M.tk_line, sizeof M.tk_line, line);
+            if (st == TASK_DONE && M.tk_kind == IT_GF_SUBS) {
+                M.subs_there = M.subs_on = 1;
+                WritePrivateProfileStringA("general", "subtitles", "1", M.ini);
+                strcpy_s(M.tk_line, sizeof M.tk_line, "Subtitles downloaded and on. The Rockman DASH PSP English "
+                         "project made them: github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher");
+            } else if (st == TASK_DONE) {
+                M.voices_built = M.voices_jp = 1;
+                WritePrivateProfileStringA("general", "voices", "japanese", M.ini);
+                strcpy_s(M.tk_line, sizeof M.tk_line, "Japanese voices built and on.");
+            }
+            if (st != TASK_RUNNING) {
+                M.tk_state = st == TASK_DONE ? TASK_DONE : TASK_FAILED;
+                log_printf("menu: %s", M.tk_line);
+            }
+        }
         if (M.block) {   /* (see above) */
             plat_take_back();
             return;
@@ -1226,6 +1315,12 @@ void menu_frame(void)
             return;
         }
         if ((pressed & K_PLAY) || (M.on_play && (pressed & K_OK))) {
+            if (M.tk_state == TASK_RUNNING) {   /* (the game reads what is being written) */
+                set_page(PAGE_FILES);
+                note(M.tk_kind == IT_GF_SUBS ? "Wait for the subtitles to finish downloading"
+                                             : "Wait for the voices to finish building");
+                return;
+            }
             if (gamefiles_can_import() && !M.gf_ready[M.edition]) {   /* nothing to play yet */
                 set_page(PAGE_FILES);
                 note(M.gf_ready[!M.edition] ? (M.edition ? "Import the Japanese version first, or play the US one"
@@ -1493,6 +1588,15 @@ int menu_start(const char *ini, const char *game_dir)
         M.gf_ready[0] = gamefiles_ready(game_dir);
         M.gf_ready[1] = gamefiles_can_import() && gamefiles_ready(jp);
         M.edition = gamefiles_edition(game_dir);
+        {
+            char p[MAX_PATH];
+            _snprintf_s(p, sizeof p, _TRUNCATE, "%s\\Modernization\\subtitles_en.txt", game_dir);
+            M.subs_there = GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES;
+            M.subs_on = GetPrivateProfileIntA("general", "subtitles", 1, ini) != 0;
+            M.voices_built = voice_built(game_dir);
+            GetPrivateProfileStringA("general", "voices", "english", p, sizeof p, ini);
+            M.voices_jp = _stricmp(p, "japanese") == 0;
+        }
         set_page(gamefiles_can_import() && !M.gf_ready[M.edition] ? PAGE_FILES : 0);
         add_draw_once();
         M.ready = M.open = 1;

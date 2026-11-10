@@ -57,6 +57,14 @@ def find_game_dir():
 GAME_DIR = find_game_dir()
 GAME_EXE = game_exe_in(GAME_DIR) or "MEGAMAN.EXE"
 JAPANESE = GAME_EXE == "ROCKMAN.EXE"   # Rockman DASH: the Classic engine only, for now
+# The US version's optional extras from Setup: English subtitles for the cutscenes (the Rockman
+# DASH PSP English project's, downloaded), with either voices; Japanese voices (built into SPJ
+# from the player's Rockman DASH copy)
+JP_VOICES = bool(GAME_DIR) and not JAPANESE and os.path.isdir(os.path.join(GAME_DIR, "SPJ"))
+JP_SUBS = bool(GAME_DIR) and not JAPANESE and os.path.isfile(
+    os.path.join(GAME_DIR, "Modernization", "subtitles_en.txt"))
+SUBS_CREDIT = ("Subtitles: the Rockman DASH PSP English project's work, "
+               "github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher")
 SETTINGS = os.path.join(GAME_DIR or BASE, "Modernization", "settings.json")
 
 
@@ -189,6 +197,7 @@ LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
 RUNNER64 = "mml_run64.exe"   # the standalone game: recompiled, 64-bit, no original code
 DEFAULTS = {"renderer": "mml", "window": "fullscreen", "engine": "classic",
             "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play", "jp_buttons": "us",
+            "voices": "english", "subtitles": "on",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
             "lod": "full", "fps": "60", "reticle": "FFD840", "aim": "character", "crosshair": "on",
             "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
@@ -296,6 +305,12 @@ def import_mml_ini(s):
     v, b = get("video", "renderer"), get("video", "backend")
     if v in ("mml", "ddrawcompat"):
         s["renderer"] = "vulkan" if v == "mml" and (b or "").lower() == "vulkan" else v
+    v = get("general", "voices")
+    if v in ("english", "japanese"):
+        s["voices"] = v
+    v = num("general", "subtitles")
+    if v is not None:
+        s["subtitles"] = "on" if v else "off"
     v = num("video", "interp")
     if v is not None:
         s["fps"] = "60" if v else "30"
@@ -561,7 +576,9 @@ def write_mml_ini(s, width):
         "controls": controls_ini(s),
         "textures": {"replace": 1 if s.get("texpack", "on") == "on" else 0,
                      "dump": 1 if s.get("texdump", "off") == "on" else 0},
-        "general": {"intro": s["intro"]},
+        "general": {"intro": s["intro"],
+                    **({"voices": s.get("voices", "english")} if JP_VOICES else {}),
+                    **({"subtitles": 0 if s.get("subtitles") == "off" else 1} if JP_SUBS else {})},
     }, header="; Mega Man Legends Modernization - settings, read by mml.dll when the game starts.\n"
               "; The launcher updates the keys it manages and leaves everything else alone.\n")
 
@@ -748,6 +765,18 @@ class App:
         option("Frame rate", "fps", [("60 fps", "60"), ("30 fps", "30")], row=r, side="right")
         option("Intro video", "intro",
                [("Play (any button skips)", "play"), ("Skip entirely", "skip")])
+        if JP_VOICES or JP_SUBS:
+            r = pair() if JP_VOICES and JP_SUBS else None
+            if JP_VOICES:
+                option("Voices", "voices", [("English", "english"), ("Japanese", "japanese")],
+                       row=r, side="left")
+            if JP_SUBS:
+                option("Subtitles", "subtitles", [("On", "on"), ("Off", "off")], "cutscenes",
+                       row=r, side="right")
+                credit = tk.Label(page[0], text=SUBS_CREDIT, bg=BG, fg=DIM, font=("Segoe UI", 8),
+                                  anchor="w", justify="left")
+                credit.pack(fill="x")
+                credit.bind("<Configure>", lambda e: credit.configure(wraplength=e.width))
         tk.Label(page[0], text="ADVANCED", bg=BG, fg=DIM, font=(HEAD, 9, "bold")).pack(anchor="w", pady=(8, 1))
         have_runner = bool(GAME_DIR) and os.path.exists(os.path.join(GAME_DIR, RUNNER64))
         option("Game engine", "engine",
