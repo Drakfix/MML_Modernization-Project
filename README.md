@@ -9,7 +9,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.7.0 beta.** The 0.1 releases are kept on the
+**Current version: 0.7.1 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
