@@ -104,6 +104,11 @@ static void hash_of(const uint8_t *p, size_t n, char out[65])
     sha_hex(&s, out);
 }
 
+void gamefiles_sha256(const void *data, size_t n, char hex[65])
+{
+    hash_of((const uint8_t *)data, n, hex);
+}
+
 /* ---- files ---- */
 
 static uint8_t *read_all(const char *path, size_t *n)
@@ -277,8 +282,9 @@ void gamefiles_defaults(const char *dir)
         capcom_avi(jp);
 }
 
-#ifndef __ANDROID__
-/* (no importer here yet: the installer sets the folder up) */
+#ifndef __linux__
+/* (no importer here: the installer sets the folder up; Android: android_files.c, Linux:
+   linux_files.c, since Android defines __linux__ too) */
 int gamefiles_bundled_file(const char *name, const char *dir)
 {
     (void)name;

@@ -49,3 +49,6 @@ native/third_party/
 
 # Android build output (android/build_android.py)
 android/build/
+
+# Linux build output (linux/build_linux.py)
+linux/build/

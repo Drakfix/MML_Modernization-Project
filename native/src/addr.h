@@ -11,6 +11,7 @@
  * address itself with the US program and the translated one with the Japanese. Addresses read
  * from game memory (pointers the game stored) are already the running program's own and must
  * not go through GA. .bss addresses (0x559000 and up) are the same in both and need no GA. */
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct {

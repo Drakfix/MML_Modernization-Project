@@ -163,9 +163,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 }
 #else
 /* SDL's startup calls this. The game folder: on Android the app's own folder on the device's
-   storage (Android/data/<app>/files), where the player puts the game's files; elsewhere the
-   current folder. */
+   storage (Android/data/<app>/files), where the player puts the game's files; on Linux the app's
+   own in the user's data folder, or the one given (gamefiles_home); elsewhere the current folder. */
 static int g_exit_code = 1;
+static int g_argc;
+static char **g_argv;
 
 static void game_thread(void *arg)
 {
@@ -178,6 +180,8 @@ static void game_thread(void *arg)
     }
 #ifdef __ANDROID__
     dir = SDL_GetAndroidExternalStoragePath();
+#elif defined(__linux__)
+    dir = gamefiles_home(g_argc, g_argv);
 #endif
     compat_set_game_dir(dir ? dir : ".");
     {   /* [debug] sampler=1: from the start (mml.c starts it only at the first frame) */
@@ -194,7 +198,8 @@ static void game_thread(void *arg)
    the runner's own frames. */
 int main(int argc, char **argv)
 {
-    (void)argc; (void)argv;
+    g_argc = argc;
+    g_argv = argv;
     if (!costack_thread(48u << 20, 8u << 20, game_thread, NULL))
         return 1;
     return g_exit_code;

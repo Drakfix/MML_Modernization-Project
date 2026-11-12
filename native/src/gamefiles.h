@@ -1,11 +1,12 @@
 #pragma once
-/* The player's own game files where there is no installer (Android; later Linux): are they there,
- * is the exe one we know, patch it, and the platform's importer (a copy of the player's game
- * folder into the app's storage). See gamefiles.c and the platform files (android_files.c). */
+/* The player's own game files where there is no installer (Android, Linux): are they there, is the
+ * exe one we know, patch it, and the platform's importer (a copy of the player's game folder into
+ * the app's storage). See gamefiles.c and the platform files (android_files.c, linux_files.c). */
 #include <stddef.h>
 
 /* the game folder holds the patched exe (or one that patches) and the data folders */
 int gamefiles_ready(const char *dir);
+void gamefiles_sha256(const void *data, size_t n, char hex[65]);   /* lower-case hex */
 
 /* Where the player imports their own files, both versions can be there: the US one (Mega Man
    Legends) in the game folder itself, the Japanese one (Rockman DASH) in a folder of its own in it
@@ -34,6 +35,11 @@ int gamefiles_bundled_intro(const char *dir);
    version's files the intro and CAPCOM.AVI (see gamefiles.c). Before anything reads mml.ini. */
 void gamefiles_defaults(const char *dir);
 int gamefiles_bundled_file(const char *name, const char *dir);   /* an app file into dir (platform) */
+#if defined(__linux__) && !defined(__ANDROID__)
+/* Linux: the game folder (--game-dir, else MML_GAME_DIR, else the app's own in the user's data
+   folder: $XDG_DATA_HOME/mml-modernization), made if missing */
+const char *gamefiles_home(int argc, char **argv);
+#endif
 
 /* ---- the platform's extras for the US version, one at a time (where there is no installer) ---- */
 enum { TASK_IDLE, TASK_RUNNING, TASK_DONE, TASK_FAILED };

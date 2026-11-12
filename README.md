@@ -1,6 +1,7 @@
 # Mega Man Legends Modernization Project
 
-A modernization project for the 2001 PC port of Mega Man Legends, for Windows and Android. It
+A modernization project for the 2001 PC port of Mega Man Legends, for Windows and Android, with
+an experimental Linux version. It
 replaces the game's renderer, input and timing with modern versions and adds true widescreen,
 60 fps, modern controls and an in-game settings menu.
 
@@ -20,6 +21,7 @@ copy.
 - [Requirements](#requirements)
 - [Installation on Windows](#installation-on-windows)
 - [Installation on Android](#installation-on-android)
+- [Installation on Linux (experimental)](#installation-on-linux-experimental)
 - [Controls](#controls)
 - [Settings](#settings)
 - [Shaders, ReShade and texture packs](#shaders-reshade-and-texture-packs)
@@ -44,6 +46,9 @@ copy.
   and are downloaded from its repository by Setup or by the Android start menu.
 - **Japanese voices for the US version** (experimental), built from your own copy of Rockman
   DASH: the cutscenes, the in-game lines and the title screen.
+- **Linux version** (experimental): a native x86-64 build with the start menu, the game import,
+  Vulkan, controllers, mouse and keyboard, the subtitles and the Japanese voices. It is a separate
+  download (see [Installation on Linux](#installation-on-linux-experimental)).
 
 **Experimental.** The subtitles and the Japanese voices have not been checked through the whole
 game yet. The subtitles are timed to the English voice acting. With the Japanese voices they
@@ -79,7 +84,7 @@ the Japanese line being spoken.
   nearest-neighbour upscaling.
 - **Draw distance options.** Lighter or no distance fog, and full-detail models at any
   distance instead of the original low-poly swaps.
-- **Renderers.** Direct3D 11 or Vulkan on Windows, Vulkan on Android.
+- **Renderers.** Direct3D 11 or Vulkan on Windows, Vulkan on Android and Linux.
 - **Display modes** (Windows). Borderless (the default, with normal Alt+Tab, screenshots and
   capture), exclusive fullscreen or windowed.
 - **Post-processing** (Windows, Direct3D 11). RetroArch shader presets (CRT and others)
@@ -102,7 +107,7 @@ the Japanese line being spoken.
 - **Any controller.** SDL3 supports Xbox, PlayStation, Switch and most other pads, and the
   built-in controls of Android handhelds. The D-pad works as a second movement input, as in
   the PS1 version.
-- **Mouse and keyboard** (Windows). Mouse look, WASD movement and mouse aiming.
+- **Mouse and keyboard** (Windows and Linux). Mouse look, WASD movement and mouse aiming.
 - **Remapping.** Every controller button and keyboard key used by the modern controls can be
   rebound.
 - **Vanilla mode.** Leaves the game's controls completely stock.
@@ -152,6 +157,15 @@ the Japanese line being spoken.
 - About **2.5 GB** of free space (the game is copied into the app).
 - A **controller** or a handheld with built-in controls. Touch controls are not available yet.
 
+**Linux (experimental)**
+
+- A copy of the **Mega Man Legends PC port** or of **Rockman DASH** (the same files as above).
+- A 64-bit (x86-64) distribution with **glibc 2.38 or newer** (for example SteamOS 3.5, Ubuntu
+  24.04, Fedora 39, Debian 13 or a current Arch) and a GPU driver with **Vulkan 1.1**.
+- About **2.5 GB** of free space (the game is copied into the app's folder).
+- For the folder picker, the desktop's file chooser (the XDG portal) or `zenity`; for the
+  subtitles download, `curl` or `wget`.
+
 ## Installation on Windows
 
 1. Download `MML-Setup.exe` from the [latest release](../../releases).
@@ -186,7 +200,7 @@ The installer:
    the `DASH_*.MCD` files are in that folder too.
 2. Download `MML-<version>.apk` from the [latest release](../../releases) and install it
    (allow installing apps from your browser or file manager when Android asks).
-3. Open **Mega Man Legends**. The start menu opens on the **Files** page.
+3. Open **Mega Man Legends**. The start menu opens on the **App** page.
 4. Select **US version**, press A, pick the game folder in Android's folder picker, and allow
    access.
 5. Wait for the copy to finish (a few minutes), then press **Play**.
@@ -203,6 +217,31 @@ The import checks and patches the executable the same way the Windows installer 
 only what the game uses, and leaves the picked folder unchanged. The folder can be deleted
 afterwards. To update the app, install the new APK over the old one: the imported game and the
 saves stay.
+
+## Installation on Linux (experimental)
+
+The Linux version has only been tested on Windows' Linux subsystem (WSL) so far, with a software
+renderer. It has not been tested on real Linux hardware or on the Steam Deck yet. Reports are
+welcome (see [Reporting bugs](#reporting-bugs)).
+
+1. Download `mml-linux-<version>-x86_64.tar.gz` from the [releases](../../releases) (it is
+   published as a pre-release) and extract it anywhere.
+2. Copy your Mega Man Legends folder (the one with `MEGAMAN.EXE`, `DAT`, `BGM` and `SPH`) to the
+   computer. To bring your saves along, make sure the `DASH_*.MCD` files are in that folder too.
+3. Start `mml` in the extracted `mml-linux` folder. The start menu opens.
+4. On the **App** page, select **US version**, press A (Space on the keyboard) and pick the game
+   folder.
+5. Wait for the copy to finish, then press **Play** (Start, or Enter).
+
+The game is copied into `~/.local/share/mml-modernization` (or `$XDG_DATA_HOME/mml-modernization`),
+which also holds `mml.ini`, the saves and `mml.log`. To use another folder instead, start the game
+with `./mml --game-dir <folder>`. Rockman DASH, the subtitles and the Japanese voices work as on
+Android (see [Installation on Android](#installation-on-android)). There is no automatic update on
+Linux: download the new archive and replace the old `mml-linux` folder. The game folder and the
+saves are not in it, so they stay.
+
+In the start menu, the keyboard works as the controller does: the arrow keys choose, Space changes,
+Enter plays, Esc quits, and Q and E switch pages.
 
 ## Controls
 
@@ -227,7 +266,7 @@ saves stay.
 On Android, the system's **Back** button closes the settings menu, or closes the game when
 pressed twice. In the start menu, **Start** plays and **B** quits.
 
-### Mouse and keyboard (Windows, modern controls)
+### Mouse and keyboard (Windows and Linux, modern controls)
 
 | Input | Action |
 |-------|--------|
@@ -285,8 +324,8 @@ in control of Mega Man (not in menus or cutscenes).
 
 ## Settings
 
-On Windows, settings are changed in the launcher before playing; on Android, in the start
-menu. The in-game settings menu changes most of them while playing. All of them edit the same
+On Windows, settings are changed in the launcher before playing; on Android and Linux, in the
+start menu. The in-game settings menu changes most of them while playing. All of them edit the same
 file (`mml.ini` in the game folder).
 
 | Page | Settings |
@@ -295,10 +334,10 @@ file (`mml.ini` in the game folder).
 | Graphics | Texture filter, upscaling, antialiasing, distance fog, model detail, shader preset, HD textures |
 | Controls | Control scheme, modern controls at start, controller backend, camera speed and inversion, stick deadzone, walk tilt, roll speed, mouse speed, lock-on reticle colour, shots aim (character / camera), crosshair |
 | Buttons | Controller and keyboard remapping |
-| Files (Android) | The game files' status, and importing them |
+| App (Android, Linux) | The game files' status, importing them, subtitles and voices |
 
 Settings that only exist on Windows (renderer, display mode, game engine, controller backend,
-shaders, mouse and keyboard) are hidden on Android.
+shaders) are hidden on Android and Linux, and so are mouse and keyboard and vsync on Android.
 
 **Game engine** (Windows, Advanced):
 
@@ -319,7 +358,7 @@ no 60 fps, shaders, ReShade depth, in-game menu or notices, and is only meant as
   10/11/12 API. Depth-based effects work with antialiasing off. The installer leaves an
   existing ReShade in place.
 - **Texture packs:** see [docs/TEXTURE-PACKS.md](docs/TEXTURE-PACKS.md) for how to install a
-  pack and how to dump and replace textures. On Android, packs go into the app's
+  pack and how to dump and replace textures. On Android and Linux, packs go into the app's
   `Modernization\textures` folder (they are copied with the import when they are in the game
   folder).
 
@@ -339,6 +378,9 @@ no 60 fps, shaders, ReShade depth, in-game menu or notices, and is only meant as
 device, so copy the `DASH_*.MCD` files out of `Android/data/org.mml.legends/files` first if you
 want to keep them.
 
+**Linux:** delete the `mml-linux` folder, then `~/.local/share/mml-modernization` (the imported
+game and the saves: copy the `DASH_*.MCD` files out of it first if you want to keep them).
+
 ## Known issues
 
 - Some in-engine cutscenes may show black or missing textures.
@@ -355,11 +397,13 @@ want to keep them.
   exactly in sync with the Japanese line being spoken.
 - Japanese voices: lines that only the Japanese version voices stay silent, and a long Japanese
   line can be cut off where the game moves on after the English line's length.
-- Linux (Proton/Wine) and the Steam Deck have not been tested yet.
+- Linux: tested only on Windows' Linux subsystem so far, not on real hardware or the Steam Deck.
+  It needs glibc 2.38 or newer, and has no automatic update.
+- Running the Windows version through Proton or Wine has not been tested.
 
 ## Roadmap
 
-- **Linux version,** sharing most of the Android work.
+- **Linux:** testing on real hardware and the Steam Deck, and a build for older distributions.
 - **Touch controls** on Android.
 - **The start menu on Windows,** replacing the separate launcher.
 - Shader presets for the Vulkan renderer and the standalone engine.
@@ -370,7 +414,8 @@ want to keep them.
 
 Open an [issue](../../issues) and include:
 
-- `mml.log` from the game folder (on Android: `Android/data/org.mml.legends/files`). It is
+- `mml.log` from the game folder (on Android: `Android/data/org.mml.legends/files`; on Linux:
+  `~/.local/share/mml-modernization`). It is
   rewritten every time the game starts, so copy it right after the problem. Its first line
   identifies the build.
 - On Windows, `Modernization\launcher.log`.
@@ -384,17 +429,17 @@ Open an [issue](../../issues) and include:
 - **A small static patch** to `MEGAMAN.EXE` enlarges two renderer tables that overflow with
   the extended draw distance, fixes the culling around them, and adds `mml.dll` to the
   executable's imports so Windows loads it with the game. The patch is hash-verified and a
-  backup is kept. The Android import applies the same patch.
+  backup is kept. The Android and Linux imports apply the same patch.
 - **The recompiled game.** A static recompiler ([tools/recomp](tools/recomp), built on Ghidra)
-  translates the game's x86 program into C. That code runs the game in the standalone engine
-  and on Android, with the original executable's code never running. The executable is still
+  translates the game's x86 program into C. That code runs the game in the standalone engine,
+  on Android and on Linux, with the original executable's code never running. The executable is still
   loaded for its data, so your own copy is always needed.
 - **The runtime** (C) does everything else: it replaces the game's DirectDraw / Direct3D 3
   output with its own renderer (Direct3D 11 or Vulkan; widescreen placement, 60 fps
   interpolation, effects, the in-game UI), reads controllers through SDL3, implements the
   modern controls, and fixes the timing. On Windows Classic it is `mml.dll`, loaded by the game;
-  in the standalone engine and on Android it also provides the Windows functions the game
-  calls.
+  in the standalone engine, on Android and on Linux it also provides the Windows functions the
+  game calls.
 - **Wrappers** (Windows Classic) handle the rest: DSOAL and OpenAL Soft for the game's
   DirectSound3D audio, DDrawCompat for the Compatibility renderer, and Xidi for the Legacy
   controller backend.
@@ -435,6 +480,17 @@ The paths are set with environment variables (`ANDROID_SDK`, `JAVA_HOME`, `SDL3_
 `SDL3_ANDROID`); `MML_GAME_DIR` provides the intro video to bundle. See the top of
 `android/build_android.py`.
 
+**Linux.** Requirements: clang, Python 3, `glslangValidator` and `spirv-opt` (glslang and
+SPIRV-Tools), the development files of FreeType and fontconfig, and SDL3 built for Linux
+(installed into a folder with `include` and `lib`).
+
+| Command | Output |
+|---------|--------|
+| `python3 linux/build_linux.py` | `linux/build/mml-linux` and `mml-linux-<version>-x86_64.tar.gz` |
+
+The paths are set with environment variables (`SDL3_LINUX`, `SDL3_SRC`, `MML_LINUX_OUT`);
+`MML_GAME_DIR` provides the intro video to bundle. See the top of `linux/build_linux.py`.
+
 Icons are made from the artwork in `art/icon` with `tools/icons/make_icons.py`.
 
 ## Credits and licenses
@@ -443,13 +499,15 @@ The project's own code is MIT licensed (see [LICENSE](LICENSE)). It ships these 
 components; full licenses are in [licenses/](licenses) and sources in
 [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt):
 
-- [SDL3](https://github.com/libsdl-org/SDL) (controller input; on Android also the window,
-  audio and the app), zlib
+- [SDL3](https://github.com/libsdl-org/SDL) (controller input; on Android and Linux also the
+  window, audio and the app), zlib
 - [librashader](https://github.com/SnowflakePowered/librashader) (RetroArch shader presets), MPL-2.0
 - [pl_mpeg](https://github.com/phoboslab/pl_mpeg) (intro video), MIT
 - [DSOAL](https://github.com/kcat/dsoal) and [OpenAL Soft](https://github.com/kcat/openal-soft) (audio), LGPL-2.1
 - [DDrawCompat](https://github.com/narzoul/DDrawCompat) (Compatibility renderer), 0BSD
 - [Xidi](https://github.com/samuelgr/Xidi) (Legacy controller backend), BSD-3-Clause
+
+On Linux, text is drawn with the system's own FreeType and fontconfig, which are not included.
 
 The Legacy controller configuration builds on the Xidi setup from KuroRaiden's
 *Mega Man Legends PC Fix* repack (@NC_KuroRaiden).
@@ -463,7 +521,7 @@ Japanese voices are built on the player's own computer or device from their copy
 - **Subtitles:** the English subtitles are the work of the
   [Rockman DASH PSP English project](https://github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher)
   (JamesAZ0 and its contributors), who transcribed the US voice acting and timed the lines to it.
-  Setup (or the Android app's start menu) downloads its `script/subtitles_en.csv` (commit
+  Setup (or the start menu on Android and Linux) downloads its `script/subtitles_en.csv` (commit
   `7d49ceb`) from that repository and converts it for the PC version; this repository and the
   patch's downloads never contain it.
   That project's work is under the MIT license (Copyright (c) 2026 The Rockman DASH PSP English

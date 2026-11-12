@@ -5,23 +5,27 @@ Third-Party Notices and Licenses
 The Modernization Project itself (the launcher, the start menu, the renderers, the
 widescreen / camera / controls / HUD / audio-timing work, and the exe byte-patch) is this
 project's own work. It contains no game assets. It does include a translation of the game's
-program code made by the project's recompiler (mml.dll, mml_run64.exe and the Android app),
-which runs only with the files of your own copy of the Mega Man Legends PC game.
+program code made by the project's recompiler (mml.dll, mml_run64.exe, the Android app and
+the Linux program), which runs only with the files of your own copy of the Mega Man Legends PC
+game.
 
-To run the game on modern Windows and on Android it also includes the following THIRD-PARTY,
-OPEN-SOURCE components, redistributed UNMODIFIED from their upstream releases or sources. Each
+To run the game on modern Windows, on Android and on Linux it also includes the following
+THIRD-PARTY, OPEN-SOURCE components, redistributed UNMODIFIED from their upstream releases or
+sources. Each
 is used under its own license (full texts in this "licenses" folder). You may
 replace any of these DLLs with your own build from the linked source.
 
 --------------------------------------------------------------------------------
-pl_mpeg                  built into: mml.dll, mml_run64.exe, the Android app (libmain.so)
+pl_mpeg                  built into: mml.dll, mml_run64.exe, the Android app (libmain.so),
+                         the Linux program (mml)
   MPEG-1 video / MP2 audio decoder (plays the intro video).
   (c) Dominic Szablewski.  License: MIT  ->  licenses/pl_mpeg-LICENSE.txt
   Source: https://github.com/phoboslab/pl_mpeg
 
-SDL3                     files: SDL3.dll, x64\SDL3.dll, the Android app (libSDL3.so)
-  Controller input (Xbox, PlayStation, Switch and other gamepads); on Android also the
-  window, audio and the app itself.
+SDL3                     files: SDL3.dll, x64\SDL3.dll, the Android app (libSDL3.so),
+                         the Linux version (lib/libSDL3.so.0)
+  Controller input (Xbox, PlayStation, Switch and other gamepads); on Android and Linux also
+  the window, audio and the app itself.
   (c) 1997-2026 Sam Lantinga.  License: zlib  ->  licenses/SDL3-LICENSE.txt
   Source: https://github.com/libsdl-org/SDL
 

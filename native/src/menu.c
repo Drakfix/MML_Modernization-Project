@@ -71,11 +71,18 @@ typedef struct {
     const char *label, *set;
 } choice;
 
-/* where an item is offered (0 = everywhere) */
+/* where an item is offered (0 = everywhere): Windows, everywhere else, Android only (the updater),
+   Linux (with Windows: mouse and keyboard, vsync) */
 #define PL_WIN 1
 #define PL_OTHER 2
+#define PL_ANDROID 4
+#define PL_LINUX 8
 #ifdef _WIN32
 #define PL_HERE PL_WIN
+#elif defined(__ANDROID__)
+#define PL_HERE (PL_OTHER | PL_ANDROID)
+#elif defined(__linux__)
+#define PL_HERE (PL_OTHER | PL_LINUX)
 #else
 #define PL_HERE PL_OTHER
 #endif
@@ -143,6 +150,8 @@ static const choice CH_ACTION[] = { { "Jump", "=jump" }, { "Shoot", "=shoot" }, 
                                     { "Modern on/off", "=orbit" }, { "Menu", "=menu" }, { "Select", "=select" },
                                     { "Nothing", "=none" } };
 #define NCH(a) ((int)(sizeof a / sizeof a[0]))
+/* the confirm button in a help text: A with a controller, Space with the keyboard (button_words) */
+#define OK_KEY "\x01"
 #define BTN_HELP "What this button does with modern controls (vanilla controls keep the 1997 layout)."
 
 static const item g_start_items[] = {
@@ -154,7 +163,7 @@ static const item g_start_items[] = {
     { 0, IT_CHOICE, "Aspect ratio", "16:9 fills a wide screen; 4:3 is the original picture.", CH_ASPECT, NCH(CH_ASPECT) },
     { 0, IT_FPS, "Frame rate", "60 fps adds in-between frames for smooth motion. The game itself still runs at 30." },
     { 0, IT_VSYNC, "Vsync", "Locks frames to your monitor's refresh so the picture never tears. Adds a little lag.",
-      NULL, 0, PL_WIN },
+      NULL, 0, PL_WIN | PL_LINUX },
     { 0, IT_CHOICE, "Intro video", "Any button skips it while it plays.", CH_INTRO, NCH(CH_INTRO) },
     { 1, IT_MSAA, "Antialiasing", "Smooths jagged polygon edges." },
     { 1, IT_TEXFILTER, "Texture filter", "Anisotropic keeps floors and walls sharp when you look along them." },
@@ -182,7 +191,8 @@ static const item g_start_items[] = {
       0, NULL, 1 },
     { 2, IT_CHOICE, "Light tilt", "What a slight push of the stick does.", CH_TILT, NCH(CH_TILT) },
     { 2, IT_CHOICE, "Roll", "Classic is the original cartwheel speed.", CH_ROLL, NCH(CH_ROLL), 0, NULL, 1 },
-    { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off.", NULL, 0, PL_WIN },
+    { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off.", NULL, 0,
+      PL_WIN | PL_LINUX },
     { 2, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to, and of the crosshair." },
     { 2, IT_AIM, "Shots aim", AIM_HELP },
     { 2, IT_CROSSHAIR, "Crosshair", XH_HELP },
@@ -200,21 +210,21 @@ static const item g_start_items[] = {
     { 3, IT_CHOICE, "Start", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_start", 7 },
     { PAGE_FILES, IT_GF_EDITION, "Version to play", "The copy Play starts. Each version keeps its own saves; "
       "settings and mods are shared." },
-    { PAGE_FILES, IT_GF_US, "US version", "A imports Mega Man Legends for Windows PC: copy its folder (with "
+    { PAGE_FILES, IT_GF_US, "US version", OK_KEY " imports Mega Man Legends for Windows PC: copy its folder (with "
       "MEGAMAN.EXE) to this device, then pick it. That folder isn't changed." },
-    { PAGE_FILES, IT_GF_JP, "Japanese version", "A imports Rockman DASH for Windows PC: copy its folder (with "
+    { PAGE_FILES, IT_GF_JP, "Japanese version", OK_KEY " imports Rockman DASH for Windows PC: copy its folder (with "
       "ROCKMAN.EXE) to this device, then pick it. It's kept apart from the US version." },
     { PAGE_FILES, IT_GF_SUBS, "Subtitles", "US version: English subtitles for the cutscenes, with either voices. "
       "They are the work of the Rockman DASH PSP English project (github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher): "
-      "the English voice acting, transcribed and timed. A downloads them from there, then turns them on and off." },
-    { PAGE_FILES, IT_GF_VOICES, "Voices", "US version: Japanese plays the Japanese voice acting. A builds it from "
+      "the English voice acting, transcribed and timed. " OK_KEY " downloads them from there, then turns them on and off." },
+    { PAGE_FILES, IT_GF_VOICES, "Voices", "US version: Japanese plays the Japanese voice acting. " OK_KEY " builds it from "
       "your Japanese version (import it first; about 260 MB), then switches between English and Japanese." },
     { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer version on GitHub, downloads it and asks Android to install it. "
-      "Android may ask you to allow installs from this app once, and to confirm.", NULL, 0, PL_OTHER },
-    { PAGE_FILES, IT_UP_VERSION, "Installed", "The version of this app.", NULL, 0, PL_OTHER },
-    { PAGE_FILES, IT_UP_LATEST, "Newest", "The newest version published on GitHub.", NULL, 0, PL_OTHER },
+      "Android may ask you to allow installs from this app once, and to confirm.", NULL, 0, PL_ANDROID },
+    { PAGE_FILES, IT_UP_VERSION, "Installed", "The version of this app.", NULL, 0, PL_ANDROID },
+    { PAGE_FILES, IT_UP_LATEST, "Newest", "The newest version published on GitHub.", NULL, 0, PL_ANDROID },
     { PAGE_FILES, IT_CHOICE, "Check on start", "Looks for a new version when the app opens. Only the version is asked for, "
-      "nothing about you is sent.", CH_UPDATES, NCH(CH_UPDATES), PL_OTHER },
+      "nothing about you is sent.", CH_UPDATES, NCH(CH_UPDATES), PL_ANDROID },
 };
 
 /* the tables in use: the in-game menu's, or the start menu's before the game */
@@ -839,6 +849,21 @@ static float wrapped(float x, float y, float maxw, const char *s, uint32_t col, 
 }
 
 /* the items a page shows here, in order (list may be NULL); their count */
+/* a help text with its OK_KEY marks as the button the player uses now */
+static void button_words(const char *src, char *out, size_t n)
+{
+    const char *key = M.pad_ui ? "A" : "Space";
+    size_t o = 0, k;
+    for (; *src && o + 1 < n; src++) {
+        if (*src == OK_KEY[0]) {
+            for (k = 0; key[k] && o + 1 < n; k++)
+                out[o++] = key[k];
+        } else
+            out[o++] = *src;
+    }
+    out[o] = 0;
+}
+
 static int page_list(int page, int *list)
 {
     int i, n = 0;
@@ -1061,16 +1086,21 @@ static void draw(void *user, int w, int h)
         tx = x + pad + capw + u * 0.35f;
         tw = (pw - 2 * pad - 2 * capw - u * 0.7f - slant) / NPAGES;
         for (i = 0; i < NPAGES; i++) {
-            float sx = tx + i * tw, lw = gfx_ui_font_width(UI_FONT_DISPLAY, PAGES[i], 0.42f);
-            float lh = gfx_ui_font_line(UI_FONT_DISPLAY, 0.42f);
+            float ls = 0.42f, room = tw - slant - u * 0.3f, sx = tx + i * tw, lw, lh;
+            lw = gfx_ui_font_width(UI_FONT_DISPLAY, PAGES[i], ls);
+            if (lw > room && lw > 0) {   /* a wide font: the label shrinks to fit its tab */
+                ls *= room / lw;
+                lw = room;
+            }
+            lh = gfx_ui_font_line(UI_FONT_DISPLAY, ls);
             if (i == M.page) {
                 ui_slant(sx, ty + u * 0.12f, tw - u * 0.12f, tab_h - u * 0.24f, slant, COL_YELLOW, COL_YELLOW_LO);
                 gfx_ui_font_text(UI_FONT_DISPLAY, sx + (tw + slant - lw) / 2 - u * 0.06f, cy - lh / 2, PAGES[i],
-                                 ui_col(COL_NAVY), ui_col(COL_NAVY), 0.42f);
+                                 ui_col(COL_NAVY), ui_col(COL_NAVY), ls);
             } else {
                 ui_slant(sx, ty + u * 0.12f, tw - u * 0.12f, tab_h - u * 0.24f, slant, 0xFF183052, 0xFF122440);
                 gfx_ui_font_text(UI_FONT_DISPLAY, sx + (tw + slant - lw) / 2 - u * 0.06f, cy - lh / 2, PAGES[i],
-                                 ui_col(COL_DIM), ui_col(COL_DIM), 0.42f);
+                                 ui_col(COL_DIM), ui_col(COL_DIM), ls);
             }
             if (M.start && i == PAGE_FILES && (M.up_state == UPD_AVAILABLE || M.up_state == UPD_READY))   /* an update waits */
                 gfx_ui_circle(sx + tw - u * 0.3f, ty + u * 0.3f, u * 0.16f, ui_col(i == M.page ? COL_NAVY : COL_YELLOW));
@@ -1181,7 +1211,9 @@ static void draw(void *user, int w, int h)
             wrapped(hx, hy, hw, "Starts the game with these settings. They're saved, and the in-game menu "
                     "(Back + Start) changes most of them while you play.", 0xFFB4C6D8, 0.72f);
         } else if (M.cursor >= 0) {
-            wrapped(hx, hy, hw, g_items[M.cursor].help, 0xFFB4C6D8, 0.72f);
+            char help[600];
+            button_words(g_items[M.cursor].help, help, sizeof help);
+            wrapped(hx, hy, hw, help, 0xFFB4C6D8, 0.72f);
         }
     }
 
@@ -1204,18 +1236,27 @@ static void draw(void *user, int w, int h)
                 fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.25f;
                 fx += ui_text(fx, fy - lh / 2, "Close", COL_DIM, sc) + u * 0.7f;
             }
-        } else if (M.start) {
-            fx += ui_key_cap(fx, fy, r * 1.9f, "Arrows") + u * 0.25f;
-            fx += ui_text(fx, fy - lh / 2, "Choose / change", COL_DIM, sc) + u * 0.7f;
-            fx += ui_key_cap(fx, fy, r * 1.9f, "Enter") + u * 0.25f;
-            fx += ui_text(fx, fy - lh / 2, "Play", COL_YELLOW, sc) + u * 0.7f;
-        } else {
-            fx += ui_key_cap(fx, fy, r * 1.9f, "Arrows") + u * 0.25f;
-            fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 0.7f;
-            fx += ui_key_cap(fx, fy, r * 1.9f, "Enter") + u * 0.25f;
-            fx += ui_text(fx, fy - lh / 2, "Change", COL_DIM, sc) + u * 0.7f;
-            fx += ui_key_cap(fx, fy, r * 1.9f, "Esc") + u * 0.25f;
-            fx += ui_text(fx, fy - lh / 2, "Close", COL_DIM, sc) + u * 0.7f;
+        } else {   /* the keyboard (start menu: Space is A, Enter is Start, Esc is B) */
+            static const char *const START_KEYS[] = { "Arrows", "Choose", "Space", "Change", "Enter", "Play",
+                                                      "Esc", "Quit" };
+            static const char *const GAME_KEYS[] = { "Arrows", "Choose", "Enter", "Change", "Esc", "Close" };
+            const char *const *kv = M.start ? START_KEYS : GAME_KEYS;
+            int pairs = M.start ? 4 : 3, k;
+            float caps = 0, rest = 0, gap = u * 0.7f, room = pw - pad * 2.4f;
+            for (k = 0; k < pairs; k++) {   /* a wide system font: the labels and gaps give way (caps stay) */
+                caps += gfx_ui_font_width(UI_FONT_BODY, kv[2 * k], 0.58f) + r * 1.9f * 0.8f + u * 0.25f;
+                rest += gfx_ui_font_width(UI_FONT_BODY, kv[2 * k + 1], sc) + (k + 1 < pairs ? gap : 0);
+            }
+            if (caps + rest > room && rest > 0 && room > caps) {
+                float shrink = (room - caps) / rest;
+                sc *= shrink;
+                gap *= shrink;
+                lh = gfx_ui_font_line(UI_FONT_BODY, sc);
+            }
+            for (k = 0; k < pairs; k++) {
+                fx += ui_key_cap(fx, fy, r * 1.9f, kv[2 * k]) + u * 0.25f;
+                fx += ui_text(fx, fy - lh / 2, kv[2 * k + 1], M.start && k == 2 ? COL_YELLOW : COL_DIM, sc) + gap;
+            }
         }
     }
 }
@@ -1247,7 +1288,11 @@ static int read_keys(WORD *buttons)
         if (k)
             M.pad_ui = 1;
     }
+#ifdef _WIN32
     if (kbm_foreground()) {
+#else
+    {   /* (SDL keeps the keyboard's state only while its window has the focus) */
+#endif
 #define KEY(vk) ((GetAsyncKeyState(vk) & 0x8000) != 0)
         if (KEY(VK_UP)) kb |= K_UP;
         if (KEY(VK_DOWN)) kb |= K_DOWN;
@@ -1339,7 +1384,7 @@ void menu_frame(void)
                     gamefiles_defaults(M.game_dir);   /* (the intro, CAPCOM.AVI) */
                     M.edition = M.gf_jp;   /* (the one just imported plays) */
                     WritePrivateProfileStringA("general", "edition", M.edition ? "japanese" : "us", M.ini);
-                    strcpy_s(M.gf_line, sizeof M.gf_line, "Ready. Press Start to play.");
+                    strcpy_s(M.gf_line, sizeof M.gf_line, M.pad_ui ? "Ready. Press Start to play." : "Ready. Press Enter to play.");
                     log_printf("menu: game files imported (the %s version)", M.gf_jp ? "Japanese" : "US");
                 } else {
                     M.gf_ready[M.gf_jp] = 0;
@@ -1349,7 +1394,8 @@ void menu_frame(void)
             } else if (st == IMPORT_FAILED || st == IMPORT_CANCELLED || st == IMPORT_IDLE) {
                 M.gf_state = st;
                 log_printf("menu: game files: %s", M.gf_line);
-            }
+            } else if (st == IMPORT_COPYING)   /* (the row shows the progress from now on) */
+                M.gf_state = st;
         }
         if (M.tk_state == TASK_RUNNING) {   /* an extra goes on (the menu stays in use) */
             char line[200];

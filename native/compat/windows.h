@@ -181,6 +181,40 @@ typedef struct IUnknown { void **lpVtbl; } IUnknown, *LPUNKNOWN;
 #define TRUNCATE_EXISTING                    0x00000005u
 #define VERTRES                              0x0000000Au
 #define VK_BACK                              0x00000008u
+/* (more keys: the names kbm_names.c knows) */
+#define VK_MBUTTON 0x04u
+#define VK_XBUTTON1 0x05u
+#define VK_XBUTTON2 0x06u
+#define VK_CAPITAL 0x14u
+#define VK_END 0x23u
+#define VK_HOME 0x24u
+#define VK_INSERT 0x2Du
+#define VK_DELETE 0x2Eu
+#define VK_NUMPAD0 0x60u
+#define VK_NUMPAD1 0x61u
+#define VK_NUMPAD2 0x62u
+#define VK_NUMPAD3 0x63u
+#define VK_NUMPAD4 0x64u
+#define VK_NUMPAD5 0x65u
+#define VK_NUMPAD6 0x66u
+#define VK_NUMPAD7 0x67u
+#define VK_NUMPAD8 0x68u
+#define VK_NUMPAD9 0x69u
+#define VK_RSHIFT 0xA1u
+#define VK_RCONTROL 0xA3u
+#define VK_LMENU 0xA4u
+#define VK_RMENU 0xA5u
+#define VK_OEM_1 0xBAu
+#define VK_OEM_PLUS 0xBBu
+#define VK_OEM_COMMA 0xBCu
+#define VK_OEM_MINUS 0xBDu
+#define VK_OEM_PERIOD 0xBEu
+#define VK_OEM_2 0xBFu
+#define VK_OEM_3 0xC0u
+#define VK_OEM_4 0xDBu
+#define VK_OEM_5 0xDCu
+#define VK_OEM_6 0xDDu
+#define VK_OEM_7 0xDEu
 #define VK_DOWN                              0x00000028u
 #define VK_ESCAPE                            0x0000001Bu
 #define VK_F1                                0x00000070u
@@ -481,7 +515,7 @@ static inline int _controlfp_s(unsigned *cur, unsigned value, unsigned mask)
 #define PeekMessageA(msg, w, lo, hi, flags) (FALSE)
 #define TranslateMessage(msg) (FALSE)
 #define DispatchMessageA(msg) ((LRESULT)0)
-#define GetAsyncKeyState(vk) ((SHORT)0)
+SHORT GetAsyncKeyState(int vk);   /* plat_sdl.c: from SDL's keyboard state */
 #define MB_OK 0
 #define MB_ICONERROR 0x10
 #define MB_ICONWARNING 0x30

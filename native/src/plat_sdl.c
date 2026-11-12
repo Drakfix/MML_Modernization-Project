@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <SDL3/SDL.h>
 
+#include "kbm.h"
 #include "log.h"
 #include "plat.h"
 #include "plat_sdl.h"
@@ -62,7 +63,16 @@ uint32_t plat_window_create(const char *cls, const char *title, uint32_t style, 
         log_printf("plat: only one window here");
         return 0;
     }
+#if defined(__linux__) && !defined(__ANDROID__)
+    /* a desktop: [video] windowed=1 a 1280x720 window, else the whole screen (borderless, as on
+       Windows); its size is fixed while the game runs */
+    if (GetPrivateProfileIntA("video", "windowed", 0, "mml.ini"))   /* (the game folder is current) */
+        g_win = SDL_CreateWindow(title, 1280, 720, SDL_WINDOW_VULKAN);
+    else
+        g_win = SDL_CreateWindow(title, 1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_FULLSCREEN);
+#else
     g_win = SDL_CreateWindow(title, 0, 0, SDL_WINDOW_VULKAN | SDL_WINDOW_FULLSCREEN);
+#endif
     if (!g_win) {
         log_printf("plat: SDL_CreateWindow failed: %s", SDL_GetError());
         return 0;
@@ -149,6 +159,57 @@ static uint8_t dik_of(SDL_Scancode s)
     case SDL_SCANCODE_RIGHT: return 0xCD;
     case SDL_SCANCODE_F11: return 0x57;
     case SDL_SCANCODE_F12: return 0x58;
+    /* the rest of what MEGAMAN.CFG can name (the default keys use Insert, Delete, Page Up/Down) */
+    case SDL_SCANCODE_INSERT: return 0xD2;
+    case SDL_SCANCODE_DELETE: return 0xD3;
+    case SDL_SCANCODE_HOME: return 0xC7;
+    case SDL_SCANCODE_END: return 0xCF;
+    case SDL_SCANCODE_PAGEUP: return 0xC9;
+    case SDL_SCANCODE_PAGEDOWN: return 0xD1;
+    case SDL_SCANCODE_MINUS: return 0x0C;
+    case SDL_SCANCODE_EQUALS: return 0x0D;
+    case SDL_SCANCODE_LEFTBRACKET: return 0x1A;
+    case SDL_SCANCODE_RIGHTBRACKET: return 0x1B;
+    case SDL_SCANCODE_SEMICOLON: return 0x27;
+    case SDL_SCANCODE_APOSTROPHE: return 0x28;
+    case SDL_SCANCODE_GRAVE: return 0x29;
+    case SDL_SCANCODE_BACKSLASH: return 0x2B;
+    case SDL_SCANCODE_COMMA: return 0x33;
+    case SDL_SCANCODE_PERIOD: return 0x34;
+    case SDL_SCANCODE_SLASH: return 0x35;
+    case SDL_SCANCODE_CAPSLOCK: return 0x3A;
+    case SDL_SCANCODE_KP_ENTER: return 0x9C;
+    case SDL_SCANCODE_KP_0: return 0x52;
+    case SDL_SCANCODE_KP_1: return 0x4F;
+    case SDL_SCANCODE_KP_2: return 0x50;
+    case SDL_SCANCODE_KP_3: return 0x51;
+    case SDL_SCANCODE_KP_4: return 0x4B;
+    case SDL_SCANCODE_KP_5: return 0x4C;
+    case SDL_SCANCODE_KP_6: return 0x4D;
+    case SDL_SCANCODE_KP_7: return 0x47;
+    case SDL_SCANCODE_KP_8: return 0x48;
+    case SDL_SCANCODE_KP_9: return 0x49;
+    default: return 0;
+    }
+}
+
+/* an SDL key as the Windows virtual key the game's window procedure expects (WM_KEYDOWN); 0 if it
+   has no use for it. (SDL's codes are not Windows': its lower-case letters are VK_F1-F11's and the
+   numpad's numbers, so 'x' would arrive as F9, the game's exit key.) */
+static uint32_t vk_of(SDL_Keycode k)
+{
+    if (k >= 'a' && k <= 'z')
+        return (uint32_t)(k - 'a' + 'A');
+    if ((k >= '0' && k <= '9') || k == SDLK_RETURN || k == SDLK_ESCAPE || k == SDLK_SPACE || k == SDLK_BACKSPACE ||
+        k == SDLK_TAB)
+        return (uint32_t)k;   /* (the same codes) */
+    if (k >= SDLK_F1 && k <= SDLK_F12)
+        return 0x70 + (uint32_t)(k - SDLK_F1);
+    switch (k) {
+    case SDLK_LEFT: return 0x25;
+    case SDLK_UP: return 0x26;
+    case SDLK_RIGHT: return 0x27;
+    case SDLK_DOWN: return 0x28;
     default: return 0;
     }
 }
@@ -164,6 +225,76 @@ void plat_key_state(uint8_t keys[256])
             if (d)
                 keys[d] = 0x80;
         }
+}
+
+/* GetAsyncKeyState for the start menu and our own keys (menu.c, controls.c): a Windows virtual key
+   as SDL's scancode, down or not (the bit Windows sets for "down now") */
+SHORT GetAsyncKeyState(int vk)
+{
+    SDL_Scancode s = SDL_SCANCODE_UNKNOWN, s2 = SDL_SCANCODE_UNKNOWN;
+    int n = 0;
+    const bool *k;
+    if (vk >= 0x01 && vk <= 0x06 && vk != 0x03) {   /* the mouse buttons (VK_LBUTTON ... VK_XBUTTON2) */
+        static const int button[7] = { 0, SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, 0, SDL_BUTTON_MIDDLE, SDL_BUTTON_X1,
+                                       SDL_BUTTON_X2 };
+        return (SHORT)(SDL_GetMouseState(NULL, NULL) & SDL_BUTTON_MASK(button[vk]) ? 0x8000 : 0);
+    }
+    if (vk >= 'A' && vk <= 'Z')
+        s = (SDL_Scancode)(SDL_SCANCODE_A + (vk - 'A'));
+    else if (vk >= '1' && vk <= '9')
+        s = (SDL_Scancode)(SDL_SCANCODE_1 + (vk - '1'));
+    else if (vk >= 0x70 && vk <= 0x7B)   /* F1-F12 */
+        s = (SDL_Scancode)(SDL_SCANCODE_F1 + (vk - 0x70));
+    else
+        switch (vk) {
+        case '0': s = SDL_SCANCODE_0; break;
+        case 0x08: s = SDL_SCANCODE_BACKSPACE; break;
+        case 0x09: s = SDL_SCANCODE_TAB; break;
+        case 0x0D: s = SDL_SCANCODE_RETURN; break;
+        case 0x1B: s = SDL_SCANCODE_ESCAPE; break;
+        case 0x20: s = SDL_SCANCODE_SPACE; break;
+        case 0x21: s = SDL_SCANCODE_PAGEUP; break;
+        case 0x22: s = SDL_SCANCODE_PAGEDOWN; break;
+        case 0x25: s = SDL_SCANCODE_LEFT; break;
+        case 0x26: s = SDL_SCANCODE_UP; break;
+        case 0x27: s = SDL_SCANCODE_RIGHT; break;
+        case 0x28: s = SDL_SCANCODE_DOWN; break;
+        case 0x10: s = SDL_SCANCODE_LSHIFT; s2 = SDL_SCANCODE_RSHIFT; break;   /* (either one) */
+        case 0x11: s = SDL_SCANCODE_LCTRL; s2 = SDL_SCANCODE_RCTRL; break;
+        case 0x12: s = SDL_SCANCODE_LALT; s2 = SDL_SCANCODE_RALT; break;
+        case 0x14: s = SDL_SCANCODE_CAPSLOCK; break;
+        case 0x23: s = SDL_SCANCODE_END; break;
+        case 0x24: s = SDL_SCANCODE_HOME; break;
+        case 0x2D: s = SDL_SCANCODE_INSERT; break;
+        case 0x2E: s = SDL_SCANCODE_DELETE; break;
+        case 0x60: s = SDL_SCANCODE_KP_0; break;
+        case 0xA0: s = SDL_SCANCODE_LSHIFT; break;
+        case 0xA1: s = SDL_SCANCODE_RSHIFT; break;
+        case 0xA2: s = SDL_SCANCODE_LCTRL; break;
+        case 0xA3: s = SDL_SCANCODE_RCTRL; break;
+        case 0xA4: s = SDL_SCANCODE_LALT; break;
+        case 0xA5: s = SDL_SCANCODE_RALT; break;
+        case 0xBA: s = SDL_SCANCODE_SEMICOLON; break;
+        case 0xBB: s = SDL_SCANCODE_EQUALS; break;
+        case 0xBC: s = SDL_SCANCODE_COMMA; break;
+        case 0xBD: s = SDL_SCANCODE_MINUS; break;
+        case 0xBE: s = SDL_SCANCODE_PERIOD; break;
+        case 0xBF: s = SDL_SCANCODE_SLASH; break;
+        case 0xC0: s = SDL_SCANCODE_GRAVE; break;
+        case 0xDB: s = SDL_SCANCODE_LEFTBRACKET; break;
+        case 0xDC: s = SDL_SCANCODE_BACKSLASH; break;
+        case 0xDD: s = SDL_SCANCODE_RIGHTBRACKET; break;
+        case 0xDE: s = SDL_SCANCODE_APOSTROPHE; break;
+        default:
+            if (vk >= 0x61 && vk <= 0x69)   /* VK_NUMPAD1-9 (SDL's keypad runs 1-9, then 0) */
+                s = (SDL_Scancode)(SDL_SCANCODE_KP_1 + (vk - 0x61));
+            else
+                return 0;
+        }
+    k = SDL_GetKeyboardState(&n);
+    if (!k)
+        return 0;
+    return (SHORT)(((int)s < n && k[s]) || (s2 && (int)s2 < n && k[s2]) ? 0x8000 : 0);
 }
 
 int plat_take_back(void)
@@ -206,9 +337,17 @@ int plat_pump(void)
                     g_back++;
                 break;
             }
-            if (g_on_event && !e.key.repeat && e.key.key < 0x80)
-                g_on_event(GAME_WINDOW, WM_KEYDOWN, (uint32_t)e.key.key, 0, 0);
+            if (g_on_event && !e.key.repeat && vk_of(e.key.key))
+                g_on_event(GAME_WINDOW, WM_KEYDOWN, vk_of(e.key.key), 0, 0);
             break;
+#if defined(__linux__) && !defined(__ANDROID__)
+        case SDL_EVENT_MOUSE_MOTION:   /* mouse look (kbm_sdl.c) */
+            kbm_sdl_motion(e.motion.xrel, e.motion.yrel, 0);
+            break;
+        case SDL_EVENT_MOUSE_WHEEL:
+            kbm_sdl_motion(0, 0, e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e.wheel.y : e.wheel.y);
+            break;
+#endif
         default:
             break;
         }

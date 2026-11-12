@@ -1,8 +1,8 @@
 /* Where there is no Windows: the parts of ours that are Windows by nature, as calls that do
  * nothing. The debugging tools (watch.c, apicensus.c) read the game through Windows
- * machinery; iat.c patches Windows imports; kbm.c is Raw Input. Keyboard and mouse on other
- * platforms come later, over SDL; until then they report nothing pressed and no motion, so
- * controls.c falls back to the gamepad alone. */
+ * machinery; iat.c patches Windows imports; kbm.c is Raw Input. Keyboard and mouse: Linux has
+ * kbm_sdl.c; on Android they report nothing pressed and no motion, so controls.c falls back to
+ * the gamepad alone. */
 #ifndef _WIN32
 #include <windows.h>
 
@@ -36,6 +36,7 @@ int iat_patch(HMODULE mod, const char *dll, const char *func, void *repl, void *
     return 0;
 }
 
+#ifdef __ANDROID__   /* (Linux: kbm_sdl.c) */
 void kbm_attach(HWND hwnd)
 {
     (void)hwnd;
@@ -66,11 +67,7 @@ void kbm_capture(int want)
     (void)want;
 }
 
-int kbm_vk_from_name(const char *name)
-{
-    (void)name;
-    return 0;
-}
+#endif
 #else
 typedef int nowin_stubs_unused;   /* Windows: the real ones */
 #endif

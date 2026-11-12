@@ -178,6 +178,35 @@ __asm__(".intel_syntax noprefix\n"
         "  call rbx\n"
         "  int3\n"          /* fn never returns */
         ".att_syntax prefix\n");
+#elif defined(__x86_64__)
+/* cs_swap(save, sp) and cs_start, x86-64 elsewhere (System V: RDI, RSI; callee-saved RBX RBP
+   R12-R15, the x87 control word and MXCSR's control bits; no XMM register is). The frame a switch
+   leaves, from its stack pointer up: x87 CW, MXCSR, R15 R14 R13 R12 RBX RBP, the return address. */
+void cs_swap(void **save, void *sp);
+void cs_start(void);
+__asm__(".intel_syntax noprefix\n"
+        ".text\n"
+        ".globl cs_swap\n"
+        ".type cs_swap, @function\n"
+        "cs_swap:\n"
+        "  push rbp\n  push rbx\n  push r12\n  push r13\n  push r14\n  push r15\n"
+        "  sub rsp, 8\n"
+        "  fnstcw [rsp]\n  stmxcsr [rsp + 4]\n"
+        "  mov [rdi], rsp\n"
+        "  mov rsp, rsi\n"
+        "  fldcw [rsp]\n  ldmxcsr [rsp + 4]\n"
+        "  add rsp, 8\n"
+        "  pop r15\n  pop r14\n  pop r13\n  pop r12\n  pop rbx\n  pop rbp\n"
+        "  ret\n"
+        /* a new stack's first "return": RBX = fn, R12 = arg */
+        ".globl cs_start\n"
+        ".type cs_start, @function\n"
+        "cs_start:\n"
+        "  mov rdi, r12\n"
+        "  and rsp, -16\n"
+        "  call rbx\n"
+        "  ud2\n"          /* fn never returns */
+        ".att_syntax prefix\n");
 #elif defined(__aarch64__)
 /* cs_swap(save, sp) and cs_start, arm64 (AAPCS64: X0, X1; callee-saved X19-X28, X29 frame pointer,
    X30 link register, D8-D15, and FPCR, the rounding and flush-to-zero controls). The frame a
@@ -286,6 +315,19 @@ costack *costack_new(size_t size, void (*fn)(void *arg), void *arg)
         cw[1] = 0x1F80;                  /* MXCSR: Windows' default */
         s->sp = sp;
     }
+#elif defined(__x86_64__)
+    {   /* what cs_swap pops (see above): RBX = fn, R12 = arg, then cs_start */
+        uint64_t *sp = (uint64_t *)((uintptr_t)(s->mem + size - 64) & ~(uintptr_t)15);
+        *--sp = (uint64_t)(uintptr_t)cs_start;
+        *--sp = 0;                          /* RBP */
+        *--sp = (uint64_t)(uintptr_t)fn;    /* RBX */
+        *--sp = (uint64_t)(uintptr_t)arg;   /* R12 */
+        *--sp = 0;                          /* R13 */
+        *--sp = 0;                          /* R14 */
+        *--sp = 0;                          /* R15 */
+        *--sp = 0x1F80ull << 32 | 0x037F;   /* MXCSR and the x87 control word: the defaults here */
+        s->sp = sp;
+    }
 #elif defined(__aarch64__)
     {   /* what cs_swap pops (see above): X19 = fn, X20 = arg, X30 = cs_start; FPCR 0 (round to nearest) */
         uint64_t *f = (uint64_t *)(((uintptr_t)(s->mem + size - 64) & ~(uintptr_t)15) - 176);
@@ -330,7 +372,7 @@ void costack_switch(costack *from, costack *to)
     t->StackLimit = to->tib_limit;
     t->ExceptionList = (struct _EXCEPTION_REGISTRATION_RECORD *)to->tib_except;
 #endif
-#if defined(_M_X64) || defined(__aarch64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(__aarch64__)
     cs_swap(&from->sp, to->sp);
 #else
     ((cs_swap_fn)(void *)cs_swap)(&from->sp, to->sp);
