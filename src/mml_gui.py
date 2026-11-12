@@ -310,6 +310,17 @@ def import_mml_ini(s):
     v = get("general", "voices")
     if v in ("english", "japanese"):
         s["voices"] = v
+    v = get("general", "engine")   # (the start menu's Game engine)
+    if v in ("classic", "standalone"):
+        s["engine"] = v
+    for k in BUTTON_DEFAULTS:   # (the start menu's Buttons page)
+        v = get("controls", k)
+        if v in dict(ACTIONS):
+            s[k] = v
+    for k in KEY_DEFAULTS:
+        v = get("controls", k)
+        if v:
+            s[k] = v.upper()
     v = num("general", "subtitles")
     if v is not None:
         s["subtitles"] = "on" if v else "off"
@@ -575,7 +586,7 @@ def write_mml_ini(s, width):
         "controls": controls_ini(s),
         "textures": {"replace": 1 if s.get("texpack", "on") == "on" else 0,
                      "dump": 1 if s.get("texdump", "off") == "on" else 0},
-        "general": {"intro": s["intro"],
+        "general": {"intro": s["intro"], "engine": s.get("engine", "classic"),
                     **({"voices": s.get("voices", "english")} if JP_VOICES else {}),
                     **({"subtitles": 0 if s.get("subtitles") == "off" else 1} if JP_SUBS else {})},
     }, header="; Mega Man Legends Modernization - settings, read by mml.dll when the game starts.\n"

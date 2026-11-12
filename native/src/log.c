@@ -13,6 +13,11 @@ void log_open(const char *game_dir)
 {
     char path[MAX_PATH];
     _snprintf_s(path, sizeof path, _TRUNCATE, "%s\\mml.log", game_dir);
+    log_open_file(path);
+}
+
+void log_open_file(const char *path)
+{
     g_log = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
                         FILE_ATTRIBUTE_NORMAL, NULL);
 }

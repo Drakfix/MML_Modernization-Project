@@ -125,7 +125,7 @@ int update_poll(char *msg, size_t n, char *ver, size_t vn, float *progress)
         *progress = (float)((double)v[1] / (double)v[2]);
     return (int)v[0];
 }
-#else
+#elif !(defined(_WIN32) && defined(MML_RUNNER))   /* (the Windows start menu: updater_win.c) */
 int update_can(void)
 {
     return 0;

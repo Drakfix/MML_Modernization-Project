@@ -316,6 +316,58 @@ int gamefiles_bundled_intro(const char *dir)
     return exists(dir, "Modernization\\intro.mpg");
 }
 
+#if defined(_WIN32) && defined(MML_RUNNER)
+/* the Windows start menu: the subtitles downloaded as on Linux (subtitles_get.c), with WinHTTP;
+   the Japanese voices are Setup's to build (it knows the Rockman DASH folder) */
+#include "subtitles_get.h"
+#include "win_http.h"
+
+static volatile int g_tstate = TASK_IDLE;
+static char g_tmsg[300], g_tdir[MAX_PATH];
+
+int subtitles_fetch(const char *url, const char *out)
+{
+    return win_http_get(url, out, NULL, NULL, NULL, NULL);
+}
+
+static DWORD WINAPI subtitles_thread(LPVOID unused)
+{
+    (void)unused;
+    g_tstate = subtitles_download(g_tdir, g_tmsg, sizeof g_tmsg) ? TASK_DONE : TASK_FAILED;
+    return 0;
+}
+
+void gamefiles_subtitles_begin(const char *dir)
+{
+    HANDLE t;
+    _snprintf_s(g_tdir, sizeof g_tdir, _TRUNCATE, "%s\\Modernization", dir);
+    CreateDirectoryA(g_tdir, NULL);
+    strcpy_s(g_tmsg, sizeof g_tmsg, "Downloading the subtitles from the Rockman DASH PSP English project");
+    g_tstate = TASK_RUNNING;
+    log_printf("gamefiles: downloading the subtitles into %s", g_tdir);
+    t = CreateThread(NULL, 0, subtitles_thread, NULL, 0, NULL);
+    if (t)
+        CloseHandle(t);
+    else {
+        strcpy_s(g_tmsg, sizeof g_tmsg, "Couldn't start the download");
+        g_tstate = TASK_FAILED;
+    }
+}
+
+void gamefiles_voices_begin(const char *us_dir, const char *jp_dir)
+{
+    (void)us_dir;
+    (void)jp_dir;
+}
+
+int gamefiles_task_poll(char *status, size_t n, float *progress)
+{
+    *progress = 0;
+    if (n)
+        strcpy_s(status, n, g_tstate == TASK_IDLE ? "" : g_tmsg);
+    return g_tstate;
+}
+#else
 void gamefiles_subtitles_begin(const char *dir)
 {
     (void)dir;
@@ -334,4 +386,5 @@ int gamefiles_task_poll(char *status, size_t n, float *progress)
     *progress = 0;
     return TASK_IDLE;
 }
+#endif
 #endif

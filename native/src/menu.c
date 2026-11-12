@@ -52,6 +52,8 @@ enum {
     IT_FPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
     IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR,
+    /* the keyboard's keys for the modern controls ([controls] key_*: two each), and putting them back */
+    IT_KEY, IT_KEY_RESET,
     IT_CHOICE,   /* one of a list, each choice a set of mml.ini values (the start menu's) */
     /* the start menu's game files: the version to play; the US and the Japanese copy (where they
        stand, A imports) */
@@ -133,6 +135,8 @@ static const choice CH_WINDOW[] = { { "Borderless", "video.windowed=0;video.excl
                                     { "Exclusive", "video.windowed=0;video.exclusive=1" },
                                     { "Windowed", "video.windowed=1;video.exclusive=0" } };
 static const choice CH_ASPECT[] = { { "16:9 Wide", "video.aspect=16:9" }, { "4:3 Classic", "video.aspect=4:3" } };
+static const choice CH_ENGINE[] = { { "Classic", "general.engine=classic" },
+                                    { "Standalone (64-bit)", "general.engine=standalone" } };
 static const choice CH_INTRO[] = { { "Play", "general.intro=play" }, { "Skip", "general.intro=skip" } };
 static const choice CH_CONTROLS[] = { { "Modern", "controls.mode=modern" }, { "Vanilla (1997)", "controls.mode=vanilla" } };
 static const choice CH_ORBIT[] = { { "Off", "controls.orbit_start=0" }, { "On", "controls.orbit_start=1" } };
@@ -153,6 +157,8 @@ static const choice CH_ACTION[] = { { "Jump", "=jump" }, { "Shoot", "=shoot" }, 
 /* the confirm button in a help text: A with a controller, Space with the keyboard (button_words) */
 #define OK_KEY "\x01"
 #define BTN_HELP "What this button does with modern controls (vanilla controls keep the 1997 layout)."
+#define KEY_HELP "This action's key with mouse and keyboard (modern controls): " OK_KEY " and then the new key or " \
+    "mouse button (Esc or B cancels). A second key, such as the arrows for moving, stays as it is."
 
 static const item g_start_items[] = {
     { 0, IT_CHOICE, "Renderer", "Direct3D 11 or Vulkan: 60 fps, windowed, Alt+Tab. Compatibility: the old wrapper. "
@@ -165,6 +171,9 @@ static const item g_start_items[] = {
     { 0, IT_VSYNC, "Vsync", "Locks frames to your monitor's refresh so the picture never tears. Adds a little lag.",
       NULL, 0, PL_WIN | PL_LINUX },
     { 0, IT_CHOICE, "Intro video", "Any button skips it while it plays.", CH_INTRO, NCH(CH_INTRO) },
+    { 0, IT_CHOICE, "Game engine", "Classic runs the game's own program with the project's runtime. Standalone runs "
+      "the recompiled game in a 64-bit program, without shader presets yet. Compatibility always uses Classic.",
+      CH_ENGINE, NCH(CH_ENGINE), PL_WIN },
     { 1, IT_MSAA, "Antialiasing", "Smooths jagged polygon edges." },
     { 1, IT_TEXFILTER, "Texture filter", "Anisotropic keeps floors and walls sharp when you look along them." },
     { 1, IT_UPSCALE, "Upscaling", "How a lower resolution is stretched to the screen. Nearest keeps the pixels crisp." },
@@ -208,23 +217,46 @@ static const item g_start_items[] = {
     { 3, IT_CHOICE, "R3 (right stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_r3", 6 },
     { 3, IT_CHOICE, "Back", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_back", 8 },
     { 3, IT_CHOICE, "Start", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_start", 7 },
+    { 3, IT_KEY, "Key: move forward", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_up" },
+    { 3, IT_KEY, "Key: move back", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_down" },
+    { 3, IT_KEY, "Key: move left", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_left" },
+    { 3, IT_KEY, "Key: move right", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_right" },
+    { 3, IT_KEY, "Key: walk (hold)", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_walk" },
+    { 3, IT_KEY, "Key: jump", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_jump" },
+    { 3, IT_KEY, "Key: shoot", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_shoot" },
+    { 3, IT_KEY, "Key: aim / lock-on", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_aim" },
+    { 3, IT_KEY, "Key: dodge roll", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_roll" },
+    { 3, IT_KEY, "Key: talk / check", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_talk" },
+    { 3, IT_KEY, "Key: special weapon", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_special" },
+    { 3, IT_KEY, "Key: game menu", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_menu" },
+    { 3, IT_KEY, "Key: select", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_select" },
+    { 3, IT_KEY, "Key: modern on/off", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_orbit" },
+    { 3, IT_KEY_RESET, "Reset keys", "Puts every key above back to its default (WASD, Space, the mouse buttons...).",
+      NULL, 0, PL_WIN | PL_LINUX },
     { PAGE_FILES, IT_GF_EDITION, "Version to play", "The copy Play starts. Each version keeps its own saves; "
-      "settings and mods are shared." },
+      "settings and mods are shared.", NULL, 0, PL_OTHER },
     { PAGE_FILES, IT_GF_US, "US version", OK_KEY " imports Mega Man Legends for Windows PC: copy its folder (with "
-      "MEGAMAN.EXE) to this device, then pick it. That folder isn't changed." },
+      "MEGAMAN.EXE) to this device, then pick it. That folder isn't changed.", NULL, 0, PL_OTHER },
     { PAGE_FILES, IT_GF_JP, "Japanese version", OK_KEY " imports Rockman DASH for Windows PC: copy its folder (with "
-      "ROCKMAN.EXE) to this device, then pick it. It's kept apart from the US version." },
+      "ROCKMAN.EXE) to this device, then pick it. It's kept apart from the US version.", NULL, 0, PL_OTHER },
     { PAGE_FILES, IT_GF_SUBS, "Subtitles", "US version: English subtitles for the cutscenes, with either voices. "
       "They are the work of the Rockman DASH PSP English project (github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher): "
       "the English voice acting, transcribed and timed. " OK_KEY " downloads them from there, then turns them on and off." },
     { PAGE_FILES, IT_GF_VOICES, "Voices", "US version: Japanese plays the Japanese voice acting. " OK_KEY " builds it from "
-      "your Japanese version (import it first; about 260 MB), then switches between English and Japanese." },
+      "your Japanese version (import it first; about 260 MB), then switches between English and Japanese.",
+      NULL, 0, PL_OTHER },
+    { PAGE_FILES, IT_GF_VOICES, "Voices", "US version: Japanese plays the Japanese voice acting. Setup builds it from "
+      "your Rockman DASH folder (run MML-Setup.exe again and select it); then " OK_KEY " switches between English and "
+      "Japanese.", NULL, 0, PL_WIN },
     { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer version on GitHub, downloads it and asks Android to install it. "
       "Android may ask you to allow installs from this app once, and to confirm.", NULL, 0, PL_ANDROID },
-    { PAGE_FILES, IT_UP_VERSION, "Installed", "The version of this app.", NULL, 0, PL_ANDROID },
-    { PAGE_FILES, IT_UP_LATEST, "Newest", "The newest version published on GitHub.", NULL, 0, PL_ANDROID },
+    { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer version on GitHub, downloads its Setup, checks it and runs "
+      "it on this game folder. The menu closes while Setup updates the game; settings and saves stay.",
+      NULL, 0, PL_WIN },
+    { PAGE_FILES, IT_UP_VERSION, "Installed", "The version of this app.", NULL, 0, PL_ANDROID | PL_WIN },
+    { PAGE_FILES, IT_UP_LATEST, "Newest", "The newest version published on GitHub.", NULL, 0, PL_ANDROID | PL_WIN },
     { PAGE_FILES, IT_CHOICE, "Check on start", "Looks for a new version when the app opens. Only the version is asked for, "
-      "nothing about you is sent.", CH_UPDATES, NCH(CH_UPDATES), PL_ANDROID },
+      "nothing about you is sent.", CH_UPDATES, NCH(CH_UPDATES), PL_ANDROID | PL_WIN },
 };
 
 /* the tables in use: the in-game menu's, or the start menu's before the game */
@@ -232,7 +264,10 @@ static const item *g_items = g_game_items;
 static int NITEMS = (int)(sizeof g_game_items / sizeof g_game_items[0]);
 static const char *const *PAGES = GAME_PAGES;
 static int NPAGES = 3;
-#define MAX_ITEMS 64
+#define MAX_ITEMS 128
+/* (the per-item state below is MAX_ITEMS long: a table that outgrows it stops the build) */
+typedef char start_items_fit[sizeof g_start_items / sizeof g_start_items[0] <= MAX_ITEMS ? 1 : -1];
+typedef char game_items_fit[sizeof g_game_items / sizeof g_game_items[0] <= MAX_ITEMS ? 1 : -1];
 
 static const int SPEEDS[] = { 50, 75, 100, 125, 150, 200 };
 static const int MOUSE[] = { 0, 50, 75, 100, 150, 200 };
@@ -243,7 +278,8 @@ static const struct { const char *name; unsigned rgb; } RETICLES[] = {
 };
 
 static struct {
-    int ready, open, page, cursor, block;   /* block: input held back until everything is released */
+    int ready, open, page, cursor, block;
+    int cap, cap_armed;                     /* the IT_KEY row waiting for a key (+ 1; 0 none); keys let go */   /* block: input held back until everything is released */
     int start;                              /* the start menu (before the game) */
     int play, quit;                         /* the start menu: Play / close the app */
     int on_play;                            /* the start menu: the PLAY button has the focus */
@@ -337,6 +373,113 @@ static const char *choice_pair(const item *it, const char *p, char *sec, char *k
 }
 
 /* which choice mml.ini holds (by each choice's first value), else the item's default */
+/* ---- the keyboard's keys (IT_KEY rows) ---- */
+static const struct { const char *key, *def; } KEY_DEFS[] = {   /* (mml_gui.py KEY_DEFAULTS, controls.c) */
+    { "key_up", "W,UP" }, { "key_down", "S,DOWN" }, { "key_left", "A,LEFT" }, { "key_right", "D,RIGHT" },
+    { "key_walk", "LCTRL" }, { "key_jump", "SPACE" }, { "key_shoot", "MOUSE1" }, { "key_aim", "MOUSE2" },
+    { "key_roll", "LSHIFT" }, { "key_talk", "E" }, { "key_special", "Q" }, { "key_menu", "TAB" },
+    { "key_select", "M" }, { "key_orbit", "F5" },
+};
+
+static const char *key_default(const char *key)
+{
+    size_t i;
+    for (i = 0; i < sizeof KEY_DEFS / sizeof KEY_DEFS[0]; i++)
+        if (_stricmp(KEY_DEFS[i].key, key) == 0)
+            return KEY_DEFS[i].def;
+    return "";
+}
+
+static void key_trim_upper(char *s)
+{
+    char *a = s, *b;
+    while (*a == ' ' || *a == '\t')
+        a++;
+    memmove(s, a, strlen(a) + 1);
+    for (b = s + strlen(s); b > s && (b[-1] == ' ' || b[-1] == '\t'); b--)
+        b[-1] = 0;
+    for (b = s; *b; b++)
+        if (*b >= 'a' && *b <= 'z')
+            *b = (char)(*b - 'a' + 'A');
+}
+
+/* an IT_KEY row's two keys (names as mml.ini has them; the second may be "") */
+static void key_get(const item *it, char *a, char *b, size_t n)
+{
+    char v[96], *c;
+    GetPrivateProfileStringA("controls", it->key, key_default(it->key), v, sizeof v, M.ini);
+    c = strchr(v, ',');
+    if (c)
+        *c++ = 0;
+    strcpy_s(a, n, v);
+    strcpy_s(b, n, c ? c : "");
+    key_trim_upper(a);
+    key_trim_upper(b);
+}
+
+/* a key's name as the screen shows it (mml_gui.py KEY_LABELS) */
+static const char *key_label(const char *name)
+{
+    static const struct { const char *name, *label; } L[] = {
+        { "MOUSE1", "Left click" }, { "MOUSE2", "Right click" }, { "MOUSE3", "Middle click" },
+        { "MOUSE4", "Mouse 4" }, { "MOUSE5", "Mouse 5" }, { "LSHIFT", "Left Shift" }, { "RSHIFT", "Right Shift" },
+        { "LCTRL", "Left Ctrl" }, { "RCTRL", "Right Ctrl" }, { "LALT", "Left Alt" }, { "RALT", "Right Alt" },
+        { "SPACE", "Space" }, { "TAB", "Tab" }, { "ENTER", "Enter" }, { "BACKSPACE", "Backspace" },
+        { "CAPSLOCK", "Caps Lock" }, { "UP", "Up" }, { "DOWN", "Down" }, { "LEFT", "Left" }, { "RIGHT", "Right" },
+        { "PGUP", "Page Up" }, { "PGDN", "Page Down" }, { "INSERT", "Insert" }, { "DELETE", "Delete" },
+        { "HOME", "Home" }, { "END", "End" },
+    };
+    size_t i;
+    for (i = 0; i < sizeof L / sizeof L[0]; i++)
+        if (_stricmp(L[i].name, name) == 0)
+            return L[i].label;
+    return name;
+}
+
+/* while an IT_KEY row waits: the first key or mouse button pressed after everything was let go
+   becomes its first key; Esc (or B) gives up */
+static void key_capture(WORD buttons)
+{
+    const item *it = &g_items[M.cap - 1];
+    int vk, any = buttons != 0;
+#ifdef _WIN32
+    if (!kbm_foreground())
+        return;
+#endif
+    if (M.cap_armed && (buttons & BTN_B)) {
+        M.cap = 0;
+        M.block = 1;
+        return;
+    }
+    for (vk = 1; vk < 255; vk++) {
+        char name[32], a[32], b[32], v[80];
+        if (!(GetAsyncKeyState(vk) & 0x8000))
+            continue;
+        any = 1;
+        if (!M.cap_armed)
+            break;
+        if (vk == VK_ESCAPE) {
+            M.cap = 0;
+            M.block = 1;
+            return;
+        }
+        if (!kbm_vk_name(vk, name, sizeof name))
+            continue;   /* (Shift, Ctrl and Alt also show as their either-side codes) */
+        key_get(it, a, b, sizeof a);
+        if (b[0] && _stricmp(b, name) != 0)
+            _snprintf_s(v, sizeof v, _TRUNCATE, "%s,%s", name, b);
+        else
+            strcpy_s(v, sizeof v, name);
+        WritePrivateProfileStringA("controls", it->key, v, M.ini);
+        log_printf("menu: %s = %s", it->key, v);
+        M.cap = 0;
+        M.block = 1;   /* (that key doesn't also act on the menu) */
+        return;
+    }
+    if (!any)
+        M.cap_armed = 1;
+}
+
 static int choice_read(const item *it)
 {
     int c;
@@ -599,6 +742,12 @@ static void change_item(const item *it, int dir)
             }
             M.kick_dir = dir;
             M.kick_at = now_s();
+#ifdef _WIN32
+        } else if (dir > 0 && !M.gf_ready[0]) {
+            note("The subtitles and the voices are for the US version");
+        } else if (dir > 0 && !subs) {
+            note("Run MML-Setup.exe again and select your Rockman DASH folder to build them");
+#endif
         } else if (dir > 0 && !M.gf_ready[0]) {
             note("Import the US version first");
         } else if (dir > 0 && !subs && !M.gf_ready[1]) {
@@ -641,6 +790,22 @@ static void change_item(const item *it, int dir)
             update_check_begin();
         }
         M.up_started = 1;
+        return;
+    }
+    if (it->kind == IT_KEY) {
+        if (dir > 0) {
+            M.cap = item_index(it) + 1;
+            M.cap_armed = 0;
+        }
+        return;
+    }
+    if (it->kind == IT_KEY_RESET) {
+        if (dir > 0) {
+            size_t k;
+            for (k = 0; k < sizeof KEY_DEFS / sizeof KEY_DEFS[0]; k++)
+                WritePrivateProfileStringA("controls", KEY_DEFS[k].key, KEY_DEFS[k].def, M.ini);
+            note("Every key is back to its default");
+        }
         return;
     }
     if (it->kind != IT_CHOICE) {
@@ -692,6 +857,7 @@ static void value_text(int kind, char *out, size_t n)
     case IT_AIM: strcpy_s(out, n, M.aim_camera ? "Camera" : "Character"); break;
     case IT_CROSSHAIR: strcpy_s(out, n, M.crosshair ? "On" : "Off"); break;
     case IT_GF_EDITION: strcpy_s(out, n, M.edition ? "Japanese" : "US"); break;
+    case IT_KEY_RESET: strcpy_s(out, n, "Reset"); break;
     case IT_GF_US:
     case IT_GF_JP: {
         int k = kind == IT_GF_JP;
@@ -892,7 +1058,16 @@ static void draw_value(const item *it, float vx, float cy, float u, int selected
     int on = toggle_state(it->kind), total = 0, filled = gauge(it->kind, &total);
     if (it->kind == IT_CHOICE)
         strcpy_s(v, sizeof v, it->ch[M.chv[item_index(it)]].label);
-    else
+    else if (it->kind == IT_KEY && M.cap == item_index(it) + 1)
+        strcpy_s(v, sizeof v, "Press a key");   /* (the help line says how to give up) */
+    else if (it->kind == IT_KEY) {   /* its key(s): "W / Up" */
+        char a[32], b[32];
+        key_get(it, a, b, sizeof a);
+        if (b[0])
+            _snprintf_s(v, sizeof v, _TRUNCATE, "%s / %s", key_label(a), key_label(b));
+        else
+            strcpy_s(v, sizeof v, a[0] ? key_label(a) : "None");
+    } else
         value_text(it->kind, v, sizeof v);
     if (selected) {
         double since = t - M.kick_at;
@@ -1363,6 +1538,10 @@ void menu_frame(void)
     keys = read_keys(&buttons);
     pressed = keys & ~M.prev_keys;
     M.prev_keys = keys;
+    if (M.cap) {   /* a key row waits for its new key: nothing else counts */
+        key_capture(buttons);
+        return;
+    }
     if (M.block && !keys && !buttons)
         M.block = 0;
     if (M.start) {
@@ -1428,6 +1607,12 @@ void menu_frame(void)
                     note("A new version is out: see the APP page");
             }
             M.up_state = st;
+#ifdef _WIN32
+            if (st == UPD_INSTALLING) {   /* Setup runs: it replaces this program's files */
+                M.quit = 1;
+                return;
+            }
+#endif
         }
         if (M.block) {   /* (see above) */
             plat_take_back();
@@ -1702,7 +1887,7 @@ int menu_start(const char *ini, const char *game_dir)
     g_items = g_start_items;
     NITEMS = (int)(sizeof g_start_items / sizeof g_start_items[0]);
     PAGES = START_PAGES;
-    NPAGES = gamefiles_can_import() ? PAGE_FILES + 1 : PAGE_FILES;
+    NPAGES = PAGE_FILES + 1;
     M.start = 1;
     load_values(ini, game_dir);
     {
@@ -1711,6 +1896,15 @@ int menu_start(const char *ini, const char *game_dir)
         M.gf_ready[0] = gamefiles_ready(game_dir);
         M.gf_ready[1] = gamefiles_can_import() && gamefiles_ready(jp);
         M.edition = gamefiles_edition(game_dir);
+#ifdef _WIN32
+        {   /* (Setup set the folder up: the US version, or Rockman DASH) */
+            char exe[MAX_PATH];
+            _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\MEGAMAN.EXE", game_dir);
+            M.gf_ready[0] = GetFileAttributesA(exe) != INVALID_FILE_ATTRIBUTES;
+            M.gf_ready[1] = !M.gf_ready[0];
+            M.edition = !M.gf_ready[0];
+        }
+#endif
         {
             char p[MAX_PATH];
             _snprintf_s(p, sizeof p, _TRUNCATE, "%s\\Modernization\\subtitles_en.txt", game_dir);

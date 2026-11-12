@@ -2,6 +2,7 @@
  * start menu use the same ones), as Windows virtual keys. kbm.c (Windows) and kbm_sdl.c (SDL) read
  * the keys by those codes. */
 #include <windows.h>   /* (native/compat elsewhere) */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,6 +24,25 @@ static const struct { const char *name; int vk; } g_key_names[] = {
     { "SEMICOLON", VK_OEM_1 }, { "QUOTE", VK_OEM_7 }, { "LBRACKET", VK_OEM_4 }, { "RBRACKET", VK_OEM_6 },
     { "MINUS", VK_OEM_MINUS }, { "EQUALS", VK_OEM_PLUS }, { "BACKQUOTE", VK_OEM_3 }, { "BACKSLASH", VK_OEM_5 },
 };
+
+int kbm_vk_name(int vk, char *out, size_t n)
+{
+    size_t i;
+    if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9')) {
+        _snprintf_s(out, n, _TRUNCATE, "%c", (char)vk);
+        return 1;
+    }
+    if (vk >= VK_F1 && vk <= VK_F1 + 11) {
+        _snprintf_s(out, n, _TRUNCATE, "F%d", vk - VK_F1 + 1);
+        return 1;
+    }
+    for (i = 0; i < sizeof g_key_names / sizeof g_key_names[0]; i++)
+        if (g_key_names[i].vk == vk) {
+            strcpy_s(out, n, g_key_names[i].name);
+            return 1;
+        }
+    return 0;
+}
 
 int kbm_vk_from_name(const char *name)
 {
