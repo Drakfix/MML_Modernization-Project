@@ -47,3 +47,9 @@ def patch_data(inc):
             "#define PD_NEDITIONS %d" % len(rows)]
     with open(os.path.join(inc, "patch_data.h"), "w") as f:
         f.write("\n".join(out) + "\n")
+
+
+if __name__ == "__main__":   # (build_runner.bat: python patch_data.py OUTDIR)
+    import sys
+    patch_data(sys.argv[1])
+    print("patch_data.h written to", sys.argv[1])

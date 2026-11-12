@@ -17,12 +17,12 @@
 #include <SDL3/SDL_main.h>
 #include "controls.h"
 #include "costack.h"
-#include "gamefiles.h"
 #include "sampler.h"
 #else
 #include "controls.h"
 #include "kbm.h"
 #endif
+#include "gamefiles.h"
 #include "gfx.h"
 #include "input.h"
 #include "menu.h"
@@ -137,12 +137,26 @@ static int runner_main(void)
         log_printf("runner: the Japanese version (the %s folder)", GAMEFILES_JP_DIR);
     } else
 #endif
-    {   /* the imported copy's (gamefiles.c), else the installed one: the US, then the Japanese */
+    {   /* the imported copy's (gamefiles.c), else the installed one: the US, then the Japanese. On
+           Windows the chosen version's folder (the Japanese one may be a folder of its own) becomes the
+           current one: its files are opened from there, and mml.c finds the shared settings above it */
         static const char *const names[] = { "MEGAMAN_NATIVE.EXE", "MEGAMAN.EXE", "ROCKMAN_NATIVE.EXE",
                                              "ROCKMAN.EXE" };
-        size_t i;
+        char game[MAX_PATH];
+        size_t i, first = 0;
+#ifdef _WIN32
+        int jp = gamefiles_edition(dir) == 1;
+        gamefiles_dir(dir, jp, game, sizeof game);
+        if (jp) {
+            first = 2;   /* (its program first) */
+            SetCurrentDirectoryA(game);
+            log_printf("runner: the Japanese version (%s)", game);
+        }
+#else
+        strcpy_s(game, sizeof game, dir);
+#endif
         for (i = 0; i < sizeof names / sizeof names[0]; i++) {
-            _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\%s", dir, names[i]);
+            _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\%s", game, names[(first + i) % 4]);
             if (GetFileAttributesA(exe) != INVALID_FILE_ATTRIBUTES)
                 break;
         }
@@ -259,21 +273,29 @@ static void menu_window_event(uint32_t win, uint32_t msg, uint32_t wparam, uint3
 /* Play: the chosen engine as a program of its own; 0 if it started */
 static int launch_game(const char *dir, const char *ini, uint32_t win)
 {
-    char engine[32], renderer[32], exe[MAX_PATH], cmd[MAX_PATH + 4];
+    char engine[32], renderer[32], exe[MAX_PATH], cmd[MAX_PATH + 4], vdir[MAX_PATH];
+    const char *cwd = dir;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
+    int jp = gamefiles_edition(dir) == 1;
     GetPrivateProfileStringA("general", "engine", "classic", engine, sizeof engine, ini);
     GetPrivateProfileStringA("video", "renderer", "mml", renderer, sizeof renderer, ini);
-    if (_stricmp(renderer, "ddrawcompat") == 0) {
-        write_ddrawcompat_ini(dir, ini);
+    gamefiles_dir(dir, jp, vdir, sizeof vdir);   /* the version's folder (the Japanese one: its own) */
+    if (_stricmp(renderer, "ddrawcompat") == 0)
         strcpy_s(engine, sizeof engine, "classic");   /* (Compatibility is the game's own exe with DDrawCompat) */
-    }
     if (_stricmp(engine, "standalone") == 0) {
-        GetModuleFileNameA(NULL, exe, sizeof exe);
-    } else {   /* the folder's own game: the US version, else Rockman DASH (a folder holds one) */
-        _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\MEGAMAN.EXE", dir);
+        GetModuleFileNameA(NULL, exe, sizeof exe);   /* (it picks the version itself, runner_main) */
+    } else {
+        /* the version's patched program: the start menu's import writes *_NATIVE.EXE beside the
+           original; a folder Setup patched in place has only the original name, patched */
+        const char *base = jp ? "ROCKMAN" : "MEGAMAN";
+        _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\%s_NATIVE.EXE", vdir, base);
         if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES)
-            _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\ROCKMAN.EXE", dir);
+            _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\%s.EXE", vdir, base);
+        gamefiles_sync_runtime(dir, vdir);   /* (mml.dll and the wrappers beside it) */
+        if (_stricmp(renderer, "ddrawcompat") == 0)
+            write_ddrawcompat_ini(vdir, ini);
+        cwd = vdir;
     }
     _snprintf_s(cmd, sizeof cmd, _TRUNCATE, "\"%s\"", exe);
     log_printf("menu: play, the %s engine: %s", engine, exe);
@@ -283,7 +305,7 @@ static int launch_game(const char *dir, const char *ini, uint32_t win)
     AllowSetForegroundWindow(ASFW_ANY);
     memset(&si, 0, sizeof si);
     si.cb = sizeof si;
-    if (!CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
+    if (!CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, cwd, &si, &pi)) {
         log_printf("menu: the game didn't start (error %lu)", GetLastError());
         plat_message_box("The game couldn't be started. See Modernization\\menu.log.", "Mega Man Legends");
         return 1;

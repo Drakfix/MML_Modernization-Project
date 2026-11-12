@@ -154,9 +154,24 @@ int gamefiles_ready(const char *dir)
            exists(dir, "BGM") && exists(dir, "SPH");
 }
 
+int gamefiles_version_ready(const char *root, int jp)
+{
+    char dir[MAX_PATH];
+    int exe;
+    gamefiles_dir(root, jp, dir, sizeof dir);
+    exe = exists(dir, jp ? "ROCKMAN_NATIVE.EXE" : "MEGAMAN_NATIVE.EXE");
+#ifdef _WIN32
+    /* (a folder Setup patched in place before the start menu imported games: its own exe) */
+    exe = exe || exists(dir, jp ? "ROCKMAN.EXE" : "MEGAMAN.EXE");
+#endif
+    return exe && exists(dir, "DAT") && exists(dir, "BGM") && exists(dir, "SPH");
+}
+
 void gamefiles_dir(const char *root, int jp, char *out, size_t n)
 {
-    if (jp && gamefiles_can_import())
+    /* the Japanese version in a folder of its own, unless the app's folder is a Rockman DASH that
+       Setup patched in place (Windows, before the start menu imported games) */
+    if (jp && gamefiles_can_import() && !exists(root, "ROCKMAN.EXE") && !exists(root, "ROCKMAN_NATIVE.EXE"))
         _snprintf_s(out, n, _TRUNCATE, "%s\\%s", root, GAMEFILES_JP_DIR);
     else
         _snprintf_s(out, n, _TRUNCATE, "%s", root);
@@ -164,12 +179,11 @@ void gamefiles_dir(const char *root, int jp, char *out, size_t n)
 
 int gamefiles_edition(const char *root)
 {
-    char ini[MAX_PATH], v[32], jp[MAX_PATH];
-    int us_ok = gamefiles_ready(root), jp_ok;
+    char ini[MAX_PATH], v[32];
+    int us_ok = gamefiles_version_ready(root, 0), jp_ok;
     if (!gamefiles_can_import())
         return 0;
-    gamefiles_dir(root, 1, jp, sizeof jp);
-    jp_ok = gamefiles_ready(jp);
+    jp_ok = gamefiles_version_ready(root, 1);
     _snprintf_s(ini, sizeof ini, _TRUNCATE, "%s\\mml.ini", root);
     GetPrivateProfileStringA("general", "edition", "", v, sizeof v, ini);
     if (_stricmp(v, "japanese") == 0 && (jp_ok || !us_ok))
@@ -183,7 +197,7 @@ int gamefiles_finish(const char *dir, char *msg, size_t n)
 {
 #ifdef MML_PATCH_DATA
     char path[MAX_PATH], hex[65];
-    size_t len, i;
+    size_t len = 0, i;
     uint8_t *exe = NULL;
     const pd_edition *ed = NULL;
     int known, k;
@@ -274,7 +288,7 @@ void gamefiles_defaults(const char *dir)
     if (!exists(dir, "mml.ini") && gamefiles_bundled_file("mml.ini", dir))
         log_printf("gamefiles: the default mml.ini put in place");
     gamefiles_dir(dir, 1, jp, sizeof jp);
-    if (!gamefiles_ready(dir) && !(gamefiles_can_import() && gamefiles_ready(jp)))
+    if (!gamefiles_version_ready(dir, 0) && !(gamefiles_can_import() && gamefiles_version_ready(dir, 1)))
         return;
     gamefiles_bundled_intro(dir);   /* (shared by both versions) */
     capcom_avi(dir);
@@ -282,9 +296,9 @@ void gamefiles_defaults(const char *dir)
         capcom_avi(jp);
 }
 
-#ifndef __linux__
-/* (no importer here: the installer sets the folder up; Android: android_files.c, Linux:
-   linux_files.c, since Android defines __linux__ too) */
+#if !defined(__linux__) && !(defined(_WIN32) && defined(MML_RUNNER))
+/* (no importer here: mml.dll in the game Setup set up; Android: android_files.c, Linux:
+   linux_files.c (Android defines __linux__ too), the Windows start menu: win_files.c) */
 int gamefiles_bundled_file(const char *name, const char *dir)
 {
     (void)name;
@@ -316,58 +330,6 @@ int gamefiles_bundled_intro(const char *dir)
     return exists(dir, "Modernization\\intro.mpg");
 }
 
-#if defined(_WIN32) && defined(MML_RUNNER)
-/* the Windows start menu: the subtitles downloaded as on Linux (subtitles_get.c), with WinHTTP;
-   the Japanese voices are Setup's to build (it knows the Rockman DASH folder) */
-#include "subtitles_get.h"
-#include "win_http.h"
-
-static volatile int g_tstate = TASK_IDLE;
-static char g_tmsg[300], g_tdir[MAX_PATH];
-
-int subtitles_fetch(const char *url, const char *out)
-{
-    return win_http_get(url, out, NULL, NULL, NULL, NULL);
-}
-
-static DWORD WINAPI subtitles_thread(LPVOID unused)
-{
-    (void)unused;
-    g_tstate = subtitles_download(g_tdir, g_tmsg, sizeof g_tmsg) ? TASK_DONE : TASK_FAILED;
-    return 0;
-}
-
-void gamefiles_subtitles_begin(const char *dir)
-{
-    HANDLE t;
-    _snprintf_s(g_tdir, sizeof g_tdir, _TRUNCATE, "%s\\Modernization", dir);
-    CreateDirectoryA(g_tdir, NULL);
-    strcpy_s(g_tmsg, sizeof g_tmsg, "Downloading the subtitles from the Rockman DASH PSP English project");
-    g_tstate = TASK_RUNNING;
-    log_printf("gamefiles: downloading the subtitles into %s", g_tdir);
-    t = CreateThread(NULL, 0, subtitles_thread, NULL, 0, NULL);
-    if (t)
-        CloseHandle(t);
-    else {
-        strcpy_s(g_tmsg, sizeof g_tmsg, "Couldn't start the download");
-        g_tstate = TASK_FAILED;
-    }
-}
-
-void gamefiles_voices_begin(const char *us_dir, const char *jp_dir)
-{
-    (void)us_dir;
-    (void)jp_dir;
-}
-
-int gamefiles_task_poll(char *status, size_t n, float *progress)
-{
-    *progress = 0;
-    if (n)
-        strcpy_s(status, n, g_tstate == TASK_IDLE ? "" : g_tmsg);
-    return g_tstate;
-}
-#else
 void gamefiles_subtitles_begin(const char *dir)
 {
     (void)dir;
@@ -386,5 +348,4 @@ int gamefiles_task_poll(char *status, size_t n, float *progress)
     *progress = 0;
     return TASK_IDLE;
 }
-#endif
 #endif

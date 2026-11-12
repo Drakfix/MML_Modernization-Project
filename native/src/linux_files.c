@@ -145,7 +145,18 @@ static void add(const char *src, const char *rel, int64_t size)
     g_nfiles++;
 }
 
-static void walk(const char *src, const char *rel)
+/* in a Modernization folder, what isn't the player's mods: the logs, the old launcher's settings
+   and the files Setup set aside (an install Setup patched in place has them) */
+static int not_a_mod(const char *name, int dir)
+{
+    size_t n = strlen(name);
+    if (dir)
+        return strcasecmp(name, "quarantined-wrappers") == 0 || strcasecmp(name, "legacy-0.1") == 0;
+    return (n > 4 && strcasecmp(name + n - 4, ".log") == 0) || strcasecmp(name, "settings.json") == 0 ||
+           strcasecmp(name, "recomp_patches.txt") == 0;
+}
+
+static void walk(const char *src, const char *rel, int mods)
 {
     DIR *d = opendir(src);
     struct dirent *e;
@@ -160,8 +171,10 @@ static void walk(const char *src, const char *rel)
         snprintf(r, sizeof r, "%s/%s", rel, e->d_name);
         if (stat(s, &st) != 0)
             continue;
+        if (mods && not_a_mod(e->d_name, S_ISDIR(st.st_mode)))
+            continue;
         if (S_ISDIR(st.st_mode))
-            walk(s, r);
+            walk(s, r, mods);
         else if (S_ISREG(st.st_mode))
             add(s, r, (int64_t)st.st_size);
     }
@@ -211,7 +224,7 @@ static int SDLCALL copy_thread(void *unused)
         if (S_ISDIR(st.st_mode)) {
             for (k = 0; k < sizeof DIRS / sizeof DIRS[0]; k++)
                 if (strcasecmp(e->d_name, DIRS[k]) == 0 && !(g_jp && k == 3)) {   /* (mods: shared) */
-                    walk(s, e->d_name);
+                    walk(s, e->d_name, k == 3);
                     dat |= k == 0;
                 }
         } else if (S_ISREG(st.st_mode)) {

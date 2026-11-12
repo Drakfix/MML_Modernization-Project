@@ -234,20 +234,21 @@ static const item g_start_items[] = {
     { 3, IT_KEY_RESET, "Reset keys", "Puts every key above back to its default (WASD, Space, the mouse buttons...).",
       NULL, 0, PL_WIN | PL_LINUX },
     { PAGE_FILES, IT_GF_EDITION, "Version to play", "The copy Play starts. Each version keeps its own saves; "
-      "settings and mods are shared.", NULL, 0, PL_OTHER },
+      "settings and mods are shared." },
     { PAGE_FILES, IT_GF_US, "US version", OK_KEY " imports Mega Man Legends for Windows PC: copy its folder (with "
       "MEGAMAN.EXE) to this device, then pick it. That folder isn't changed.", NULL, 0, PL_OTHER },
     { PAGE_FILES, IT_GF_JP, "Japanese version", OK_KEY " imports Rockman DASH for Windows PC: copy its folder (with "
       "ROCKMAN.EXE) to this device, then pick it. It's kept apart from the US version.", NULL, 0, PL_OTHER },
+    { PAGE_FILES, IT_GF_US, "US version", OK_KEY " imports Mega Man Legends for Windows PC: pick its folder (with "
+      "MEGAMAN.EXE) and the game is copied into this app's folder. Your folder isn't changed.", NULL, 0, PL_WIN },
+    { PAGE_FILES, IT_GF_JP, "Japanese version", OK_KEY " imports Rockman DASH for Windows PC: pick its folder (with "
+      "ROCKMAN.EXE) and the game is copied into this app's folder, apart from the US version. Your folder isn't "
+      "changed.", NULL, 0, PL_WIN },
     { PAGE_FILES, IT_GF_SUBS, "Subtitles", "US version: English subtitles for the cutscenes, with either voices. "
       "They are the work of the Rockman DASH PSP English project (github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher): "
       "the English voice acting, transcribed and timed. " OK_KEY " downloads them from there, then turns them on and off." },
     { PAGE_FILES, IT_GF_VOICES, "Voices", "US version: Japanese plays the Japanese voice acting. " OK_KEY " builds it from "
-      "your Japanese version (import it first; about 260 MB), then switches between English and Japanese.",
-      NULL, 0, PL_OTHER },
-    { PAGE_FILES, IT_GF_VOICES, "Voices", "US version: Japanese plays the Japanese voice acting. Setup builds it from "
-      "your Rockman DASH folder (run MML-Setup.exe again and select it); then " OK_KEY " switches between English and "
-      "Japanese.", NULL, 0, PL_WIN },
+      "your Japanese version (import it first; about 260 MB), then switches between English and Japanese." },
     { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer version on GitHub, downloads it and asks Android to install it. "
       "Android may ask you to allow installs from this app once, and to confirm.", NULL, 0, PL_ANDROID },
     { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer version on GitHub, downloads its Setup, checks it and runs "
@@ -742,12 +743,6 @@ static void change_item(const item *it, int dir)
             }
             M.kick_dir = dir;
             M.kick_at = now_s();
-#ifdef _WIN32
-        } else if (dir > 0 && !M.gf_ready[0]) {
-            note("The subtitles and the voices are for the US version");
-        } else if (dir > 0 && !subs) {
-            note("Run MML-Setup.exe again and select your Rockman DASH folder to build them");
-#endif
         } else if (dir > 0 && !M.gf_ready[0]) {
             note("Import the US version first");
         } else if (dir > 0 && !subs && !M.gf_ready[1]) {
@@ -1560,6 +1555,12 @@ void menu_frame(void)
                 gamefiles_dir(M.game_dir, M.gf_jp, d, sizeof d);
                 if (gamefiles_finish(d, line, sizeof line)) {
                     M.gf_ready[M.gf_jp] = 1;
+                    {   /* (subtitles and voices can come with the imported folder) */
+                        char sp[MAX_PATH];
+                        _snprintf_s(sp, sizeof sp, _TRUNCATE, "%s\\Modernization\\subtitles_en.txt", M.game_dir);
+                        M.subs_there = GetFileAttributesA(sp) != INVALID_FILE_ATTRIBUTES;
+                        M.voices_built = voice_built(M.game_dir);
+                    }
                     gamefiles_defaults(M.game_dir);   /* (the intro, CAPCOM.AVI) */
                     M.edition = M.gf_jp;   /* (the one just imported plays) */
                     WritePrivateProfileStringA("general", "edition", M.edition ? "japanese" : "us", M.ini);
@@ -1893,18 +1894,9 @@ int menu_start(const char *ini, const char *game_dir)
     {
         char jp[MAX_PATH], music[MAX_PATH];
         gamefiles_dir(game_dir, 1, jp, sizeof jp);
-        M.gf_ready[0] = gamefiles_ready(game_dir);
-        M.gf_ready[1] = gamefiles_can_import() && gamefiles_ready(jp);
+        M.gf_ready[0] = gamefiles_version_ready(game_dir, 0);
+        M.gf_ready[1] = gamefiles_can_import() && gamefiles_version_ready(game_dir, 1);
         M.edition = gamefiles_edition(game_dir);
-#ifdef _WIN32
-        {   /* (Setup set the folder up: the US version, or Rockman DASH) */
-            char exe[MAX_PATH];
-            _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\MEGAMAN.EXE", game_dir);
-            M.gf_ready[0] = GetFileAttributesA(exe) != INVALID_FILE_ATTRIBUTES;
-            M.gf_ready[1] = !M.gf_ready[0];
-            M.edition = !M.gf_ready[0];
-        }
-#endif
         {
             char p[MAX_PATH];
             _snprintf_s(p, sizeof p, _TRUNCATE, "%s\\Modernization\\subtitles_en.txt", game_dir);

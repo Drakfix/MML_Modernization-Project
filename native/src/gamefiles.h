@@ -13,6 +13,9 @@ void gamefiles_sha256(const void *data, size_t n, char hex[65]);   /* lower-case
    that holds its program, data and saves; settings and mods are shared (compat_set_edition_dir). */
 #define GAMEFILES_JP_DIR "Japanese"
 void gamefiles_dir(const char *root, int jp, char *out, size_t n);   /* a version's folder */
+/* that version is there to play (its program and data in its folder; on Windows also the exe Setup
+   patched in place) */
+int gamefiles_version_ready(const char *root, int jp);
 /* the version to play: [general] edition (us / japanese) where it is there, else the one that is;
    0 = US, 1 = Japanese (always 0 without an importer: an installed folder holds one version) */
 int gamefiles_edition(const char *root);
@@ -35,6 +38,11 @@ int gamefiles_bundled_intro(const char *dir);
    version's files the intro and CAPCOM.AVI (see gamefiles.c). Before anything reads mml.ini. */
 void gamefiles_defaults(const char *dir);
 int gamefiles_bundled_file(const char *name, const char *dir);   /* an app file into dir (platform) */
+#ifdef _WIN32
+/* the Windows start menu: mml.dll and the wrapper DLLs from the app's folder (root) beside the
+   program in dir, a version's folder (nothing if it is root), for the Classic engine (win_files.c) */
+void gamefiles_sync_runtime(const char *root, const char *dir);
+#endif
 #if defined(__linux__) && !defined(__ANDROID__)
 /* Linux: the game folder (--game-dir, else MML_GAME_DIR, else the app's own in the user's data
    folder: $XDG_DATA_HOME/mml-modernization), made if missing */

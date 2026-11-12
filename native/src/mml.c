@@ -52,10 +52,30 @@
 #include "watch.h"
 #include "voice.h"
 #include "subtitles.h"
+#include "gamefiles.h"
 
 
-static char g_game_dir[MAX_PATH];
+static char g_game_dir[MAX_PATH];   /* the playing version's folder: its program, data and saves */
+static char g_home[MAX_PATH];       /* what both versions share: mml.ini, Modernization, the log */
 static char g_ini[MAX_PATH];
+
+/* The Japanese version the Windows start menu imported sits in a folder of its own in the app's
+   folder (gamefiles.h), and shares the app folder's settings and mods: home is that parent when it
+   holds mml.ini. Anywhere else (the US version, a folder Setup patched in place) it is the game's
+   own folder. (Android and Linux do this in the compatibility layer: compat_set_edition_dir.) */
+static void find_home(void)
+{
+    char parent[MAX_PATH], ini[MAX_PATH], *slash;
+    strcpy_s(g_home, sizeof g_home, g_game_dir);
+    strcpy_s(parent, sizeof parent, g_game_dir);
+    slash = strrchr(parent, '\\');
+    if (!slash || _stricmp(slash + 1, GAMEFILES_JP_DIR) != 0)
+        return;
+    *slash = 0;
+    _snprintf_s(ini, sizeof ini, _TRUNCATE, "%s\\mml.ini", parent);
+    if (GetFileAttributesA(ini) != INVALID_FILE_ATTRIBUTES)
+        strcpy_s(g_home, sizeof g_home, parent);
+}
 
 /* ---- config ---- */
 
@@ -604,14 +624,21 @@ void mml_init(void)
     char *slash;
     int intro_plays;
 
+#if defined(MML_RUNNER) && defined(_WIN32)
+    /* (the Windows runner is the app's program: the version's folder is the current one, runner.c) */
+    GetCurrentDirectoryA(sizeof g_game_dir, g_game_dir);
+    (void)slash;
+#else
     GetModuleFileNameA(NULL, g_game_dir, sizeof g_game_dir);
     slash = strrchr(g_game_dir, '\\');
     if (slash)
         *slash = 0;
-    strcpy_s(g_ini, sizeof g_ini, g_game_dir);
+#endif
+    find_home();
+    strcpy_s(g_ini, sizeof g_ini, g_home);
     strcat_s(g_ini, sizeof g_ini, "\\mml.ini");
 #ifndef MML_RUNNER
-    log_open(g_game_dir);
+    log_open(g_home);
     log_printf("mml.dll %s loaded into %s", MML_NATIVE_BUILD, g_game_dir);
 #endif
     addr_detect();   /* US or Japanese program: every GA() after this translates for it */
@@ -682,7 +709,7 @@ void mml_init(void)
         int subs;
         ini_string("general", "voices", "english", v, sizeof v);
         /* the cutscenes' subtitles, with either voices (Setup downloads them), then the voices */
-        subs = subtitles_install(g_game_dir, GetPrivateProfileIntA("general", "subtitles", 1, g_ini));
+        subs = subtitles_install(g_home, GetPrivateProfileIntA("general", "subtitles", 1, g_ini));
         voice_install(g_game_dir, _stricmp(v, "japanese") == 0, subs,   /* SPJ banks (tools/voice) */
                       GetPrivateProfileIntA("debug", "voice_log", 0, g_ini));
     }
@@ -711,7 +738,7 @@ void mml_init(void)
                 lod_no_subdiv();
         }
     }
-    texreplace_init(g_game_dir, GetPrivateProfileIntA("textures", "replace", 1, g_ini),
+    texreplace_init(g_home, GetPrivateProfileIntA("textures", "replace", 1, g_ini),
                     GetPrivateProfileIntA("textures", "dump", 0, g_ini));
     if (GetPrivateProfileIntA("debug", "clip_uv", 1, g_ini))
         clipfix_install();
@@ -730,7 +757,7 @@ void mml_init(void)
         ini_string("video", "renderer", "mml", r, sizeof r);
         if (_stricmp(r, "mml") == 0) {
             gfx_options o;
-            mml_gfx_options(g_ini, g_game_dir, &o);
+            mml_gfx_options(g_ini, g_home, &o);
             g_fog_debug = GetPrivateProfileIntA("debug", "fog_debug", 0, g_ini);
             g_drop_clamped = GetPrivateProfileIntA("video", "drop_clamped", 1, g_ini);
             {
@@ -755,11 +782,11 @@ void mml_init(void)
             }
             g_blend_census = GetPrivateProfileIntA("debug", "blend_census", 0, g_ini);
             if (ddshim_install(&o)) {
-                intro_video_install(g_game_dir);   /* our intro player, if Modernization\intro.mpg exists */
+                intro_video_install(g_home);   /* our intro player, if Modernization\intro.mpg exists */
                 crosshair_install();               /* camera aim's crosshair, under everything else */
                 toast_use_ui();                    /* notices in our UI's style, under the menu */
                 hints_install(g_ini);              /* shortcut card on the title screen */
-                menu_install(g_ini, g_game_dir);   /* in-game options (F1 / Back + Start) */
+                menu_install(g_ini, g_home);   /* in-game options (F1 / Back + Start) */
             }
             /* [video] smooth_sky=1: background layers scroll sub-pixel smooth */
             if (GetPrivateProfileIntA("video", "smooth_sky", 1, g_ini) && bglayer_install()) {

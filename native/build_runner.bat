@@ -23,6 +23,11 @@ if not exist "%OUT%\gen\recomp_table.c" (
   exit /b 1
 )
 call "%ROOT%vk_shaders.bat" || exit /b 1
+rem the installer's exe patches (src\patch_manifest.py) as build\patch_data.h: the start menu's game
+rem import checks and patches the player's exe with them (gamefiles.c)
+set "PDDEF="
+python "%ROOT%patch_data.py" "%OUT%" && set "PDDEF=/DMML_PATCH_DATA"
+if not defined PDDEF echo WARNING: no patch_data.h (Python): the start menu can't import games
 rem the Japanese program's recompiled code (Rockman DASH, build\gen_jp, tools\recomp on its own
 rem Ghidra project) goes in as well when it is there: the runner picks the one for the exe it loads
 set "GENJP=%OUT%\gen_jp"
@@ -64,7 +69,7 @@ rc /nologo /fo "%OUT%\runner.res" "%ROOT%runner.rc" || exit /b 1
 rem C4201: the SDK's own D3D11 headers use nameless unions
 rem /BASE /FIXED: our code above the game's whole address range (guest_mem.c: 512 MB), so a host
 rem function address (in an import slot, a patched JMP) is never also a game address
-cl /nologo /O2 /MT /W4 /WX /wd4201 /GS- /DMML_RUNNER %VKDEF% %JPDEF% /I"%OUT%" /Fo"%RUN%\\" "%ROOT%src\*.c" "%GENRUN%\*.obj" %JPOBJ% ^
+cl /nologo /O2 /MT /W4 /WX /wd4201 /GS- /DMML_RUNNER %VKDEF% %JPDEF% %PDDEF% /I"%OUT%" /Fo"%RUN%\\" "%ROOT%src\*.c" "%GENRUN%\*.obj" %JPOBJ% ^
    "%OUT%\runner.res" /Fe"%OUT%\mml_run.exe" /link /SUBSYSTEM:WINDOWS /LARGEADDRESSAWARE /INCREMENTAL:NO /MAP:"%OUT%\mml_run.map" ^
    /BASE:0x60000000 /FIXED /DYNAMICBASE:NO ^
    user32.lib kernel32.lib gdi32.lib d3d11.lib dxgi.lib ole32.lib windowscodecs.lib winmm.lib || exit /b 1
@@ -97,7 +102,7 @@ if not exist "%GENRUNJP%\recomp_table.obj" (
 rem one file at a time: clang-cl stops at the first file that fails
 del /q "%RUN%\*.obj" 2>nul
 for %%f in ("%ROOT%src\*.c") do (
-  "%RECOMP_CLANG%" --target=x86_64-pc-windows-msvc /c /O2 /MT /W3 /GS- /DMML_RUNNER %VKDEF% %JPDEF% /I"%OUT%" /I"%ROOT%src" /Fo"%RUN%\\" "%%f" || exit /b 1
+  "%RECOMP_CLANG%" --target=x86_64-pc-windows-msvc /c /O2 /MT /W3 /GS- /DMML_RUNNER %VKDEF% %JPDEF% %PDDEF% /I"%OUT%" /I"%ROOT%src" /Fo"%RUN%\\" "%%f" || exit /b 1
 )
 rc /nologo /fo "%OUT%\runner64.res" "%ROOT%runner.rc" || exit /b 1
 link /nologo /OUT:"%OUT%\mml_run64.exe" /SUBSYSTEM:WINDOWS /INCREMENTAL:NO /MAP:"%OUT%\mml_run64.map" ^
