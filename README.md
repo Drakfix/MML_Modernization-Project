@@ -10,11 +10,12 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.7.2 beta.** The 0.1 releases are kept on the
+**Current version: 0.8.0 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
 
+- [What's new in 0.8](#whats-new-in-08)
 - [What's new in 0.7](#whats-new-in-07)
 - [What's new in 0.6](#whats-new-in-06)
 - [Features](#features)
@@ -32,6 +33,30 @@ copy.
 - [How it works](#how-it-works)
 - [Building from source](#building-from-source)
 - [Credits and licenses](#credits-and-licenses)
+
+## What's new in 0.8
+
+- **Start menu on Windows.** The settings, the game import and the updates now live in the same
+  start menu as on Android and Linux, before the game starts. Setup installs the app into a
+  folder of its own, and the start menu imports your US version, Rockman DASH, or both.
+- **New start menu layout** on every platform. It uses the whole widescreen: the settings on the
+  left in labelled sections, and on the right the selected setting's full description, its
+  choices, and the progress of imports, downloads and updates. Settings have clearer, more
+  technical names, and the app page is now called **Game**, the first page.
+- **Skip the start menu.** **Start menu at launch: Skip** goes straight into the game with your
+  saved settings.
+- **Back to the start menu** from the game: hold **Back** (or **F2**) for 1.5 seconds on the title
+  screen. A ring fills while you hold it.
+- **First launch:** when no game has been imported yet, a short prompt explains what the app needs
+  and imports your copy.
+- **Title screen hints** can be turned off. The shortcut card now also lists the way back to the
+  start menu.
+- **Linux** is part of the release (still experimental).
+- Fix: Rockman DASH with the Original (32-bit) executable crashed when a debug option for the
+  recompiled game was set in `mml.ini`.
+
+The separate launcher (`MML Launcher.exe`) is still installed in game folders that an earlier
+Setup patched in place, and updating such a folder keeps it. New installs use the start menu.
 
 ## What's new in 0.7
 
@@ -120,7 +145,8 @@ the Japanese line being spoken.
 - **Quick save** (F6, or Back + RB) to a dedicated slot, from anywhere you have control of
   Mega Man.
 - **On-screen notices** for quick saves and the modern controls toggle, and a short list of
-  shortcuts on the title screen.
+  shortcuts on the title screen (can be turned off).
+- **Back to the start menu** from the title screen: hold Back (or F2).
 - **New intro video,** with an option to skip it entirely.
 - **Timing fix** for the cutscene audio drift on modern PCs.
 
@@ -129,10 +155,10 @@ the Japanese line being spoken.
 - **English subtitles for the cutscenes,** which were never subtitled in the original release.
   They show with the English voices and with the Japanese ones. They are the work of the
   [Rockman DASH PSP English project](https://github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher)
-  and are downloaded from its repository during setup (see [Credits](#subtitles-and-japanese-voices)).
+  and are downloaded from its repository by the start menu (see [Credits](#subtitles-and-japanese-voices)).
 - **Japanese voices,** built from your own copy of Rockman DASH (the Japanese PC version): the
-  cutscenes, the in-game lines and the title screen. The launcher, or the Android start menu,
-  switches between the English and the Japanese voices.
+  cutscenes, the in-game lines and the title screen. The start menu (or the launcher, in older
+  installs) switches between the English and the Japanese voices.
 
 **Experimental.** The subtitles and the Japanese voices have not been checked through the whole
 game yet. The subtitles are timed to the English voice acting. With the Japanese voices they
@@ -169,29 +195,29 @@ the Japanese line being spoken.
 ## Installation on Windows
 
 1. Download `MML-Setup.exe` from the [latest release](../../releases).
-2. Run it and select your game folder (it tries to find it automatically).
-3. Click **Install**.
-4. Start the game with `MML Launcher.exe` in the game folder, or with the optional desktop
-   shortcut.
+2. Run it, choose where to install the app (by default
+   `C:\Games\Mega Man Legends Modernization`) and click **Install**.
+3. Start **Mega Man Legends** from the desktop shortcut (or `mml_run64.exe --menu` in the app's
+   folder). The start menu opens.
+4. On first launch it asks for your game: choose **Import Mega Man Legends (US)** and pick the
+   folder with `MEGAMAN.EXE`, or **Import Rockman DASH (JP)** and pick the folder with
+   `ROCKMAN.EXE`.
+5. Wait for the copy to finish, then press **Play** (Start, or Enter).
 
-Setup installs the patch in the US version, in Rockman DASH (the Japanese PC version), or in
-both. Each version keeps its own folder, launcher, settings and saves. A game folder inside
-`Program Files` is protected by Windows: copy the game to another folder, such as `C:\Games`,
-and pick that copy.
+The import copies the game into the app's folder (Rockman DASH into its own `Japanese` folder,
+with its own saves) and patches the copy. It verifies the game executable by hash and refuses
+an unknown build, and it leaves the folder you picked unchanged. To bring your saves along, make
+sure the `DASH_*.MCD` files are in that folder. The other version can be imported any time on the
+**Game** page, which also downloads the English subtitles and builds the Japanese voices.
 
-The installer:
+**Updating:** the start menu checks GitHub for a new release when it opens (**Check on launch**,
+Game page) and installs it with **Update**. You can also run the new `MML-Setup.exe` on the same
+folder. The imported games, settings and saves are kept.
 
-- Verifies the game executable by hash, and refuses to patch an unknown build.
-- Backs up the executable as `MEGAMAN.EXE.vanilla-backup`, then verifies the patched file.
-- Moves conflicting wrapper DLLs from other fix packs to `Modernization\quarantined-wrappers`
-  instead of deleting them.
-- Installs the runtime, the standalone engine, the launcher, the compatibility wrappers and
-  their licenses.
-- Installs the new intro and keeps the original as `CAPCOM.AVI.original`.
-- Optionally downloads the English subtitles for the cutscenes (on by default), and builds the
-  Japanese voices from a Rockman DASH folder you select.
-
-**Upgrading:** run the new installer on the same folder. Your saves and settings are kept.
+**Earlier installs:** a game folder that an earlier Setup patched in place is updated where it
+is, and keeps `MML Launcher.exe`. Setup moves conflicting wrapper DLLs from other fix packs to
+`Modernization\quarantined-wrappers` instead of deleting them, and keeps the original executable
+as `MEGAMAN.EXE.vanilla-backup` and the original intro as `CAPCOM.AVI.original`.
 
 ## Installation on Android
 
@@ -200,17 +226,17 @@ The installer:
    the `DASH_*.MCD` files are in that folder too.
 2. Download `MML-<version>.apk` from the [latest release](../../releases) and install it
    (allow installing apps from your browser or file manager when Android asks).
-3. Open **Mega Man Legends**. The start menu opens on the **App** page.
-4. Select **US version**, press A, pick the game folder in Android's folder picker, and allow
-   access.
+3. Open **Mega Man Legends**. On first launch the start menu asks for your game.
+4. Choose **Import Mega Man Legends (US)**, pick the game folder in Android's folder picker, and
+   allow access.
 5. Wait for the copy to finish (a few minutes), then press **Play**.
 
-For Rockman DASH, copy its folder (the one with `ROCKMAN.EXE`) and import it with **Japanese
-version** in the same way. It is kept apart from the US version, with its own saves, and
-**Version to play** picks the one that **Play** starts.
+For Rockman DASH, copy its folder (the one with `ROCKMAN.EXE`) and import it with **Rockman DASH
+(JP)** on the **Game** page in the same way. It is kept apart from the US version, with its own
+saves, and **Version to play** picks the one that **Play** starts.
 
-On the same page, **Subtitles** downloads the English subtitles for the cutscenes (press A), and
-**Voices** builds the Japanese voices from an imported **Japanese version** (about 260 MB). Once
+On the same page, **English subtitles** downloads the subtitles for the cutscenes (press A), and
+**Voice language** builds the Japanese voices from an imported Rockman DASH (about 260 MB). Once
 there, the same rows turn them on and off.
 
 The import checks and patches the executable the same way the Windows installer does, copies
@@ -224,13 +250,13 @@ The Linux version has only been tested on Windows' Linux subsystem (WSL) so far,
 renderer. It has not been tested on real Linux hardware or on the Steam Deck yet. Reports are
 welcome (see [Reporting bugs](#reporting-bugs)).
 
-1. Download `mml-linux-<version>-x86_64.tar.gz` from the [releases](../../releases) (it is
-   published as a pre-release) and extract it anywhere.
+1. Download `mml-linux-<version>-x86_64.tar.gz` from the [latest release](../../releases) and
+   extract it anywhere.
 2. Copy your Mega Man Legends folder (the one with `MEGAMAN.EXE`, `DAT`, `BGM` and `SPH`) to the
    computer. To bring your saves along, make sure the `DASH_*.MCD` files are in that folder too.
-3. Start `mml` in the extracted `mml-linux` folder. The start menu opens.
-4. On the **App** page, select **US version**, press A (Space on the keyboard) and pick the game
-   folder.
+3. Start `mml` in the extracted `mml-linux` folder. On first launch the start menu asks for
+   your game.
+4. Choose **Import Mega Man Legends (US)** (A, or Enter on the keyboard) and pick the game folder.
 5. Wait for the copy to finish, then press **Play** (Start, or Enter).
 
 The game is copied into `~/.local/share/mml-modernization` (or `$XDG_DATA_HOME/mml-modernization`),
@@ -264,7 +290,8 @@ Enter plays, Esc quits, and Q and E switch pages.
 | Back + RB | Quick save |
 
 On Android, the system's **Back** button closes the settings menu, or closes the game when
-pressed twice. In the start menu, **Start** plays and **B** quits.
+pressed twice. In the start menu, **Start** plays and **B** quits. On the title screen, hold
+**Back** for 1.5 seconds to go back to the start menu.
 
 ### Mouse and keyboard (Windows and Linux, modern controls)
 
@@ -285,8 +312,9 @@ pressed twice. In the start menu, **Start** plays and **B** quits.
 | F5 | Modern controls on/off |
 | F1 | Settings menu |
 | F6 | Quick save |
+| F2 (hold, title screen) | Back to the start menu |
 
-All of these can be remapped in the launcher or the start menu (Buttons). With modern controls
+All of these can be remapped in the start menu (Buttons). With modern controls
 off, or in Vanilla mode, the game uses its original controls and camera.
 
 ### Camera aim
@@ -324,35 +352,37 @@ in control of Mega Man (not in menus or cutscenes).
 
 ## Settings
 
-On Windows, settings are changed in the launcher before playing; on Android and Linux, in the
-start menu. The in-game settings menu changes most of them while playing. All of them edit the same
-file (`mml.ini` in the game folder).
+Settings are changed in the start menu before playing (on Windows installs that an earlier
+Setup patched in place, in the launcher). The in-game settings menu changes most of them while
+playing. All of them edit the same file (`mml.ini` in the app's or the game's folder). The start
+menu shows each setting's full description and choices beside the list.
 
 | Page | Settings |
 |------|----------|
-| Display | Renderer (Direct3D 11 / Vulkan / Compatibility), display mode, resolution, aspect ratio, frame rate, intro video; Advanced: game engine |
-| Graphics | Texture filter, upscaling, antialiasing, distance fog, model detail, shader preset, HD textures |
-| Controls | Control scheme, modern controls at start, controller backend, camera speed and inversion, stick deadzone, walk tilt, roll speed, mouse speed, lock-on reticle colour, shots aim (character / camera), crosshair |
+| Game | Version to play, importing each version, English subtitles, voice language, start menu at launch (show / skip), intro video, title screen hints, updates |
+| Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio, frame rate, V-Sync, executable |
+| Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement |
+| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, aim mode, crosshair, reticle colour, mouse sensitivity |
 | Buttons | Controller and keyboard remapping |
-| App (Android, Linux) | The game files' status, importing them, subtitles and voices |
 
-Settings that only exist on Windows (renderer, display mode, game engine, controller backend,
-shaders) are hidden on Android and Linux, and so are mouse and keyboard and vsync on Android.
+Settings that only exist on Windows (Graphics API, display mode, executable, input API, shaders)
+are hidden on Android and Linux, and so are mouse and keyboard and V-Sync on Android.
 
-**Game engine** (Windows, Advanced):
+**Executable** (Windows):
 
-- **Classic** (default): the game's own executable with `mml.dll`.
-- **Standalone (64-bit)**: `mml_run64.exe`, the recompiled game. It does not support shader
+- **Original (32-bit)** (default): the game's own executable with `mml.dll`.
+- **Recompiled (64-bit)**: `mml_run64.exe`, the recompiled game. It does not support shader
   presets yet.
 
-The **Compatibility** renderer uses DDrawCompat instead of the project's own renderer. It has
-no 60 fps, shaders, ReShade depth, in-game menu or notices, and is only meant as a fallback.
+**DirectDraw (legacy)** uses DDrawCompat instead of the project's own renderer. It has no 60 fps,
+shaders, ReShade depth, in-game menu, notices or title screen shortcuts, and is only meant as a
+fallback.
 
 ## Shaders, ReShade and texture packs
 
 - **RetroArch shaders** (Windows, Classic engine, Direct3D 11): presets are not included.
   Download RetroArch's [slang-shaders](https://github.com/libretro/slang-shaders) into
-  `Modernization\shaders`, then pick a preset in the launcher or the in-game menu. CRT presets
+  `Modernization\shaders`, then pick a preset in the start menu or the in-game menu. CRT presets
   work best with the shader input set to "Game resolution".
 - **ReShade** (Windows, Direct3D 11): install ReShade for `MEGAMAN.EXE` with the DirectX
   10/11/12 API. Depth-based effects work with antialiasing off. The installer leaves an
@@ -364,7 +394,12 @@ no 60 fps, shaders, ReShade depth, in-game menu or notices, and is only meant as
 
 ## Uninstalling
 
-**Windows**
+**Windows:** delete the app's folder (by default `C:\Games\Mega Man Legends Modernization`) and
+the desktop shortcut. The folder holds the imported games and the saves made with them: copy the
+`DASH_*.MCD` files out of it (and out of its `Japanese` folder) first if you want to keep them.
+The folder you imported from is not changed.
+
+**Windows, a game folder patched in place by an earlier Setup:**
 
 1. Rename `MEGAMAN.EXE.vanilla-backup` back to `MEGAMAN.EXE`.
 2. Rename `CAPCOM.AVI.original` back to `CAPCOM.AVI`.
@@ -386,8 +421,8 @@ game and the saves: copy the `DASH_*.MCD` files out of it first if you want to k
 - Some in-engine cutscenes may show black or missing textures.
 - Antialiasing disables depth-based ReShade effects.
 - Shader presets and ReShade depth work only with the Classic engine on Direct3D 11.
-- The in-game settings menu, notices and title-screen shortcuts require the project's own
-  renderers (not Compatibility).
+- The in-game settings menu, notices, title-screen shortcuts and the way back to the start menu
+  require the project's own renderers (not DirectDraw legacy).
 - With the Legacy controller backend, the controller still reaches the game while the in-game
   menu is open.
 - Android: no touch controls, and no mouse and keyboard support yet.
@@ -405,7 +440,7 @@ game and the saves: copy the `DASH_*.MCD` files out of it first if you want to k
 
 - **Linux:** testing on real hardware and the Steam Deck, and a build for older distributions.
 - **Touch controls** on Android.
-- **The start menu on Windows,** replacing the separate launcher.
+- **Retiring the separate launcher** in game folders patched in place by earlier versions.
 - Shader presets for the Vulkan renderer and the standalone engine.
 - Later candidates: bloom and ambient occlusion, HUD repositioning options, and further mod
   support.
@@ -414,14 +449,15 @@ game and the saves: copy the `DASH_*.MCD` files out of it first if you want to k
 
 Open an [issue](../../issues) and include:
 
-- `mml.log` from the game folder (on Android: `Android/data/org.mml.legends/files`; on Linux:
-  `~/.local/share/mml-modernization`). It is
+- `mml.log` from the app's folder on Windows (or the game folder, for installs patched in place;
+  on Android: `Android/data/org.mml.legends/files`; on Linux: `~/.local/share/mml-modernization`). It is
   rewritten every time the game starts, so copy it right after the problem. Its first line
   identifies the build.
-- On Windows, `Modernization\launcher.log`.
+- On Windows, `Modernization\menu.log` (the start menu), or `Modernization\launcher.log` for
+  installs that use the launcher.
 - What you were doing, and a screenshot if the problem is visual.
-- If the installer or the Android import rejected your game: the hash it reported (on Android
-  it is in `mml.log`). Other builds of the PC port exist, and their hashes help add support for
+- If the installer or the start menu's import rejected your game: the hash it reported (in
+  `menu.log` on Windows, in `mml.log` on Android and Linux). Other builds of the PC port exist, and their hashes help add support for
   them.
 
 ## How it works
