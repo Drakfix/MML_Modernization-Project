@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.8.0 beta.** The 0.1 releases are kept on the
+**Current version: 0.8.1 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -54,6 +54,15 @@ copy.
 - **Linux** is part of the release (still experimental).
 - Fix: Rockman DASH with the Original (32-bit) executable crashed when a debug option for the
   recompiled game was set in `mml.ini`.
+
+0.8.1 adds:
+
+- **Update notice.** With the start menu set to Skip, the game checks for a new release itself,
+  and the title screen says when one is out. Holding Back / F2 then opens the start menu on its
+  **Update** row.
+- **Updates on Linux.** The start menu's **Update** downloads the new archive, checks it, installs
+  it over the app and starts it again.
+- Fix (Linux): holding Back / F2 on the title screen could crash instead of opening the start menu.
 
 The separate launcher (`MML Launcher.exe`) is still installed in game folders that an earlier
 Setup patched in place, and updating such a folder keeps it. New installs use the start menu.
@@ -147,6 +156,8 @@ the Japanese line being spoken.
 - **On-screen notices** for quick saves and the modern controls toggle, and a short list of
   shortcuts on the title screen (can be turned off).
 - **Back to the start menu** from the title screen: hold Back (or F2).
+- **Update notice.** With the start menu set to Skip, the game checks for a new release itself,
+  and the title screen says when one is out.
 - **New intro video,** with an option to skip it entirely.
 - **Timing fix** for the cutscene audio drift on modern PCs.
 
@@ -190,7 +201,7 @@ the Japanese line being spoken.
   24.04, Fedora 39, Debian 13 or a current Arch) and a GPU driver with **Vulkan 1.1**.
 - About **2.5 GB** of free space (the game is copied into the app's folder).
 - For the folder picker, the desktop's file chooser (the XDG portal) or `zenity`; for the
-  subtitles download, `curl` or `wget`.
+  subtitles download and updates, `curl` or `wget`.
 
 ## Installation on Windows
 
@@ -262,9 +273,12 @@ welcome (see [Reporting bugs](#reporting-bugs)).
 The game is copied into `~/.local/share/mml-modernization` (or `$XDG_DATA_HOME/mml-modernization`),
 which also holds `mml.ini`, the saves and `mml.log`. To use another folder instead, start the game
 with `./mml --game-dir <folder>`. Rockman DASH, the subtitles and the Japanese voices work as on
-Android (see [Installation on Android](#installation-on-android)). There is no automatic update on
-Linux: download the new archive and replace the old `mml-linux` folder. The game folder and the
-saves are not in it, so they stay.
+Android (see [Installation on Android](#installation-on-android)).
+
+**Updating:** the start menu checks GitHub for a new release when it opens, and **Update** (Game
+page) downloads the new archive, checks it, copies its files over the app's and starts it again.
+It needs write access to the `mml-linux` folder. You can also extract the new archive over the
+old folder by hand. The game folder and the saves are not in it, so they stay.
 
 In the start menu, the keyboard works as the controller does: the arrow keys choose, Space changes,
 Enter plays, Esc quits, and Q and E switch pages.
@@ -433,7 +447,7 @@ game and the saves: copy the `DASH_*.MCD` files out of it first if you want to k
 - Japanese voices: lines that only the Japanese version voices stay silent, and a long Japanese
   line can be cut off where the game moves on after the English line's length.
 - Linux: tested only on Windows' Linux subsystem so far, not on real hardware or the Steam Deck.
-  It needs glibc 2.38 or newer, and has no automatic update.
+  It needs glibc 2.38 or newer.
 - Running the Windows version through Proton or Wine has not been tested.
 
 ## Roadmap
