@@ -349,10 +349,15 @@ int plat_relaunch_menu(const char *home)
         if (len <= 0)
             return 0;
         self[len] = 0;
+        if (len > 10 && strcmp(self + len - 10, " (deleted)") == 0)   /* (an update replaced it) */
+            self[len - 10] = 0;
         log_printf("plat: back to the start menu: %s starts again", self);
-        SDL_Quit();   /* (the window and the display go first) */
-        for (fd = 3; fd < 1024; fd++)   /* (nothing open carries over: the debug pad's socket, files) */
-            close(fd);
+        /* No SDL_Quit: it unloads the video and Vulkan libraries while the render and input threads
+           still run in them (a crash). execv ends every thread at once and the system closes the
+           window. Nothing open carries over (the debug pad's socket, files), but nothing is closed
+           under the running threads either: everything is marked to close on exec. */
+        for (fd = 3; fd < 1024; fd++)
+            fcntl(fd, F_SETFD, FD_CLOEXEC);
         execv(self, argv);
     }
     log_printf("plat: it didn't start again (errno %d)", errno);
