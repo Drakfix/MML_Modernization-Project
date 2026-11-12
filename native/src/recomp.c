@@ -1162,6 +1162,7 @@ void recomp_install(const char *ini)
                     "Mega Man Legends", MB_OK | MB_ICONWARNING);
         ExitProcess(1);
 #endif
+        g_mode = MODE_OFF;   /* (the game's own machine code runs: recomp_replacing says so to ddshim) */
         return;
     }
     if (addr_game == GAME_JP)
@@ -1169,11 +1170,13 @@ void recomp_install(const char *ini)
 #ifndef RECOMP_DIFF
     if (g_mode == MODE_DIFF) {
         log_printf("recomp: diff mode needs a build with RECOMP_DIFF=1 (memory writes aren't logged otherwise)");
+        g_mode = MODE_OFF;
         return;
     }
 #endif
     if (!g_rnfuncs) {
         log_printf("recomp: this build has no recompiled code");
+        g_mode = MODE_OFF;
         return;
     }
     build_func_index();
@@ -1191,6 +1194,7 @@ void recomp_install(const char *ini)
     g_rc_native = (uint8_t *)calloc((size_t)g_rnfuncs, 1);
     if (!g_rc_native) {
         log_printf("recomp: no memory for the function table");
+        g_mode = MODE_OFF;
         return;
     }
 #ifndef MML_RUNNER   /* (the runner's is a costack, recomp_run) */
@@ -1198,6 +1202,7 @@ void recomp_install(const char *ini)
     host_stack = (uint8_t *)VirtualAlloc(NULL, host_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!host_stack) {
         log_printf("recomp: no memory for the private stack");
+        g_mode = MODE_OFF;
         return;
     }
     {
