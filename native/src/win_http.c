@@ -1,7 +1,7 @@
 /* win_http.h: HTTPS downloads for the Windows start menu (the updater, the subtitles), with
  * Windows' own WinHTTP: the system's proxy settings and certificates, nothing shipped. Redirects
  * (GitHub's downloads go through one) are followed. */
-#if defined(_WIN32) && defined(MML_RUNNER)
+#ifdef _WIN32   /* (the start menu, and the game for its update check: hints.c) */
 #include <windows.h>
 #include <winhttp.h>
 #include <stdint.h>

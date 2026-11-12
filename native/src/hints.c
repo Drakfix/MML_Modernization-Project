@@ -12,6 +12,11 @@
  * the start menu again ([general] menu_once=1 for it: it shows even when it is
  * set to be skipped).
  *
+ * An update notice: with the start menu set to Skip (so its own check never runs) and [general]
+ * check_updates on, the game asks GitHub for the newest release in the background (updater.h);
+ * when one is out, a panel on the title screen says so, and holding Back / F2 opens the start
+ * menu on its Update row ([general] menu_once=2).
+ *
  * The title is told apart by the game's own state: the game coroutine's state
  * byte (G_GAME_STATE, handlers at 0x511EE5) is 2 on the PRESS START screen
  * (sub-state 3 once the logo has faded in), 4 on the NEW GAME / CONTINUE menu,
@@ -36,6 +41,7 @@
 #include "plat.h"
 #include "toast.h"
 #include "ui_style.h"
+#include "updater.h"
 
 #define ST_TITLE       2
 #define ST_TITLE_MENU  4
@@ -58,6 +64,11 @@ static struct {
     volatile int hold_pad;       /* held on the controller (Back), else the keyboard (F2) */
     int wait_release;            /* (after a failed try: let go first) */
     char ini[MAX_PATH], home[MAX_PATH];
+    int upd_polling, upd_frames;  /* the update check runs (polled every so often) */
+    volatile int upd_avail;      /* a newer release is out: upd_ver */
+    char upd_ver[48];
+    volatile int on_title;       /* (for the draw side) */
+    double upd_since;            /* when the notice first showed */
     LARGE_INTEGER qpf;
 } H;
 
@@ -73,7 +84,8 @@ static void to_start_menu(void)
 {
     H.leaving = 1;
     log_printf("hints: Back / F2 held on the title screen: to the start menu");
-    WritePrivateProfileStringA("general", "menu_once", "1", H.ini);   /* (shown even when set to Skip) */
+    /* (shown even when set to Skip; 2: on its Update row) */
+    WritePrivateProfileStringA("general", "menu_once", H.upd_avail ? "2" : "1", H.ini);
     if (plat_relaunch_menu(H.home))
         return;
     WritePrivateProfileStringA("general", "menu_once", NULL, H.ini);
@@ -92,6 +104,20 @@ void hints_frame(void)
     st = GVAR(uint8_t, G_GAME_STATE);
     sub = GVAR(uint8_t, G_GAME_STATE + 1);
     title = (st == ST_TITLE && sub >= 3) || st == ST_TITLE_MENU;
+    H.on_title = title;
+    if (H.upd_polling && ++H.upd_frames >= 30) {   /* (twice a second is plenty) */
+        char msg[200], ver[48];
+        float progress;
+        int us = update_poll(msg, sizeof msg, ver, sizeof ver, &progress);
+        H.upd_frames = 0;
+        if (us == UPD_AVAILABLE) {
+            strcpy_s(H.upd_ver, sizeof H.upd_ver, ver);
+            H.upd_avail = 1;
+            log_printf("hints: version %s is out: the title screen says so", ver);
+        }
+        if (us != UPD_CHECKING && us != UPD_IDLE)
+            H.upd_polling = 0;
+    }
     /* Back alone (no chord: Back + Start is the settings, Back + RB the quick save), or F2 */
     held = title && !H.leaving && !menu_blocks_input() &&
            (menu_pad_buttons() == BTN_BACK || kbm_key(MENU_KEY));
@@ -209,6 +235,52 @@ static void draw_hold(int sw, int sh)
     ui_alpha = 1;
 }
 
+/* a newer release is out: one row along the bottom left of the title screen (under the copyright
+   line), how to get to it */
+static void draw_update(int sw, int sh)
+{
+    float u, x, y, pw, ph, cut, ts = 0.42f, bs = 0.62f, kh, tx, cy, fade, bl;
+    char head[64];
+    double t = now_s();
+    (void)sw;
+    if (!H.upd_avail || !H.on_title || H.leaving)
+        return;
+    if (H.upd_since == 0)
+        H.upd_since = t;
+    fade = ui_ease_out((float)((t - H.upd_since) / 0.3));
+    u = gfx_ui_line(1.0f);
+    kh = u * 0.56f;
+    cut = u * 0.4f;
+    ph = u * 1.45f;
+    bl = gfx_ui_font_line(UI_FONT_BODY, bs);
+    _snprintf_s(head, sizeof head, _TRUNCATE, "UPDATE %s", H.upd_ver);
+    pw = u * 1.3f + gfx_ui_font_width(UI_FONT_DISPLAY, head, ts) + u * 0.4f +
+         gfx_ui_font_width(UI_FONT_BODY, "is out. Hold", bs) + u * 0.25f + ui_cap_width(kh, "Back") +
+#ifndef __ANDROID__
+         u * 0.25f + gfx_ui_font_width(UI_FONT_BODY, "or", bs) + u * 0.25f + ui_cap_width(kh, "F2") +
+#endif
+         u * 0.25f + gfx_ui_font_width(UI_FONT_BODY, "for the start menu", bs);
+    x = u * 1.2f - (1 - fade) * u * 1.5f;
+    y = sh - ph - u * 0.3f;
+    cy = y + ph / 2;
+    ui_alpha = fade;
+    ui_panel(x + u * 0.15f, y + u * 0.2f, pw, ph, cut, 0x60000000, 0x60000000);
+    ui_panel(x, y, pw, ph, cut, COL_PANEL_TOP, COL_PANEL_BOT);
+    ui_panel_edge(x, y, pw, ph, cut, u * 0.06f, COL_EDGE);
+    gfx_ui_rect(x, y + u * 0.25f, u * 0.1f, ph - u * 0.5f, ui_col(COL_YELLOW));
+    tx = x + u * 0.6f;
+    tx += gfx_ui_font_text(UI_FONT_DISPLAY, tx, cy - gfx_ui_font_line(UI_FONT_DISPLAY, ts) / 2, head,
+                           ui_col(COL_YELLOW), ui_col(COL_YELLOW_LO), ts) + u * 0.4f;
+    tx += ui_text(tx, cy - bl / 2, "is out. Hold", COL_TEXT, bs) + u * 0.25f;
+    tx += ui_key_cap(tx, cy, kh, "Back") + u * 0.25f;
+#ifndef __ANDROID__
+    tx += ui_text(tx, cy - bl / 2, "or", COL_DIM, bs) + u * 0.25f;
+    tx += ui_kb_cap(tx, cy, kh, "F2") + u * 0.25f;
+#endif
+    ui_text(tx, cy - bl / 2, "for the start menu", COL_TEXT, bs);
+    ui_alpha = 1;
+}
+
 static void draw_card(int sw, int sh);
 
 static void draw(void *user, int sw, int sh)
@@ -216,6 +288,7 @@ static void draw(void *user, int sw, int sh)
     (void)user;
     if (H.card)
         draw_card(sw, sh);
+    draw_update(sw, sh);
     draw_hold(sw, sh);
 }
 
@@ -357,6 +430,13 @@ void hints_install(const char *ini)
     slash = strrchr(H.home, '\\');
     if (slash)
         *slash = 0;
+    /* the start menu set to Skip doesn't look for updates: the game does, for the title screen */
+    if (update_can() && GetPrivateProfileIntA("general", "check_updates", 1, ini) &&
+        !GetPrivateProfileIntA("general", "start_menu", 1, ini)) {
+        update_check_begin();
+        H.upd_polling = 1;
+        log_printf("hints: the start menu is skipped: the game looks for updates");
+    }
     gfx_ui_add_draw(draw, NULL);
     H.ready = 1;
 }

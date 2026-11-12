@@ -95,9 +95,7 @@ static int load_image(const char *path)
 static int skip_start_menu(const char *dir, const char *ini)
 {
     int once = GetPrivateProfileIntA("general", "menu_once", 0, ini), jp = gamefiles_edition(dir) == 1;
-    if (once)
-        WritePrivateProfileStringA("general", "menu_once", NULL, ini);
-    if (once || GetPrivateProfileIntA("general", "start_menu", 1, ini))
+    if (once || GetPrivateProfileIntA("general", "start_menu", 1, ini))   /* (menu_start clears menu_once) */
         return 0;
     if (!gamefiles_version_ready(dir, jp)) {
         log_printf("start menu: set to Skip, but the %s version isn't there: shown", jp ? "Japanese" : "US");

@@ -1,9 +1,9 @@
 #pragma once
-/* The app's updater, where there is no installer to run again (Android): looks up the newest
- * release on GitHub, downloads its package and hands it to the system's installer, which asks
- * the player to confirm. The work is MmlActivity's / Updater.java (threads of its own); this
- * starts it and polls it. The start menu's APP page is the front end (menu.c). Elsewhere
- * update_can() is 0 and the rest does nothing. See updater.c. */
+/* The app's updater: looks up the newest release on GitHub, downloads this platform's package,
+ * checks it and installs it. Android (updater.c): MmlActivity / Updater.java do the work and hand
+ * the APK to the system's installer. Windows and Linux (updater_net.c): the start menu runs
+ * MML-Setup.exe, or unpacks the Linux archive over the app; the game itself only checks (the
+ * title screen's notice, hints.c). The start menu's GAME page is the front end (menu.c). */
 #include <stddef.h>
 
 enum { UPD_IDLE, UPD_CHECKING, UPD_UPTODATE, UPD_AVAILABLE, UPD_DOWNLOADING, UPD_READY, UPD_INSTALLING,

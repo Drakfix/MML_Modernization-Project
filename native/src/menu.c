@@ -210,20 +210,24 @@ static const item g_start_items[] = {
       "it while it plays.", CH_INTRO, NCH(CH_INTRO) },
     { PAGE_FILES, IT_CHOICE, "Title screen hints", "A card on the title screen listing the shortcuts: the settings "
       "menu, quick save, the modern controls switch, and the way back to this menu.", CH_HINTS, NCH(CH_HINTS) },
-    { PAGE_FILES, IT_SECTION, "Updates", NULL, NULL, 0, PL_ANDROID | PL_WIN },
+    { PAGE_FILES, IT_SECTION, "Updates", NULL, NULL, 0, PL_ANDROID | PL_WIN | PL_LINUX },
     { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer release on GitHub, downloads its APK and hands it to "
       "Android's installer. Android may ask once to allow installs from this app, and to confirm.",
       NULL, 0, PL_ANDROID },
     { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer release on GitHub, downloads its MML-Setup.exe, checks "
       "it against the SHA-256 GitHub lists and runs it on this folder. This menu closes while Setup updates the "
       "files; imported games, settings and saves stay.", NULL, 0, PL_WIN },
+    { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer release on GitHub, downloads its Linux archive (with "
+      "curl or wget), checks it against the SHA-256 GitHub lists, copies the new files over this app's and starts "
+      "it again. Other files in the app's folder, the imported games, settings and saves stay.", NULL, 0, PL_LINUX },
     { PAGE_FILES, IT_UP_VERSION, "Installed version", "The version of the app you're running.", NULL, 0,
-      PL_ANDROID | PL_WIN },
+      PL_ANDROID | PL_WIN | PL_LINUX },
     { PAGE_FILES, IT_UP_LATEST, "Newest release", "The newest release on GitHub (pre-releases aren't counted).",
-      NULL, 0, PL_ANDROID | PL_WIN },
+      NULL, 0, PL_ANDROID | PL_WIN | PL_LINUX },
     { PAGE_FILES, IT_CHOICE, "Check on launch", "Asks GitHub for the newest release when the app opens. Only the "
-      "release list is requested; nothing about you or your system is sent.", CH_UPDATES, NCH(CH_UPDATES),
-      PL_ANDROID | PL_WIN },
+      "release list is requested; nothing about you or your system is sent. With the start menu set to Skip, "
+      "the game checks instead and its title screen says when a new version is out.", CH_UPDATES, NCH(CH_UPDATES),
+      PL_ANDROID | PL_WIN | PL_LINUX },
 
     /* ---- DISPLAY ---- */
     { PG_DISPLAY, IT_CHOICE, "Graphics API", "The API the project's renderer draws with. Direct3D 11 is the default "
@@ -2175,6 +2179,13 @@ void menu_frame(void)
                 M.quit = 1;
                 return;
             }
+#elif defined(__linux__) && !defined(__ANDROID__)
+            if (st == UPD_INSTALLING) {   /* the new files are in: the new program, back in this menu */
+                WritePrivateProfileStringA("general", "menu_once", "1", M.ini);
+                if (!plat_relaunch_menu(M.game_dir))
+                    note("Updated: close the app and start it again");
+                return;
+            }
 #endif
         }
         if (M.block) {   /* (see above) */
@@ -2481,6 +2492,13 @@ int menu_start(const char *ini, const char *game_dir)
             update_check_begin();
         }
         set_page(gamefiles_can_import() && !M.gf_ready[M.edition] ? PAGE_FILES : 0);
+        {   /* [general] menu_once: the game asked for this menu (hints.c); 2: for its update */
+            int once = GetPrivateProfileIntA("general", "menu_once", 0, ini), row;
+            if (once)
+                WritePrivateProfileStringA("general", "menu_once", NULL, ini);
+            if (once == 2 && !M.welcome && (row = start_row(IT_UP_ACTION)) >= 0)
+                M.cursor = row;
+        }
         add_draw_once();
         M.ready = M.open = 1;
         M.shown = 1;
