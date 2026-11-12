@@ -199,6 +199,63 @@ void plat_quit(void)
     PostQuitMessage(0);
 }
 
+/* the start menu's window: a visible top-level one of its process */
+typedef struct {
+    DWORD pid;
+    HWND found;
+} relaunch_find;
+
+static BOOL CALLBACK relaunch_window(HWND w, LPARAM p)
+{
+    relaunch_find *f = (relaunch_find *)p;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    if (pid == f->pid && IsWindowVisible(w) && !GetWindow(w, GW_OWNER)) {
+        f->found = w;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+int plat_relaunch_menu(const char *home)
+{
+    char exe[MAX_PATH], cmd[MAX_PATH + 16];
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    relaunch_find f;
+    int k;
+    _snprintf_s(exe, sizeof exe, _TRUNCATE, "%s\\mml_run64.exe", home);
+    if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES) {
+        log_printf("plat: no start menu to go back to (%s isn't there)", exe);
+        return 0;
+    }
+    _snprintf_s(cmd, sizeof cmd, _TRUNCATE, "\"%s\" --menu", exe);
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    if (!CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, home, &si, &pi)) {
+        log_printf("plat: the start menu didn't start (error %lu)", GetLastError());
+        return 0;
+    }
+    /* (this program is in front, so it may hand that on: the menu's window comes up in front of
+       the game, which goes once it is there) */
+    AllowSetForegroundWindow(pi.dwProcessId);
+    f.pid = pi.dwProcessId;
+    f.found = NULL;
+    for (k = 0; k < 200 && !f.found; k++) {   /* (10 s at most) */
+        if (WaitForSingleObject(pi.hProcess, 50) == WAIT_OBJECT_0)
+            break;
+        EnumWindows(relaunch_window, (LPARAM)&f);
+    }
+    if (f.found)
+        SetForegroundWindow(f.found);
+    log_printf("plat: back to the start menu (its window %s after %d ms); the game closes", f.found ? "up" : "not up",
+               k * 50);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    TerminateProcess(GetCurrentProcess(), 0);
+    return 1;
+}
+
 int plat_pump(void)
 {
     MSG m;

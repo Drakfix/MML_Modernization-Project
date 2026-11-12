@@ -1,8 +1,16 @@
-/* A shortcut banner on the title screen: once per launch, when the title (after
- * the intro) is up, a panel in the settings menu's style slides down from the
- * top (the one strip the title art leaves free) for a few seconds, listing the settings menu, the quick save and the modern controls
- * toggle, with the controller buttons and keys actually bound to them. For
- * whoever skipped the launcher's notes (or has no launcher at all).
+/* The title screen's shortcuts.
+ *
+ * A card: once per launch, when the title (after the intro) is up, a panel in
+ * the settings menu's style slides down from the top (the one strip the title
+ * art leaves free) for a few seconds, listing the settings menu, the quick
+ * save, the way back to the start menu and the modern controls toggle, with
+ * the controller buttons and keys actually bound to them ([general]
+ * title_hints=0: no card).
+ *
+ * Back to the start menu: Back held alone (or F2) for 1.5 s on the title
+ * screen, with a ring filling up while it's held, closes the game and opens
+ * the start menu again ([general] menu_once=1 for it: it shows even when it is
+ * set to be skipped).
  *
  * The title is told apart by the game's own state: the game coroutine's state
  * byte (G_GAME_STATE, handlers at 0x511EE5) is 2 on the PRESS START screen
@@ -12,6 +20,7 @@
  * menu-side state (hints_frame) runs on the game thread, the draw callback
  * while each presented frame is composed. */
 #include <windows.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,7 +29,12 @@
 #include "gfx_ui.h"
 #include "guest.h"
 #include "hints.h"
+#include "input.h"
+#include "kbm.h"
 #include "log.h"
+#include "menu.h"
+#include "plat.h"
+#include "toast.h"
 #include "ui_style.h"
 
 #define ST_TITLE       2
@@ -29,12 +43,21 @@
 #define DUR 10.0
 #define T_IN 0.3
 #define T_OUT 0.35
+#define HOLD_S 1.5      /* Back / F2 held this long: the start menu */
+#define HOLD_SHOW 0.15  /* (the ring shows after this: a tap shows nothing) */
+#define MENU_KEY VK_F2
 
 static struct {
     int ready, shown;            /* shown: the card already came up this launch */
+    int card;                    /* [general] title_hints */
     char toggle_pad[24], toggle_key[16];
     int modern;
     volatile double start, end;  /* end: when it started going away (0 = not yet) */
+    volatile double hold_since;  /* Back / F2 held on the title since (0 = not held) */
+    volatile int leaving;        /* the start menu is on its way */
+    volatile int hold_pad;       /* held on the controller (Back), else the keyboard (F2) */
+    int wait_release;            /* (after a failed try: let go first) */
+    char ini[MAX_PATH], home[MAX_PATH];
     LARGE_INTEGER qpf;
 } H;
 
@@ -45,13 +68,47 @@ static double now_s(void)
     return (double)c.QuadPart / (double)H.qpf.QuadPart;
 }
 
+/* the start menu again: this program goes, the menu comes */
+static void to_start_menu(void)
+{
+    H.leaving = 1;
+    log_printf("hints: Back / F2 held on the title screen: to the start menu");
+    WritePrivateProfileStringA("general", "menu_once", "1", H.ini);   /* (shown even when set to Skip) */
+    if (plat_relaunch_menu(H.home))
+        return;
+    WritePrivateProfileStringA("general", "menu_once", NULL, H.ini);
+    H.leaving = 0;
+    H.hold_since = 0;
+    H.wait_release = 1;
+    toast_post(TOAST_ICON_WARN, TOAST_BAD, "NO START MENU", NULL, "It couldn't be started: see the log");
+}
+
 void hints_frame(void)
 {
     uint8_t st, sub;
+    int title, held;
     if (!H.ready)
         return;
     st = GVAR(uint8_t, G_GAME_STATE);
     sub = GVAR(uint8_t, G_GAME_STATE + 1);
+    title = (st == ST_TITLE && sub >= 3) || st == ST_TITLE_MENU;
+    /* Back alone (no chord: Back + Start is the settings, Back + RB the quick save), or F2 */
+    held = title && !H.leaving && !menu_blocks_input() &&
+           (menu_pad_buttons() == BTN_BACK || kbm_key(MENU_KEY));
+    if (!held) {
+        H.hold_since = 0;
+        H.wait_release = 0;
+    } else if (!H.wait_release) {
+        double t = now_s();
+        if (H.hold_since == 0) {
+            H.hold_pad = menu_pad_buttons() == BTN_BACK;
+            H.hold_since = t;
+        }
+        else if (t - H.hold_since >= HOLD_S)
+            to_start_menu();
+    }
+    if (!H.card)
+        return;
     if (!H.shown) {
         if ((st == ST_TITLE && sub >= 3) || st == ST_TITLE_MENU) {
             H.shown = 1;
@@ -70,7 +127,7 @@ static float group(float x, float y, float u, int draw_it, const char *label, co
 {
     float ls = 0.4f, ch = u * 0.66f, cy = y + gfx_ui_font_line(UI_FONT_DISPLAY, ls) + u * 0.1f + ch / 2;
     float lw = gfx_ui_font_width(UI_FONT_DISPLAY, label, ls), cx = x, js = 0.66f;
-#define CAPW(s) (gfx_ui_font_width(UI_FONT_BODY, (s), 0.58f) + ch * 0.8f)
+#define CAPW(s) ui_cap_width(ch, (s))
     float w = CAPW(pad1) + u * 0.55f + CAPW(key);
     if (pad2)
         w += u * 0.2f + gfx_ui_font_width(UI_FONT_BODY, join, js) + u * 0.2f + CAPW(pad2);
@@ -88,14 +145,87 @@ static float group(float x, float y, float u, int draw_it, const char *label, co
     return w > lw ? w : lw;
 }
 
+/* the ring that fills while Back / F2 is held, and what it does */
+static void arc(float cx, float cy, float r, float th, float f, uint32_t col)
+{
+    int n = (int)(72 * f) + 1, i;
+    uint32_t c[4];
+    c[0] = c[1] = c[2] = c[3] = ui_col(col);
+    for (i = 0; i < n; i++) {
+        float a0 = -1.5707963f + 6.2831853f * f * i / n, a1 = -1.5707963f + 6.2831853f * f * (i + 1) / n;
+        float ri = r - th / 2, ro = r + th / 2, xy[8];
+        xy[0] = cx + cosf(a0) * ri; xy[1] = cy + sinf(a0) * ri;
+        xy[2] = cx + cosf(a0) * ro; xy[3] = cy + sinf(a0) * ro;
+        xy[4] = cx + cosf(a1) * ro; xy[5] = cy + sinf(a1) * ro;
+        xy[6] = cx + cosf(a1) * ri; xy[7] = cy + sinf(a1) * ri;
+        gfx_ui_quad(xy, c);
+    }
+}
+
+static void draw_hold(int sw, int sh)
+{
+    double since = H.hold_since, held = since > 0 ? now_s() - since : 0;
+    float u, f, r, pw, ph, x, y, cut, ts = 0.5f, ds = 0.66f, tx;
+    const char *title = "START MENU", *detail = H.leaving ? "Opening..." : "Keep holding";
+    if (!H.leaving && held < HOLD_SHOW)
+        return;
+    f = H.leaving ? 1 : (float)(held / HOLD_S);
+    if (f > 1)
+        f = 1;
+    u = gfx_ui_line(1.0f);
+    ui_alpha = ui_ease_out((float)((held - HOLD_SHOW) / 0.15));
+    if (H.leaving)
+        ui_alpha = 1;
+    r = u * 1.0f;
+    cut = u * 0.5f;
+    ph = u * 2.9f;
+    pw = r * 2 + u * 1.3f + gfx_ui_font_width(UI_FONT_DISPLAY, title, ts) + u * 0.9f;
+    x = sw - pw - u * 1.2f;   /* (the bottom right corner: clear of the title's copyright line) */
+    y = sh - ph - u * 0.9f;
+    ui_panel(x + u * 0.2f, y + u * 0.25f, pw, ph, cut, 0x60000000, 0x60000000);
+    ui_panel(x, y, pw, ph, cut, COL_PANEL_TOP, COL_PANEL_BOT);
+    ui_panel_edge(x, y, pw, ph, cut, u * 0.07f, COL_EDGE);
+    gfx_ui_ring(x + u * 0.6f + r, y + ph / 2, r, u * 0.2f, ui_col(0xFF1C2C44));
+    arc(x + u * 0.6f + r, y + ph / 2, r, u * 0.2f, f, COL_YELLOW);
+    {   /* what is held, inside the ring: the controller's Back, or the F2 key */
+        float cx = x + u * 0.6f + r, cy = y + ph / 2, room = (r - u * 0.1f) * 2 * 0.8f;
+        if (H.hold_pad) {
+            float bs = 0.6f, bw = gfx_ui_font_width(UI_FONT_BODY, "Back", bs);
+            if (bw > room) {
+                bs *= room / bw;
+                bw = room;
+            }
+            gfx_ui_circle(cx, cy, r - u * 0.16f, ui_col(0xFF2B3A50));
+            ui_text(cx - bw / 2, cy - gfx_ui_font_line(UI_FONT_BODY, bs) / 2, "Back", 0xFFE6F0FA, bs);
+        } else {
+            float kh = u * 0.62f;
+            ui_kb_cap(cx - ui_cap_width(kh, "F2") / 2, cy, kh, "F2");
+        }
+    }
+    tx = x + u * 0.6f + r * 2 + u * 0.6f;
+    gfx_ui_font_text(UI_FONT_DISPLAY, tx, y + ph / 2 - gfx_ui_font_line(UI_FONT_DISPLAY, ts) + u * 0.05f, title,
+                     ui_col(COL_YELLOW), ui_col(COL_YELLOW_LO), ts);
+    ui_text(tx, y + ph / 2 + u * 0.1f, detail, COL_DIM, ds);
+    ui_alpha = 1;
+}
+
+static void draw_card(int sw, int sh);
+
 static void draw(void *user, int sw, int sh)
 {
+    (void)user;
+    if (H.card)
+        draw_card(sw, sh);
+    draw_hold(sw, sh);
+}
+
+static void draw_card(int sw, int sh)
+{
     double t = now_s(), age = t - H.start, end = H.end;
-    float u, pad, gap, bw, pw, ph, x, y, cut, in, out, gx, w1, w2, w3 = 0, ts = 0.5f;
+    float u, pad, gap, bw, pw, ph, x, y, cut, in, out, gx, w1, w2, w3 = 0, w4, ts = 0.5f;
     char pad1[16], pad2[16];
     const char *join = NULL;
     int toggle;
-    (void)user;
     (void)sh;
     if (!H.shown || age < 0 || age > DUR)
         return;
@@ -129,9 +259,10 @@ static void draw(void *user, int sw, int sh)
     bw = gfx_ui_font_width(UI_FONT_DISPLAY, "SHORTCUTS", ts) + u * 1.4f;   /* the blue title block */
     w1 = group(0, 0, u, 0, "SETTINGS", "Back", "+", "Start", "F1");
     w2 = group(0, 0, u, 0, "QUICK SAVE", "Back", "+", "RB", "F6");
+    w4 = group(0, 0, u, 0, "START MENU (HOLD)", "Back", NULL, NULL, "F2");
     if (toggle)
         w3 = group(0, 0, u, 0, "MODERN CONTROLS", pad1, join, join ? pad2 : NULL, H.toggle_key);
-    pw = bw + pad + w1 + gap + w2 + (toggle ? gap + w3 : 0) + pad + cut * 0.5f;
+    pw = bw + pad + w1 + gap + w2 + gap + w4 + (toggle ? gap + w3 : 0) + pad + cut * 0.5f;
     x = (sw - pw) / 2;
     y = u * 0.7f - (1 - in) * u * 1.6f;
 
@@ -165,8 +296,12 @@ static void draw(void *user, int sw, int sh)
         gfx_ui_rect(gx, y + u * 0.35f, 1, ph - u * 0.7f, ui_col(0x24FFFFFF));
         gx += gap / 2;
         group(gx, gy, u, 1, "QUICK SAVE", "Back", "+", "RB", "F6");
+        gx += w2 + gap / 2;
+        gfx_ui_rect(gx, y + u * 0.35f, 1, ph - u * 0.7f, ui_col(0x24FFFFFF));
+        gx += gap / 2;
+        group(gx, gy, u, 1, "START MENU (HOLD)", "Back", NULL, NULL, "F2");
         if (toggle) {
-            gx += w2 + gap / 2;
+            gx += w4 + gap / 2;
             gfx_ui_rect(gx, y + u * 0.35f, 1, ph - u * 0.7f, ui_col(0x24FFFFFF));
             gx += gap / 2;
             group(gx, gy, u, 1, "MODERN CONTROLS", pad1, join, join ? pad2 : NULL, H.toggle_key);
@@ -213,8 +348,15 @@ static void read_bindings(const char *ini)
 
 void hints_install(const char *ini)
 {
+    char *slash;
     QueryPerformanceFrequency(&H.qpf);
     read_bindings(ini);
+    H.card = GetPrivateProfileIntA("general", "title_hints", 1, ini) != 0;
+    strcpy_s(H.ini, sizeof H.ini, ini);
+    strcpy_s(H.home, sizeof H.home, ini);   /* (the folder with mml.ini: the app's, with the start menu) */
+    slash = strrchr(H.home, '\\');
+    if (slash)
+        *slash = 0;
     gfx_ui_add_draw(draw, NULL);
     H.ready = 1;
 }

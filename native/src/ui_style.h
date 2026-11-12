@@ -34,5 +34,6 @@ float ui_text_outlined(int font, float x, float y, const char *s, uint32_t top, 
 float ui_text(float x, float y, const char *s, uint32_t col, float scale);
 void ui_arrow(float cx, float cy, float size, int dir, uint32_t col);
 float ui_cap(float x, float cy, float h, const char *label, uint32_t fill, uint32_t ink);   /* returns the width */
+float ui_cap_width(float h, const char *label);   /* (the width ui_cap will take) */
 float ui_key_cap(float x, float cy, float h, const char *label);   /* controller button: dark */
 float ui_kb_cap(float x, float cy, float h, const char *label);    /* keyboard key: light */

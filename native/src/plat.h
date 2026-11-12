@@ -29,6 +29,10 @@ void plat_adjust_rect(int32_t rect[4], uint32_t style, uint32_t exstyle, int men
 int plat_show_cursor(int show);               /* the new display count, as ShowCursor */
 int plat_take_back(void);                     /* the system's Back button (Android): presses since the last call */
 void plat_quit(void);                         /* close the app, as closing the window does */
+/* the start menu again, from the game: this program ends and the menu starts (home: the folder
+   with mml.ini and the start menu); returns only if it couldn't (0) or, on Android, while the app
+   restarts (1) */
+int plat_relaunch_menu(const char *home);
 
 /* the keyboard now, by DirectInput scan code (DIK_*): 0x80 for a key that is down */
 void plat_key_state(uint8_t keys[256]);

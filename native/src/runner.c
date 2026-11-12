@@ -88,6 +88,25 @@ static int load_image(const char *path)
     return 1;
 }
 
+/* [general] start_menu=0 (the menu's Start menu at launch: Skip) goes straight into the game with
+   the saved settings, unless the game asked for the menu once ([general] menu_once=1: held Back /
+   F2 on its title screen, hints.c) or the chosen version isn't there to play (nothing imported yet:
+   the menu says what to do) */
+static int skip_start_menu(const char *dir, const char *ini)
+{
+    int once = GetPrivateProfileIntA("general", "menu_once", 0, ini), jp = gamefiles_edition(dir) == 1;
+    if (once)
+        WritePrivateProfileStringA("general", "menu_once", NULL, ini);
+    if (once || GetPrivateProfileIntA("general", "start_menu", 1, ini))
+        return 0;
+    if (!gamefiles_version_ready(dir, jp)) {
+        log_printf("start menu: set to Skip, but the %s version isn't there: shown", jp ? "Japanese" : "US");
+        return 0;
+    }
+    log_printf("start menu: skipped ([general] start_menu=0)");
+    return 1;
+}
+
 #ifndef _WIN32
 /* The start menu, where there is no launcher ([general] start_menu, on by default): the window
  * and the renderer are made here, before the game; the game takes the same ones when it asks
@@ -99,7 +118,7 @@ static int start_menu(const char *dir)
     uint32_t win;
     _snprintf_s(ini, sizeof ini, _TRUNCATE, "%s\\mml.ini", dir);
     gamefiles_defaults(dir);   /* (a fresh install: our mml.ini; imported files: the intro...) */
-    if (!GetPrivateProfileIntA("general", "start_menu", 1, ini))
+    if (skip_start_menu(dir, ini))
         return 1;
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, ini))
         controls_debug_pad();
@@ -316,7 +335,8 @@ static int launch_game(const char *dir, const char *ini, uint32_t win)
         f.pid = pi.dwProcessId;
         f.found = NULL;
         for (k = 0; k < 400 && !f.found; k++) {   /* (20 s at most) */
-            plat_pump();
+            if (win)
+                plat_pump();
             if (WaitForSingleObject(pi.hProcess, 50) == WAIT_OBJECT_0) {
                 log_printf("menu: the game closed before its window appeared");
                 break;
@@ -330,7 +350,8 @@ static int launch_game(const char *dir, const char *ini, uint32_t win)
         } else if (k >= 400)
             log_printf("menu: no game window after 20 s");
     }
-    plat_window_show(win, SW_HIDE);
+    if (win)
+        plat_window_show(win, SW_HIDE);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return 0;
@@ -353,6 +374,8 @@ static int start_menu_windows(void)
     log_open_file(log);
     log_printf("start menu %s in %s", MML_NATIVE_BUILD, dir);
     _snprintf_s(ini, sizeof ini, _TRUNCATE, "%s\\mml.ini", dir);
+    if (skip_start_menu(dir, ini))   /* (straight into the game) */
+        return launch_game(dir, ini, 0);
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, ini))   /* (test tools drive the menu too) */
         controls_debug_pad();
     input_sdl_start_early();

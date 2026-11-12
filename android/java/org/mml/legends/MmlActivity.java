@@ -302,6 +302,21 @@ public class MmlActivity extends SDLActivity {
         }
     }
 
+    /* the app anew (native code: back to the start menu): RestartActivity, in a process of its
+       own, ends this one and starts the app again */
+    public static void restartApp() {
+        final SDLActivity a = mSingleton;
+        a.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                Intent i = new Intent(a, RestartActivity.class);
+                i.putExtra(RestartActivity.EXTRA_PID, android.os.Process.myPid());
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                a.startActivity(i);
+            }
+        });
+    }
+
     /* ---- updates (Updater.java), polled by native code (updater.c) ---- */
     public static String updateCurrent() {
         return Updater.current(mSingleton);

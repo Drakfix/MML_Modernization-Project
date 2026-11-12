@@ -128,15 +128,20 @@ void ui_arrow(float cx, float cy, float size, int dir, uint32_t col)
                cx - dir * size * 0.5f, cy + size * 0.6f, ui_col(col));
 }
 
-/* a rounded cap with a button's or key's name */
+/* a cap's whole width, round ends included */
+float ui_cap_width(float h, const char *label)
+{
+    float w = gfx_ui_font_width(UI_FONT_BODY, label, 0.58f) + h * 1.8f;
+    return w < h ? h : w;
+}
+
+/* a rounded cap with a button's or key's name, from x to x + its width (returned) */
 float ui_cap(float x, float cy, float h, const char *label, uint32_t fill, uint32_t ink)
 {
-    float tw = gfx_ui_font_width(UI_FONT_BODY, label, 0.58f), w = tw + h * 0.8f, r = h / 2;
-    if (w < h)
-        w = h;
-    gfx_ui_rect(x + r * 0.5f, cy - r, w - r, h, ui_col(fill));
-    gfx_ui_circle(x + r * 0.5f, cy, r, ui_col(fill));
-    gfx_ui_circle(x + w - r * 0.5f, cy, r, ui_col(fill));
+    float tw = gfx_ui_font_width(UI_FONT_BODY, label, 0.58f), w = ui_cap_width(h, label), r = h / 2;
+    gfx_ui_rect(x + r, cy - r, w - 2 * r, h, ui_col(fill));
+    gfx_ui_circle(x + r, cy, r, ui_col(fill));
+    gfx_ui_circle(x + w - r, cy, r, ui_col(fill));
     ui_text(x + (w - tw) / 2, cy - gfx_ui_font_line(UI_FONT_BODY, 0.58f) / 2, label, ink, 0.58f);
     return w;
 }

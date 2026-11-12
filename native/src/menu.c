@@ -54,6 +54,8 @@ enum {
     IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR,
     /* the keyboard's keys for the modern controls ([controls] key_*: two each), and putting them back */
     IT_KEY, IT_KEY_RESET,
+    IT_SECTION,  /* a heading over the rows after it (the start menu's): not selectable
+                    (keep it before IT_CHOICE: the rows it is told apart from) */
     IT_CHOICE,   /* one of a list, each choice a set of mml.ini values (the start menu's) */
     /* the start menu's game files: the version to play; the US and the Japanese copy (where they
        stand, A imports) */
@@ -124,28 +126,37 @@ static const item g_game_items[] = {
     { 2, IT_CROSSHAIR, "Crosshair", XH_HELP },
 };
 
-/* ---- the start menu's pages: everything the launcher has ---- */
-static const char *const START_PAGES[] = { "DISPLAY", "GRAPHICS", "CONTROLS", "BUTTONS", "APP" };
-#define PAGE_FILES 4   /* the app's own page: the game files and the updates (only where there is an importer) */
+/* ---- the start menu's pages: everything the launcher has ----
+   Names and descriptions say what each setting technically is and what it costs, as a PC game's
+   settings do; the description is also where a newcomer finds out what it means. */
+static const char *const START_PAGES[] = { "GAME", "DISPLAY", "GRAPHICS", "CONTROLS", "BUTTONS" };
+#define PAGE_FILES 0   /* GAME: the versions (imported where there is an importer), language, launch, updates */
+#define PG_DISPLAY 1
+#define PG_GRAPHICS 2
+#define PG_CONTROLS 3
+#define PG_BUTTONS 4
 
 static const choice CH_RENDERER[] = { { "Direct3D 11", "video.renderer=mml;video.backend=d3d11" },
                                       { "Vulkan", "video.renderer=mml;video.backend=vulkan" },
-                                      { "Compatibility", "video.renderer=ddrawcompat" } };
-static const choice CH_WINDOW[] = { { "Borderless", "video.windowed=0;video.exclusive=0" },
-                                    { "Exclusive", "video.windowed=0;video.exclusive=1" },
+                                      { "DirectDraw (legacy)", "video.renderer=ddrawcompat" } };
+static const choice CH_WINDOW[] = { { "Borderless window", "video.windowed=0;video.exclusive=0" },
+                                    { "Exclusive fullscreen", "video.windowed=0;video.exclusive=1" },
                                     { "Windowed", "video.windowed=1;video.exclusive=0" } };
-static const choice CH_ASPECT[] = { { "16:9 Wide", "video.aspect=16:9" }, { "4:3 Classic", "video.aspect=4:3" } };
-static const choice CH_ENGINE[] = { { "Classic", "general.engine=classic" },
-                                    { "Standalone (64-bit)", "general.engine=standalone" } };
+static const choice CH_ASPECT[] = { { "16:9 widescreen", "video.aspect=16:9" }, { "4:3 original", "video.aspect=4:3" } };
+static const choice CH_ENGINE[] = { { "Original (32-bit)", "general.engine=classic" },
+                                    { "Recompiled (64-bit)", "general.engine=standalone" } };
 static const choice CH_INTRO[] = { { "Play", "general.intro=play" }, { "Skip", "general.intro=skip" } };
-static const choice CH_CONTROLS[] = { { "Modern", "controls.mode=modern" }, { "Vanilla (1997)", "controls.mode=vanilla" } };
+static const choice CH_STARTMENU[] = { { "Show", "general.start_menu=1" }, { "Skip", "general.start_menu=0" } };
+static const choice CH_HINTS[] = { { "On", "general.title_hints=1" }, { "Off", "general.title_hints=0" } };
+static const choice CH_CONTROLS[] = { { "Modern", "controls.mode=modern" }, { "Original (1997)", "controls.mode=vanilla" } };
 static const choice CH_ORBIT[] = { { "Off", "controls.orbit_start=0" }, { "On", "controls.orbit_start=1" } };
-static const choice CH_JPBTN[] = { { "US", "controls.jp_buttons=us" }, { "Japanese", "controls.jp_buttons=japanese" } };
-static const choice CH_INPUT[] ={ { "Any (SDL)", "controls.input=sdl" }, { "Legacy", "controls.input=legacy" } };
-static const choice CH_DEADZONE[] = { { "Small", "controls.deadzone=12" }, { "Default", "controls.deadzone=24" },
-                                      { "Large", "controls.deadzone=32" } };
-static const choice CH_TILT[] = { { "Walks", "controls.walk_tilt=55" }, { "Runs", "controls.walk_tilt=0" } };
-static const choice CH_ROLL[] = { { "Classic", "controls.roll_speed=512;controls.roll_anim=0" },
+static const choice CH_JPBTN[] = { { "US layout", "controls.jp_buttons=us" },
+                                   { "Japanese layout", "controls.jp_buttons=japanese" } };
+static const choice CH_INPUT[] = { { "SDL3", "controls.input=sdl" }, { "DirectInput (legacy)", "controls.input=legacy" } };
+static const choice CH_DEADZONE[] = { { "12%", "controls.deadzone=12" }, { "24% (default)", "controls.deadzone=24" },
+                                      { "32%", "controls.deadzone=32" } };
+static const choice CH_TILT[] = { { "Walk", "controls.walk_tilt=55" }, { "Run", "controls.walk_tilt=0" } };
+static const choice CH_ROLL[] = { { "Original", "controls.roll_speed=512;controls.roll_anim=0" },
                                   { "Fast", "controls.roll_speed=768;controls.roll_anim=50" },
                                   { "Snappy", "controls.roll_speed=896;controls.roll_anim=80" } };
 static const choice CH_UPDATES[] = { { "On", "general.check_updates=1" }, { "Off", "general.check_updates=0" } };
@@ -156,108 +167,183 @@ static const choice CH_ACTION[] = { { "Jump", "=jump" }, { "Shoot", "=shoot" }, 
 #define NCH(a) ((int)(sizeof a / sizeof a[0]))
 /* the confirm button in a help text: A with a controller, Space with the keyboard (button_words) */
 #define OK_KEY "\x01"
-#define BTN_HELP "What this button does with modern controls (vanilla controls keep the 1997 layout)."
+#define BTN_HELP "What this button does with the modern controls. With the original controls the game uses its own " \
+    "1997 layout."
 #define KEY_HELP "This action's key with mouse and keyboard (modern controls): " OK_KEY " and then the new key or " \
     "mouse button (Esc or B cancels). A second key, such as the arrows for moving, stays as it is."
+#define START_AIM_HELP "Camera: firing turns Mega Man toward where the camera looks, so shots go there, up and down " \
+    "included. Character: shots go where Mega Man faces, as in the original."
+#define START_XH_HELP "With Aim mode on Camera, a crosshair marks where your shots go. It appears with the first " \
+    "shot and fades a few seconds after the last."
+#define WL (PL_WIN | PL_LINUX)
 
 static const item g_start_items[] = {
-    { 0, IT_CHOICE, "Renderer", "Direct3D 11 or Vulkan: 60 fps, windowed, Alt+Tab. Compatibility: the old wrapper. "
-      "Counts from the next start.", CH_RENDERER, NCH(CH_RENDERER), PL_WIN },
-    { 0, IT_CHOICE, "Display", "Exclusive uses the least GPU, with limited Alt+Tab and capture.",
-      CH_WINDOW, NCH(CH_WINDOW), PL_WIN },
-    { 0, IT_RES, "Resolution", "Display renders at your screen's resolution. 1x to 4x are multiples of the game's 480 lines." },
-    { 0, IT_CHOICE, "Aspect ratio", "16:9 fills a wide screen; 4:3 is the original picture.", CH_ASPECT, NCH(CH_ASPECT) },
-    { 0, IT_FPS, "Frame rate", "60 fps adds in-between frames for smooth motion. The game itself still runs at 30." },
-    { 0, IT_VSYNC, "Vsync", "Locks frames to your monitor's refresh so the picture never tears. Adds a little lag.",
-      NULL, 0, PL_WIN | PL_LINUX },
-    { 0, IT_CHOICE, "Intro video", "Any button skips it while it plays.", CH_INTRO, NCH(CH_INTRO) },
-    { 0, IT_CHOICE, "Game engine", "Classic runs the game's own program with the project's runtime. Standalone runs "
-      "the recompiled game in a 64-bit program, without shader presets yet. Compatibility always uses Classic.",
-      CH_ENGINE, NCH(CH_ENGINE), PL_WIN },
-    { 1, IT_MSAA, "Antialiasing", "Smooths jagged polygon edges." },
-    { 1, IT_TEXFILTER, "Texture filter", "Anisotropic keeps floors and walls sharp when you look along them." },
-    { 1, IT_UPSCALE, "Upscaling", "How a lower resolution is stretched to the screen. Nearest keeps the pixels crisp." },
-    { 1, IT_SHADER, "Shader", "RetroArch shader presets (CRT looks and more) from the Modernization\\shaders folder.",
-      NULL, 0, PL_WIN },
-    { 1, IT_SHADER_RES, "Shader input", "What the shader works on. CRT presets look right at the game's own resolution.",
-      NULL, 0, PL_WIN },
-    { 1, IT_FOG, "Distance fog", "The original fog, a lighter one that lets you see further, or none at all." },
-    { 1, IT_LOD, "Model detail", "Full detail keeps faraway models at their best instead of swapping in low-poly ones." },
-    { 1, IT_HDTEX, "HD textures", "Replacement textures from the Modernization\\textures folder." },
-    { 2, IT_CHOICE, "Controls", "Modern: camera-relative movement, orbit camera, lock-on, dodge roll. Vanilla: the 1997 controls.",
-      CH_CONTROLS, NCH(CH_CONTROLS) },
-    { 2, IT_CHOICE, "Modern controls at start", "Whether the game starts with modern controls on (L3 / R3 switch them).",
-      CH_ORBIT, NCH(CH_ORBIT), 0, NULL, 1 },
-    { 2, IT_CHOICE, "Controller", "Any (SDL) handles every controller. Legacy uses the old DirectInput path.",
-      CH_INPUT, NCH(CH_INPUT), PL_WIN },
-    { 2, IT_CHOICE, "Menu buttons", "Japanese version only. US: the bottom button (A / Cross) confirms and the top "
-      "one (Y / Triangle) goes back. Japanese: the right one (B / Circle) confirms and the bottom one goes back.",
-      CH_JPBTN, NCH(CH_JPBTN) },
-    { 2, IT_CAMSPEED, "Camera speed", "How fast the right stick turns the camera." },
-    { 2, IT_INVERT_X, "Invert camera X", "Flips left and right on the camera stick." },
-    { 2, IT_INVERT_Y, "Invert camera Y", "Flips up and down on the camera stick and the mouse." },
-    { 2, IT_CHOICE, "Stick deadzone", "How far the sticks move before anything happens.", CH_DEADZONE, NCH(CH_DEADZONE),
-      0, NULL, 1 },
-    { 2, IT_CHOICE, "Light tilt", "What a slight push of the stick does.", CH_TILT, NCH(CH_TILT) },
-    { 2, IT_CHOICE, "Roll", "Classic is the original cartwheel speed.", CH_ROLL, NCH(CH_ROLL), 0, NULL, 1 },
-    { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off.", NULL, 0,
-      PL_WIN | PL_LINUX },
-    { 2, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to, and of the crosshair." },
-    { 2, IT_AIM, "Shots aim", AIM_HELP },
-    { 2, IT_CROSSHAIR, "Crosshair", XH_HELP },
-    { 3, IT_CHOICE, "A", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_a", 0 },
-    { 3, IT_CHOICE, "B", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_b", 2 },
-    { 3, IT_CHOICE, "X", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_x", 4 },
-    { 3, IT_CHOICE, "Y", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_y", 3 },
-    { 3, IT_CHOICE, "LB", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lb", 5 },
-    { 3, IT_CHOICE, "RB", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rb", 9 },
-    { 3, IT_CHOICE, "LT", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lt", 5 },
-    { 3, IT_CHOICE, "RT", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rt", 1 },
-    { 3, IT_CHOICE, "L3 (left stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_l3", 6 },
-    { 3, IT_CHOICE, "R3 (right stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_r3", 6 },
-    { 3, IT_CHOICE, "Back", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_back", 8 },
-    { 3, IT_CHOICE, "Start", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_start", 7 },
-    { 3, IT_KEY, "Key: move forward", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_up" },
-    { 3, IT_KEY, "Key: move back", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_down" },
-    { 3, IT_KEY, "Key: move left", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_left" },
-    { 3, IT_KEY, "Key: move right", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_right" },
-    { 3, IT_KEY, "Key: walk (hold)", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_walk" },
-    { 3, IT_KEY, "Key: jump", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_jump" },
-    { 3, IT_KEY, "Key: shoot", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_shoot" },
-    { 3, IT_KEY, "Key: aim / lock-on", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_aim" },
-    { 3, IT_KEY, "Key: dodge roll", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_roll" },
-    { 3, IT_KEY, "Key: talk / check", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_talk" },
-    { 3, IT_KEY, "Key: special weapon", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_special" },
-    { 3, IT_KEY, "Key: game menu", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_menu" },
-    { 3, IT_KEY, "Key: select", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_select" },
-    { 3, IT_KEY, "Key: modern on/off", KEY_HELP, NULL, 0, PL_WIN | PL_LINUX, "key_orbit" },
-    { 3, IT_KEY_RESET, "Reset keys", "Puts every key above back to its default (WASD, Space, the mouse buttons...).",
-      NULL, 0, PL_WIN | PL_LINUX },
-    { PAGE_FILES, IT_GF_EDITION, "Version to play", "The copy Play starts. Each version keeps its own saves; "
-      "settings and mods are shared." },
-    { PAGE_FILES, IT_GF_US, "US version", OK_KEY " imports Mega Man Legends for Windows PC: copy its folder (with "
-      "MEGAMAN.EXE) to this device, then pick it. That folder isn't changed.", NULL, 0, PL_OTHER },
-    { PAGE_FILES, IT_GF_JP, "Japanese version", OK_KEY " imports Rockman DASH for Windows PC: copy its folder (with "
-      "ROCKMAN.EXE) to this device, then pick it. It's kept apart from the US version.", NULL, 0, PL_OTHER },
-    { PAGE_FILES, IT_GF_US, "US version", OK_KEY " imports Mega Man Legends for Windows PC: pick its folder (with "
-      "MEGAMAN.EXE) and the game is copied into this app's folder. Your folder isn't changed.", NULL, 0, PL_WIN },
-    { PAGE_FILES, IT_GF_JP, "Japanese version", OK_KEY " imports Rockman DASH for Windows PC: pick its folder (with "
-      "ROCKMAN.EXE) and the game is copied into this app's folder, apart from the US version. Your folder isn't "
+    /* ---- GAME ---- */
+    { PAGE_FILES, IT_SECTION, "Versions" },
+    { PAGE_FILES, IT_GF_EDITION, "Version to play", "Which version Play starts: Mega Man Legends (the US release) "
+      "or Rockman DASH (the Japanese release). Each version keeps its own saves; settings and mods are shared." },
+    { PAGE_FILES, IT_GF_US, "Mega Man Legends (US)", OK_KEY " imports the US PC release: copy its folder (the one "
+      "with MEGAMAN.EXE) to this device, then pick it. The game is copied into the app's storage and patched there; "
+      "the folder you pick isn't changed.", NULL, 0, PL_OTHER },
+    { PAGE_FILES, IT_GF_JP, "Rockman DASH (JP)", OK_KEY " imports the Japanese PC release: copy its folder (the one "
+      "with ROCKMAN.EXE) to this device, then pick it. It's kept apart from the US version, with its own saves.",
+      NULL, 0, PL_OTHER },
+    { PAGE_FILES, IT_GF_US, "Mega Man Legends (US)", OK_KEY " imports the US PC release: pick the folder with "
+      "MEGAMAN.EXE. The game is copied into this app's folder and patched there; the folder you pick isn't "
       "changed.", NULL, 0, PL_WIN },
-    { PAGE_FILES, IT_GF_SUBS, "Subtitles", "US version: English subtitles for the cutscenes, with either voices. "
-      "They are the work of the Rockman DASH PSP English project (github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher): "
-      "the English voice acting, transcribed and timed. " OK_KEY " downloads them from there, then turns them on and off." },
-    { PAGE_FILES, IT_GF_VOICES, "Voices", "US version: Japanese plays the Japanese voice acting. " OK_KEY " builds it from "
-      "your Japanese version (import it first; about 260 MB), then switches between English and Japanese." },
-    { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer version on GitHub, downloads it and asks Android to install it. "
-      "Android may ask you to allow installs from this app once, and to confirm.", NULL, 0, PL_ANDROID },
-    { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer version on GitHub, downloads its Setup, checks it and runs "
-      "it on this game folder. The menu closes while Setup updates the game; settings and saves stay.",
-      NULL, 0, PL_WIN },
-    { PAGE_FILES, IT_UP_VERSION, "Installed", "The version of this app.", NULL, 0, PL_ANDROID | PL_WIN },
-    { PAGE_FILES, IT_UP_LATEST, "Newest", "The newest version published on GitHub.", NULL, 0, PL_ANDROID | PL_WIN },
-    { PAGE_FILES, IT_CHOICE, "Check on start", "Looks for a new version when the app opens. Only the version is asked for, "
-      "nothing about you is sent.", CH_UPDATES, NCH(CH_UPDATES), PL_ANDROID | PL_WIN },
+    { PAGE_FILES, IT_GF_JP, "Rockman DASH (JP)", OK_KEY " imports the Japanese PC release: pick the folder with "
+      "ROCKMAN.EXE. It's copied into this app's folder, apart from the US version and with its own saves; the "
+      "folder you pick isn't changed.", NULL, 0, PL_WIN },
+    { PAGE_FILES, IT_SECTION, "Language" },
+    { PAGE_FILES, IT_GF_SUBS, "English subtitles", "Subtitles for the cutscenes, which the original release never "
+      "had: US version, with either voice language. They are the Rockman DASH PSP English project's work "
+      "(github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher): the English voice acting, transcribed and timed. "
+      OK_KEY " downloads them from there, then turns them on and off. Experimental." },
+    { PAGE_FILES, IT_GF_VOICES, "Voice language", "The voice acting in the US version: English, or the original "
+      "Japanese voices. " OK_KEY " builds the Japanese voices from your imported Rockman DASH (about 260 MB, once), "
+      "then switches between the two. Experimental: lines only the Japanese release voices stay silent." },
+    { PAGE_FILES, IT_SECTION, "Launch" },
+    { PAGE_FILES, IT_CHOICE, "Start menu at launch", "Show opens this menu every time. Skip starts the game straight "
+      "away with the saved settings. To come back here, hold Back (controller) or F2 (keyboard) on the game's "
+      "title screen.", CH_STARTMENU, NCH(CH_STARTMENU) },
+    { PAGE_FILES, IT_CHOICE, "Intro video", "Plays the project's intro video when the game starts. Any button skips "
+      "it while it plays.", CH_INTRO, NCH(CH_INTRO) },
+    { PAGE_FILES, IT_CHOICE, "Title screen hints", "A card on the title screen listing the shortcuts: the settings "
+      "menu, quick save, the modern controls switch, and the way back to this menu.", CH_HINTS, NCH(CH_HINTS) },
+    { PAGE_FILES, IT_SECTION, "Updates", NULL, NULL, 0, PL_ANDROID | PL_WIN },
+    { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer release on GitHub, downloads its APK and hands it to "
+      "Android's installer. Android may ask once to allow installs from this app, and to confirm.",
+      NULL, 0, PL_ANDROID },
+    { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer release on GitHub, downloads its MML-Setup.exe, checks "
+      "it against the SHA-256 GitHub lists and runs it on this folder. This menu closes while Setup updates the "
+      "files; imported games, settings and saves stay.", NULL, 0, PL_WIN },
+    { PAGE_FILES, IT_UP_VERSION, "Installed version", "The version of the app you're running.", NULL, 0,
+      PL_ANDROID | PL_WIN },
+    { PAGE_FILES, IT_UP_LATEST, "Newest release", "The newest release on GitHub (pre-releases aren't counted).",
+      NULL, 0, PL_ANDROID | PL_WIN },
+    { PAGE_FILES, IT_CHOICE, "Check on launch", "Asks GitHub for the newest release when the app opens. Only the "
+      "release list is requested; nothing about you or your system is sent.", CH_UPDATES, NCH(CH_UPDATES),
+      PL_ANDROID | PL_WIN },
+
+    /* ---- DISPLAY ---- */
+    { PG_DISPLAY, IT_CHOICE, "Graphics API", "The API the project's renderer draws with. Direct3D 11 is the default "
+      "and the most tested; Vulkan is the alternative. Both support every feature: widescreen, 60 fps, the in-game "
+      "menu. DirectDraw (legacy) runs the game's own 1997 DirectDraw / Direct3D output through the DDrawCompat "
+      "wrapper, without those features: a fallback for systems where the other two fail.",
+      CH_RENDERER, NCH(CH_RENDERER), PL_WIN },
+    { PG_DISPLAY, IT_CHOICE, "Display mode", "Borderless window covers the screen as a normal window: instant "
+      "Alt+Tab, overlays and screen capture work. Exclusive fullscreen hands the display to the game: slightly "
+      "lower latency and GPU use, slower Alt+Tab, limited capture. Windowed: a movable window, three quarters of "
+      "the screen.", CH_WINDOW, NCH(CH_WINDOW), PL_WIN },
+    { PG_DISPLAY, IT_RES, "Render resolution", "The resolution the 3D scene is rendered at before it's scaled to "
+      "the screen. Native renders at your display's resolution. 1x to 4x are multiples of the game's original 480 "
+      "lines: lower values keep the original pixelated look and cost less GPU time." },
+    { PG_DISPLAY, IT_CHOICE, "Aspect ratio", "16:9 widescreen renders a wider field of view, places the HUD for a "
+      "wide screen and stretches 4:3 backgrounds to fit. 4:3 original keeps the original framing, with bars on a "
+      "wide screen.", CH_ASPECT, NCH(CH_ASPECT) },
+    { PG_DISPLAY, IT_FPS, "Frame rate", "The game's logic always runs at 30 fps. At 60 fps the renderer draws an "
+      "interpolated frame between every two game frames: smoother camera and motion, a little more GPU time, no "
+      "change to game speed. 30 fps shows the original frames only." },
+    { PG_DISPLAY, IT_VSYNC, "V-Sync", "Synchronizes frames with the monitor's refresh rate. On removes screen "
+      "tearing and adds up to one frame of input latency. Off presents frames as soon as they're ready.",
+      NULL, 0, WL },
+    { PG_DISPLAY, IT_CHOICE, "Executable", "Original runs Capcom's 2001 MEGAMAN.EXE (32-bit) with the project's "
+      "runtime, mml.dll, loaded into it. Recompiled runs the game's code translated to C and compiled into a "
+      "native 64-bit program, mml_run64.exe: the original executable's code never runs, only its data is read. "
+      "Recompiled doesn't support shader presets yet. DirectDraw (legacy) always uses Original.",
+      CH_ENGINE, NCH(CH_ENGINE), PL_WIN },
+
+    /* ---- GRAPHICS ---- */
+    { PG_GRAPHICS, IT_MSAA, "Anti-aliasing", "Multisample anti-aliasing (MSAA) smooths jagged polygon edges by "
+      "sampling each pixel 4 or 8 times. Costs GPU time and video memory, and turns off depth-based ReShade "
+      "effects." },
+    { PG_GRAPHICS, IT_TEXFILTER, "Texture filtering", "How textures are sampled. Bilinear blends neighbouring "
+      "texels. Anisotropic 16x keeps surfaces sharp at steep viewing angles, such as floors and walls into the "
+      "distance, at a small GPU cost." },
+    { PG_GRAPHICS, IT_UPSCALE, "Upscaling filter", "How the rendered image is scaled to the screen when Render "
+      "resolution is below your display's. Bilinear smooths the pixels; Nearest neighbor keeps them sharp and "
+      "square." },
+    { PG_GRAPHICS, IT_SHADER, "Shader preset", "A RetroArch shader preset (.slangp: CRT, scanlines, LCD and more) "
+      "applied to the final image. Presets go in Modernization\\shaders; RetroArch's slang-shaders collection "
+      "works. Original executable with Direct3D 11 only.", NULL, 0, PL_WIN },
+    { PG_GRAPHICS, IT_SHADER_RES, "Shader input resolution", "The resolution the shader preset processes. Native "
+      "(480p) feeds it the game's original resolution, which CRT presets are made for; Output feeds it the full "
+      "render resolution.", NULL, 0, PL_WIN },
+    { PG_GRAPHICS, IT_FOG, "Fog distance", "The game's distance fog. Original keeps it as released; Reduced pushes "
+      "it further out, so more of the level is visible; Off removes it." },
+    { PG_GRAPHICS, IT_LOD, "Level of detail", "Original swaps distant models for low-polygon versions, as the 2001 "
+      "release did. Maximum keeps the full-detail models at any distance, at a small GPU cost." },
+    { PG_GRAPHICS, IT_HDTEX, "Texture replacement", "Loads replacement textures (HD texture packs) from "
+      "Modernization\\textures. Off uses the game's original textures." },
+
+    /* ---- CONTROLS ---- */
+    { PG_CONTROLS, IT_SECTION, "Scheme" },
+    { PG_CONTROLS, IT_CHOICE, "Control scheme", "Modern: camera-relative movement, a free camera on the right "
+      "stick, lock-on targeting and dodge rolls in any direction. Original (1997): the game's own tank-style "
+      "controls and camera.", CH_CONTROLS, NCH(CH_CONTROLS) },
+    { PG_CONTROLS, IT_CHOICE, "Modern controls on launch", "Whether the game starts with the modern controls "
+      "active. In game, L3 or R3 (F5 on the keyboard) switches them on and off.", CH_ORBIT, NCH(CH_ORBIT), 0, NULL,
+      1 },
+    { PG_CONTROLS, IT_CHOICE, "Input API", "SDL3 reads Xbox, PlayStation, Switch and most other controllers, with "
+      "the right button layouts. DirectInput (legacy) goes through the Xidi wrapper: use it only if SDL3 doesn't "
+      "detect your controller.", CH_INPUT, NCH(CH_INPUT), PL_WIN },
+    { PG_CONTROLS, IT_CHOICE, "Confirm button (Rockman DASH)", "Rockman DASH only. US layout: the bottom face "
+      "button (A / Cross) confirms and the top one (Y / Triangle) goes back. Japanese layout: the right face "
+      "button (B / Circle) confirms and the bottom one goes back.", CH_JPBTN, NCH(CH_JPBTN) },
+    { PG_CONTROLS, IT_SECTION, "Camera" },
+    { PG_CONTROLS, IT_CAMSPEED, "Camera sensitivity", "How fast the right stick turns the camera, relative to the "
+      "default." },
+    { PG_CONTROLS, IT_INVERT_X, "Invert camera X", "Reverses left and right on the camera stick." },
+    { PG_CONTROLS, IT_INVERT_Y, "Invert camera Y", "Reverses up and down on the camera stick and the mouse." },
+    { PG_CONTROLS, IT_SECTION, "Movement" },
+    { PG_CONTROLS, IT_CHOICE, "Stick dead zone", "How far a stick must move before the game reacts, as a share of "
+      "its travel. A larger dead zone hides stick drift; a smaller one reacts sooner.", CH_DEADZONE,
+      NCH(CH_DEADZONE), 0, NULL, 1 },
+    { PG_CONTROLS, IT_CHOICE, "Light stick tilt", "What a light push of the left stick does. Walk: a light push "
+      "walks and a full push runs (analog movement). Run: any push runs, as in the original.", CH_TILT,
+      NCH(CH_TILT) },
+    { PG_CONTROLS, IT_CHOICE, "Dodge roll speed", "Original is the 1997 cartwheel. Fast and Snappy cover the "
+      "distance sooner, with a faster animation.", CH_ROLL, NCH(CH_ROLL), 0, NULL, 1 },
+    { PG_CONTROLS, IT_SECTION, "Aiming" },
+    { PG_CONTROLS, IT_AIM, "Aim mode", START_AIM_HELP },
+    { PG_CONTROLS, IT_CROSSHAIR, "Crosshair", START_XH_HELP },
+    { PG_CONTROLS, IT_RETICLE, "Reticle colour", "Colour of the lock-on marker on the targeted enemy, and of the "
+      "crosshair." },
+    { PG_CONTROLS, IT_SECTION, "Mouse and keyboard", NULL, NULL, 0, WL },
+    { PG_CONTROLS, IT_MOUSE, "Mouse sensitivity", "Mouse look speed for the camera, relative to the default. Off "
+      "turns the mouse and keyboard controls off entirely.", NULL, 0, WL },
+
+    /* ---- BUTTONS ---- */
+    { PG_BUTTONS, IT_SECTION, "Controller" },
+    { PG_BUTTONS, IT_CHOICE, "A", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_a", 0 },
+    { PG_BUTTONS, IT_CHOICE, "B", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_b", 2 },
+    { PG_BUTTONS, IT_CHOICE, "X", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_x", 4 },
+    { PG_BUTTONS, IT_CHOICE, "Y", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_y", 3 },
+    { PG_BUTTONS, IT_CHOICE, "LB", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lb", 5 },
+    { PG_BUTTONS, IT_CHOICE, "RB", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rb", 9 },
+    { PG_BUTTONS, IT_CHOICE, "LT", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lt", 5 },
+    { PG_BUTTONS, IT_CHOICE, "RT", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rt", 1 },
+    { PG_BUTTONS, IT_CHOICE, "L3 (left stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_l3", 6 },
+    { PG_BUTTONS, IT_CHOICE, "R3 (right stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_r3", 6 },
+    { PG_BUTTONS, IT_CHOICE, "Back", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_back", 8 },
+    { PG_BUTTONS, IT_CHOICE, "Start", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_start", 7 },
+    { PG_BUTTONS, IT_SECTION, "Keyboard and mouse", NULL, NULL, 0, WL },
+    { PG_BUTTONS, IT_KEY, "Move forward", KEY_HELP, NULL, 0, WL, "key_up" },
+    { PG_BUTTONS, IT_KEY, "Move back", KEY_HELP, NULL, 0, WL, "key_down" },
+    { PG_BUTTONS, IT_KEY, "Move left", KEY_HELP, NULL, 0, WL, "key_left" },
+    { PG_BUTTONS, IT_KEY, "Move right", KEY_HELP, NULL, 0, WL, "key_right" },
+    { PG_BUTTONS, IT_KEY, "Walk (hold)", KEY_HELP, NULL, 0, WL, "key_walk" },
+    { PG_BUTTONS, IT_KEY, "Jump", KEY_HELP, NULL, 0, WL, "key_jump" },
+    { PG_BUTTONS, IT_KEY, "Shoot", KEY_HELP, NULL, 0, WL, "key_shoot" },
+    { PG_BUTTONS, IT_KEY, "Aim / lock-on", KEY_HELP, NULL, 0, WL, "key_aim" },
+    { PG_BUTTONS, IT_KEY, "Dodge roll", KEY_HELP, NULL, 0, WL, "key_roll" },
+    { PG_BUTTONS, IT_KEY, "Talk / check", KEY_HELP, NULL, 0, WL, "key_talk" },
+    { PG_BUTTONS, IT_KEY, "Special weapon", KEY_HELP, NULL, 0, WL, "key_special" },
+    { PG_BUTTONS, IT_KEY, "Game menu", KEY_HELP, NULL, 0, WL, "key_menu" },
+    { PG_BUTTONS, IT_KEY, "Select", KEY_HELP, NULL, 0, WL, "key_select" },
+    { PG_BUTTONS, IT_KEY, "Modern controls on/off", KEY_HELP, NULL, 0, WL, "key_orbit" },
+    { PG_BUTTONS, IT_KEY_RESET, "Reset keys", "Puts every key above back to its default: WASD, Space, the mouse "
+      "buttons and the rest.", NULL, 0, WL },
 };
 
 /* the tables in use: the in-game menu's, or the start menu's before the game */
@@ -284,6 +370,8 @@ static struct {
     int start;                              /* the start menu (before the game) */
     int play, quit;                         /* the start menu: Play / close the app */
     int on_play;                            /* the start menu: the PLAY button has the focus */
+    int welcome, welcome_sel;               /* the start menu: the first-run import prompt (nothing imported); its button */
+    WORD pad_now;                           /* the controller's buttons this frame (menu_pad_buttons) */
     double back_at;                         /* in the game: the last Back press (twice quits) */
     /* the start menu's game files (gamefiles.h) */
     int gf_ready[2], gf_state, gf_jp;       /* each version there (US, Japanese); the one importing */
@@ -815,13 +903,13 @@ static void change_item(const item *it, int dir)
 
 static void value_text(int kind, char *out, size_t n)
 {
-    static const char *RES[] = { "Display", "1x", "2x", "3x", "4x" };
-    static const char *FOG[] = { "Original", "Light", "Off" };
+    static const char *RES[] = { "Native", "1x (480p)", "2x (960p)", "3x (1440p)", "4x (1920p)" };
+    static const char *FOG[] = { "Original", "Reduced", "Off" };
     switch (kind) {
-    case IT_FPS: strcpy_s(out, n, M.fps60 ? "60 fps" : "30 fps"); break;
+    case IT_FPS: strcpy_s(out, n, M.fps60 ? "60 fps (interpolated)" : "30 fps (original)"); break;
     case IT_VSYNC: strcpy_s(out, n, M.vsync ? "On" : "Off"); break;
     case IT_RES: strcpy_s(out, n, RES[M.res]); break;
-    case IT_MSAA: strcpy_s(out, n, M.msaa > 1 ? (M.msaa == 4 ? "4x" : "8x") : "Off"); break;
+    case IT_MSAA: strcpy_s(out, n, M.msaa > 1 ? (M.msaa == 4 ? "MSAA 4x" : "MSAA 8x") : "Off"); break;
     case IT_SHADER: {
         const char *p = shader_path(), *b = strrchr(p, '\\');
         if (!p[0]) {
@@ -833,11 +921,11 @@ static void value_text(int kind, char *out, size_t n)
             out[strlen(out) - 7] = 0;   /* drop .slangp */
         break;
     }
-    case IT_SHADER_RES: strcpy_s(out, n, M.shader_game_res ? "Game resolution" : "Display"); break;
-    case IT_UPSCALE: strcpy_s(out, n, M.nearest ? "Nearest" : "Bilinear"); break;
-    case IT_TEXFILTER: strcpy_s(out, n, M.aniso ? "Anisotropic 16x" : "Smooth"); break;
+    case IT_SHADER_RES: strcpy_s(out, n, M.shader_game_res ? "Native (480p)" : "Output"); break;
+    case IT_UPSCALE: strcpy_s(out, n, M.nearest ? "Nearest neighbor" : "Bilinear"); break;
+    case IT_TEXFILTER: strcpy_s(out, n, M.aniso ? "Anisotropic 16x" : "Bilinear"); break;
     case IT_FOG: strcpy_s(out, n, FOG[M.fog]); break;
-    case IT_LOD: strcpy_s(out, n, M.lod_full ? "Full detail" : "Original"); break;
+    case IT_LOD: strcpy_s(out, n, M.lod_full ? "Maximum" : "Original"); break;
     case IT_HDTEX: strcpy_s(out, n, M.hdtex ? "On" : "Off"); break;
     case IT_CAMSPEED: _snprintf_s(out, n, _TRUNCATE, "%d%%", SPEEDS[M.cam_speed]); break;
     case IT_INVERT_X: strcpy_s(out, n, M.inv_x ? "On" : "Off"); break;
@@ -851,7 +939,7 @@ static void value_text(int kind, char *out, size_t n)
     case IT_RETICLE: strcpy_s(out, n, RETICLES[M.reticle].name); break;
     case IT_AIM: strcpy_s(out, n, M.aim_camera ? "Camera" : "Character"); break;
     case IT_CROSSHAIR: strcpy_s(out, n, M.crosshair ? "On" : "Off"); break;
-    case IT_GF_EDITION: strcpy_s(out, n, M.edition ? "Japanese" : "US"); break;
+    case IT_GF_EDITION: strcpy_s(out, n, M.edition ? "Rockman DASH (JP)" : "Mega Man Legends (US)"); break;
     case IT_KEY_RESET: strcpy_s(out, n, "Reset"); break;
     case IT_GF_US:
     case IT_GF_JP: {
@@ -975,16 +1063,20 @@ static float wrap_text(float x, float y, float maxw, const char *s, uint32_t col
     char buf[256];
     float lh = gfx_ui_font_line(UI_FONT_BODY, scale) * 1.05f, yy = y;
     while (*s) {
-        int n = 0, last_space = -1;
+        int n = 0, last_space = -1, last_soft = -1;
         while (s[n]) {
             buf[n] = s[n];
             buf[n + 1] = 0;
             if (s[n] == ' ')
                 last_space = n;
-            if (gfx_ui_font_width(UI_FONT_BODY, buf, scale) > maxw && last_space > 0) {
-                n = last_space;
+            if (gfx_ui_font_width(UI_FONT_BODY, buf, scale) > maxw && n > 0) {
+                /* at the last space; a word wider than the line (a web address): after its last / or -,
+                   else where it runs out */
+                n = last_space > 0 ? last_space : last_soft > 0 ? last_soft + 1 : n;
                 break;
             }
+            if (s[n] == '/' || s[n] == '-')
+                last_soft = n;
             if (++n >= (int)sizeof buf - 2)
                 break;
         }
@@ -1045,6 +1137,8 @@ static int list_pos(const int *list, int n, int item)
             return i;
     return 0;
 }
+
+static float g_value_room = 9;   /* the widest a value gets, in body lines (the wide start menu: more) */
 
 static void draw_value(const item *it, float vx, float cy, float u, int selected, double t)
 {
@@ -1118,7 +1212,7 @@ static void draw_value(const item *it, float vx, float cy, float u, int selected
     }
     {
         /* long preset names: trim from the end so they fit */
-        float maxw = u * 9;
+        float maxw = u * g_value_room;
         size_t n = strlen(v);
         while (n > 4 && gfx_ui_font_width(UI_FONT_BODY, v, sc) > maxw) {
             v[--n] = 0;
@@ -1131,9 +1225,321 @@ static void draw_value(const item *it, float vx, float cy, float u, int selected
         ui_arrow(x - u * 0.35f - aw / 2 - (M.kick_dir < 0 ? kick : 0), cy, aw, -1, COL_YELLOW);
 }
 
-static void draw_start_backdrop(float w, float h, float u, double t);
+static void draw_start_backdrop(float w, float h, float u, double t, int title);
+static int selectable(int item);
+
+/* ---- the start menu on a wide screen ----
+   A small title at the top left, the page tabs across, the settings in a box on the left and the
+   selected one's details in a box on the right (its full description, its choices, what a task is
+   doing), the PLAY button under the details. Narrow screens keep the one-panel layout (draw). */
+
+/* a box in the menu's style: the panel, its edges, the yellow brackets on two corners */
+static void start_box(float x, float y, float w, float h, float u, float cut)
+{
+    float b = u * 0.6f, th = u * 0.1f, o = u * 0.02f;
+    int i;
+    ui_panel(x + u * 0.2f, y + u * 0.25f, w, h, cut, 0x60000000, 0x60000000);   /* drop shadow */
+    ui_panel(x, y, w, h, cut, COL_PANEL_TOP, COL_PANEL_BOT);
+    for (i = 0; i < (int)(h / 3); i++)   /* faint scanlines */
+        gfx_ui_rect(x + (i * 3 > h - cut ? cut * (1 - (h - i * 3) / cut) : 0), y + i * 3,
+                    w - (i * 3 < cut ? cut - i * 3 : 0) - (i * 3 > h - cut ? cut * (1 - (h - i * 3) / cut) : 0),
+                    1, ui_col(0x0C000000));
+    ui_panel_edge(x, y, w, h, cut, u * 0.08f, COL_EDGE);
+    ui_panel_edge(x + u * 0.16f, y + u * 0.16f, w - u * 0.32f, h - u * 0.32f, cut * 0.85f, 1.0f, 0x405CC8FF);
+    ui_line(x - o, y + b, x - o, y - o - th / 2, th, COL_YELLOW);
+    ui_line(x - o - th / 2, y - o, x + b, y - o, th, COL_YELLOW);
+    ui_line(x + w + o, y + h - b, x + w + o, y + h + o + th / 2, th, COL_YELLOW);
+    ui_line(x + w + o + th / 2, y + h + o, x + w - b, y + h + o, th, COL_YELLOW);
+}
+
+/* the title at the top left: a Mega Man blue band with a yellow rule, the project's name beside */
+static float start_title(float x, float y, float u, double t)
+{
+    const char *title = "MEGA MAN LEGENDS", *sub = "MODERNIZATION PROJECT";
+    float ts = 0.8f, tw = gfx_ui_font_width(UI_FONT_DISPLAY, title, ts), band = u * 1.7f, bw = tw + u * 1.6f;
+    float sweep = (float)fmod(t, 4.0) / 0.7f;
+    ui_slant(x, y, bw, band, band * 0.4f, COL_BLUE, COL_BLUE_DARK);
+    if (sweep < 1)   /* a glint across the band now and then */
+        ui_slant(x + sweep * bw, y, band * 0.5f, band, band * 0.4f, 0x00FFFFFF, 0x40FFFFFF);
+    gfx_ui_rect(x, y + band - u * 0.09f, bw - band * 0.3f, u * 0.09f, ui_col(COL_YELLOW));
+    ui_text_outlined(UI_FONT_DISPLAY, x + u * 0.6f, y + (band - gfx_ui_font_line(UI_FONT_DISPLAY, ts)) / 2 - u * 0.05f,
+                     title, 0xFFFFFFFF, 0xFF9EE2FF, ts, u * 0.06f, 0xFF061226);
+    gfx_ui_font_text(UI_FONT_DISPLAY, x + bw + u * 0.3f, y + band - gfx_ui_font_line(UI_FONT_DISPLAY, 0.42f) - u * 0.12f,
+                     sub, ui_col(0xFF8FD3FF), ui_col(0xFF8FD3FF), 0.42f);
+    return band;
+}
+
+/* a section heading in the settings list */
+static void start_section(float x, float y, float w, float rowh, float u, const char *label)
+{
+    float ls = 0.48f, lh = gfx_ui_font_line(UI_FONT_DISPLAY, ls), lw = gfx_ui_font_width(UI_FONT_DISPLAY, label, ls);
+    float cy = y + rowh * 0.62f;
+    gfx_ui_font_text(UI_FONT_DISPLAY, x, cy - lh / 2, label, ui_col(COL_YELLOW), ui_col(COL_YELLOW_LO), ls);
+    gfx_ui_hgrad(x + lw + u * 0.4f, cy, w - lw - u * 0.4f, 1.5f, ui_col(0x805CC8FF), ui_col(0x005CC8FF));
+}
+
+/* the PLAY button (Start, or A with the focus on it) */
+static void start_play(float x, float y, float w, float h, float u, double t)
+{
+    float pulse = 0.5f + 0.5f * sinf((float)t * 5.0f), lw = gfx_ui_font_width(UI_FONT_DISPLAY, "PLAY", 0.8f);
+    float lh = gfx_ui_font_line(UI_FONT_DISPLAY, 0.8f), kh = u * 0.62f, gap = u * 0.6f, capw, lx;
+    const char *cap = M.pad_ui ? "Start" : "Enter";
+    /* the label and its key cap, centred together */
+    capw = ui_cap_width(kh, cap);
+    lx = x + (w - lw - gap - capw) / 2;
+    if (M.on_play) {
+        ui_slant(x - u * 0.12f, y - u * 0.12f, w + u * 0.24f, h + u * 0.24f, h * 0.45f,
+                 ui_with_alpha(COL_YELLOW, 0.35f + 0.35f * pulse), 0x00FFD23A);
+        ui_slant(x, y, w, h, h * 0.4f, COL_YELLOW, COL_YELLOW_LO);
+        ui_arrow(x - u * 0.45f + sinf((float)t * 6.0f) * u * 0.08f, y + h / 2, u * 0.45f, 1, COL_YELLOW);
+        gfx_ui_font_text(UI_FONT_DISPLAY, lx, y + (h - lh) / 2, "PLAY", ui_col(COL_NAVY),
+                         ui_col(COL_NAVY), 0.8f);
+    } else {
+        ui_slant(x, y, w, h, h * 0.4f, COL_BLUE, COL_BLUE_DARK);
+        gfx_ui_font_text(UI_FONT_DISPLAY, lx, y + (h - lh) / 2, "PLAY", ui_col(COL_YELLOW),
+                         ui_col(COL_YELLOW_LO), 0.8f);
+    }
+    ui_key_cap(lx + lw + gap, y + h / 2, kh, cap);
+}
+
+/* a progress bar (0..1) */
+static void start_bar(float x, float y, float w, float u, float f)
+{
+    if (f < 0)
+        f = 0;
+    if (f > 1)
+        f = 1;
+    gfx_ui_rect(x, y, w, u * 0.22f, ui_col(0xFF16304F));
+    gfx_ui_rect(x, y, w * f, u * 0.22f, ui_col(COL_YELLOW));
+}
+
+static void draw_start(int w, int h, float u, double t, float dt)
+{
+    float m = u * 1.1f, x0 = m, x1 = (float)w - m, pad = u * 0.8f, cut = u * 0.8f;
+    float tab_h = u * 1.35f, foot_h = u * 1.4f, rowh = u * 1.45f;
+    float title_h, tabs_y, body_y, body_b, lx, lw, dx, dw, bh, rows_y, play_h = u * 1.9f;
+    int list[MAX_ITEMS], n, i, shown_n, pos;
+    draw_start_backdrop((float)w, (float)h, u, t, 0);
+    title_h = start_title(x0, u * 0.7f, u, t);
+    /* tabs */
+    tabs_y = u * 0.7f + title_h + u * 0.6f;
+    {
+        float cy = tabs_y + tab_h / 2, kh = u * 0.62f, slant = tab_h * 0.35f, tw, tx, capw;
+        capw = ui_key_cap(x0, cy, kh, M.pad_ui ? "LB" : "Q");
+        tx = x0 + capw + u * 0.35f;
+        tw = (x1 - tx - capw - u * 0.35f) / NPAGES;
+        if (tw > u * 7.5f)
+            tw = u * 7.5f;
+        for (i = 0; i < NPAGES; i++) {
+            float ls = 0.5f, room = tw - slant - u * 0.4f, sx = tx + i * tw, lw2, lh;
+            lw2 = gfx_ui_font_width(UI_FONT_DISPLAY, PAGES[i], ls);
+            if (lw2 > room && lw2 > 0) {
+                ls *= room / lw2;
+                lw2 = room;
+            }
+            lh = gfx_ui_font_line(UI_FONT_DISPLAY, ls);
+            if (i == M.page)
+                ui_slant(sx, tabs_y, tw - u * 0.15f, tab_h, slant, COL_YELLOW, COL_YELLOW_LO);
+            else
+                ui_slant(sx, tabs_y, tw - u * 0.15f, tab_h, slant, 0xFF183052, 0xFF122440);
+            gfx_ui_font_text(UI_FONT_DISPLAY, sx + (tw + slant - lw2) / 2 - u * 0.1f, cy - lh / 2, PAGES[i],
+                             ui_col(i == M.page ? COL_NAVY : COL_DIM), ui_col(i == M.page ? COL_NAVY : COL_DIM), ls);
+            if (i == PAGE_FILES && (M.up_state == UPD_AVAILABLE || M.up_state == UPD_READY))   /* an update waits */
+                gfx_ui_circle(sx + tw - u * 0.5f, tabs_y + u * 0.3f, u * 0.16f,
+                              ui_col(i == M.page ? COL_NAVY : COL_YELLOW));
+        }
+        ui_key_cap(tx + NPAGES * tw + u * 0.2f, cy, kh, M.pad_ui ? "RB" : "E");
+    }
+    /* the two boxes */
+    body_y = tabs_y + tab_h + u * 0.55f;
+    body_b = (float)h - foot_h - u * 0.75f;
+    bh = body_b - body_y;
+    lx = x0;
+    lw = (x1 - x0) * 0.6f;
+    dx = lx + lw + u * 0.7f;
+    dw = x1 - dx;
+    start_box(lx, body_y, lw, bh, u, cut);
+    start_box(dx, body_y, dw, bh, u, cut);
+
+    /* the settings */
+    rows_y = body_y + u * 0.45f;
+    n = page_list(M.page, list);
+    shown_n = (int)((bh - u * 0.9f) / rowh);
+    if (shown_n > n)
+        shown_n = n;
+    pos = list_pos(list, n, M.cursor);
+    if (pos < M.scroll)
+        M.scroll = pos;
+    if (pos >= M.scroll + shown_n)
+        M.scroll = pos - shown_n + 1;
+    if (M.scroll > 0 && M.scroll == pos && !selectable(list[pos - 1]))
+        M.scroll--;   /* (the heading over the first row stays in view) */
+    if (M.scroll > n - shown_n)
+        M.scroll = n - shown_n;
+    if (M.scroll < 0)
+        M.scroll = 0;
+    {
+        float target = rows_y + (pos - M.scroll) * rowh, fade_in = ui_ease_out((float)((t - M.page_since) / 0.16));
+        if (M.sel_page != M.page || M.sel_y <= 0) {
+            M.sel_y = target;
+            M.sel_page = M.page;
+        }
+        M.sel_y += (target - M.sel_y) * (dt * 20 > 1 ? 1 : dt * 20);
+        if (!M.on_play) {
+            float sy = M.sel_y, bob = sinf((float)t * 6.0f) * u * 0.08f, pulse = 0.75f + 0.25f * sinf((float)t * 4.0f);
+            ui_slant(lx + pad * 0.6f, sy + u * 0.08f, lw - pad * 1.4f, rowh - u * 0.16f, u * 0.25f,
+                     ui_with_alpha(0xFF2F8FE8, 0.85f * pulse), 0x302F8FE8);
+            gfx_ui_rect(lx + pad * 0.6f, sy + u * 0.08f, u * 0.09f, rowh - u * 0.16f, ui_col(COL_YELLOW));
+            ui_arrow(lx + pad * 0.35f + bob, sy + rowh / 2, u * 0.38f, 1, COL_YELLOW);
+        }
+        if (M.scroll > 0) {
+            float ax = lx + lw / 2, ay = rows_y - u * 0.1f, s = u * 0.22f;
+            gfx_ui_tri(ax, ay - s, ax + s, ay, ax - s, ay, ui_col(COL_DIM));
+        }
+        if (M.scroll + shown_n < n) {
+            float ax = lx + lw / 2, ay = rows_y + shown_n * rowh + u * 0.05f, s = u * 0.22f;
+            gfx_ui_tri(ax - s, ay, ax + s, ay, ax, ay + s, ui_col(COL_DIM));
+        }
+        g_value_room = lw * 0.5f / u;
+        for (i = 0; i < shown_n; i++) {
+            const item *it = &g_items[list[M.scroll + i]];
+            float ry = rows_y + i * rowh + (1 - fade_in) * u * 0.3f * (i + 1), cy = ry + rowh / 2, save = ui_alpha;
+            int sel = list[M.scroll + i] == M.cursor && !M.on_play;
+            ui_alpha *= fade_in;
+            if (it->kind == IT_SECTION) {
+                start_section(lx + pad * 1.4f, ry, lw - pad * 2.6f, rowh, u, it->label);
+            } else {
+                if (i > 0 && g_items[list[M.scroll + i - 1]].kind != IT_SECTION)
+                    gfx_ui_rect(lx + pad * 1.4f, ry, lw - pad * 2.6f, 1, ui_col(0x14FFFFFF));
+                ui_text(lx + pad * 1.8f, cy - gfx_ui_font_line(UI_FONT_BODY, 1.0f) / 2, it->label,
+                        sel ? 0xFFFFFFFF : 0xFFC4D3E2, 1.0f);
+                draw_value(it, lx + lw - pad * 1.3f, cy, u, sel, t);
+            }
+            ui_alpha = save;
+        }
+        g_value_room = 9;
+    }
+
+    /* the details */
+    {
+        float ix = dx + pad, iw = dw - pad * 2, y = body_y + pad, play_y = body_b - pad - play_h, low = play_y - u * 1.0f;
+        const item *it = M.cursor >= 0 && !M.on_play ? &g_items[M.cursor] : NULL;
+        const char *name = it ? it->label : "PLAY";
+        float ns = 0.7f, status_h = 0;
+        char help[700], line[300] = "";
+        uint32_t line_col = 0xFFB4C6D8;
+        float progress = -1;
+        /* what a task on this row is doing (the import, an extra, the update), or a warning */
+        if (M.note[0] && t < M.note_until) {
+            strcpy_s(line, sizeof line, M.note);
+            line_col = COL_WARN;
+        } else if (it && M.page == PAGE_FILES && it->kind >= IT_UP_ACTION && M.up_line[0]) {
+            strcpy_s(line, sizeof line, M.up_line);
+            line_col = M.up_state == UPD_FAILED ? COL_WARN : line_col;
+            if (M.up_state == UPD_DOWNLOADING)
+                progress = M.up_progress;
+        } else if (M.page == PAGE_FILES && M.gf_line[0] &&
+                   (gf_busy() || (it && it->kind == (M.gf_jp ? IT_GF_JP : IT_GF_US)))) {
+            strcpy_s(line, sizeof line, M.gf_line);
+            line_col = M.gf_state == IMPORT_FAILED ? COL_WARN : line_col;
+            if (M.gf_state == IMPORT_COPYING)
+                progress = M.gf_progress;
+        } else if (it && M.page == PAGE_FILES && M.tk_line[0] && it->kind == M.tk_kind) {
+            strcpy_s(line, sizeof line, M.tk_line);
+            line_col = M.tk_state == TASK_FAILED ? COL_WARN : line_col;
+            if (M.tk_state == TASK_RUNNING && M.tk_kind == IT_GF_VOICES)
+                progress = M.tk_progress;
+        }
+        /* the name */
+        if (gfx_ui_font_width(UI_FONT_DISPLAY, name, ns) > iw)
+            ns *= iw / gfx_ui_font_width(UI_FONT_DISPLAY, name, ns);
+        ui_text_outlined(UI_FONT_DISPLAY, ix, y, name, 0xFFFFFFFF, 0xFF9EE2FF, ns, u * 0.05f, 0xFF061226);
+        y += gfx_ui_font_line(UI_FONT_DISPLAY, ns) + u * 0.25f;
+        gfx_ui_hgrad(ix, y, iw, 1.5f, ui_col(0xA05CC8FF), ui_col(0x005CC8FF));
+        y += u * 0.4f;
+        /* the status line, above PLAY */
+        if (line[0]) {
+            float th = wrap_text(ix, 0, iw, line, line_col, 0.8f, 0);   /* (its own height: no shrinking) */
+            status_h = th + (progress >= 0 ? u * 0.5f : 0);
+            g_help_h = th + 1;
+            {
+                float sy = low - status_h;
+                gfx_ui_rect(ix, sy - u * 0.25f, iw, 1, ui_col(0x24FFFFFF));
+                wrapped(ix, sy, iw, line, line_col, 0.8f);
+                if (progress >= 0)
+                    start_bar(ix, low - u * 0.35f, iw, u, progress);
+            }
+            low -= status_h + u * 0.4f;
+        }
+        /* the choices (a short list): every one, the current one marked */
+        if (it && ((it->kind == IT_CHOICE && it->nch <= 6) || it->kind == IT_GF_EDITION)) {
+            static const char *const EDITIONS[] = { "Mega Man Legends (US)", "Rockman DASH (JP)" };
+            int nch = it->kind == IT_CHOICE ? it->nch : 2;
+            float ch_h = u * 0.95f, cy0 = low - nch * ch_h;
+            int cur = it->kind == IT_CHOICE ? M.chv[item_index(it)] : M.edition, c;
+            for (c = 0; c < nch; c++) {
+                float cy = cy0 + c * ch_h;
+                if (c == cur) {
+                    gfx_ui_rect(ix, cy + u * 0.08f, iw, ch_h - u * 0.16f, ui_col(0x402F8FE8));
+                    gfx_ui_rect(ix, cy + u * 0.08f, u * 0.08f, ch_h - u * 0.16f, ui_col(COL_YELLOW));
+                }
+                ui_text(ix + u * 0.4f, cy + (ch_h - gfx_ui_font_line(UI_FONT_BODY, 0.82f)) / 2,
+                        it->kind == IT_CHOICE ? it->ch[c].label : EDITIONS[c],
+                        c == cur ? COL_YELLOW : 0xFFC4D3E2, 0.82f);
+            }
+            low = cy0 - u * 0.4f;
+        }
+        /* the description: in what room is left (wrapped() shrinks it to fit) */
+        g_help_h = low - y;
+        if (it) {
+            button_words(it->help ? it->help : "", help, sizeof help);
+            wrapped(ix, y, iw, help, 0xFFD2DEEA, 0.86f);
+        } else {
+            wrapped(ix, y, iw, "Starts the game with these settings. They're saved, and the in-game menu "
+                    "(Back + Start, or F1) changes most of them while you play.", 0xFFD2DEEA, 0.86f);
+        }
+        start_play(ix + u * 0.3f, play_y, iw - u * 0.6f, play_h, u, t);
+    }
+
+    /* button prompts, along the bottom */
+    {
+        float fy = (float)h - foot_h / 2 - u * 0.45f, fx = x0 + u * 0.2f, r = u * 0.36f, sc = 0.72f;
+        float lh = gfx_ui_font_line(UI_FONT_BODY, sc);
+        if (M.pad_ui) {
+            fx += dpad_glyph(fx, fy, r * 2) + u * 0.3f;
+            fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 1.0f;
+            fx += pad_button(fx, fy, r, "A", 0xFF3FA34D) + u * 0.3f;
+            fx += ui_text(fx, fy - lh / 2, "Change", COL_DIM, sc) + u * 1.0f;
+            fx += ui_key_cap(fx, fy, r * 1.9f, "LB") + u * 0.2f;
+            fx += ui_key_cap(fx, fy, r * 1.9f, "RB") + u * 0.3f;
+            fx += ui_text(fx, fy - lh / 2, "Page", COL_DIM, sc) + u * 1.0f;
+            fx += ui_key_cap(fx, fy, r * 1.9f, "Start") + u * 0.3f;
+            fx += ui_text(fx, fy - lh / 2, "Play", COL_YELLOW, sc) + u * 1.0f;
+            fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.3f;
+            ui_text(fx, fy - lh / 2, "Quit", COL_DIM, sc);
+        } else {
+            static const char *const K[] = { "Arrows", "Choose", "Space", "Change", "Q / E", "Page", "Enter", "Play",
+                                             "Esc", "Quit" };
+            int k;
+            for (k = 0; k < 5; k++) {
+                fx += ui_key_cap(fx, fy, r * 1.9f, K[2 * k]) + u * 0.3f;
+                fx += ui_text(fx, fy - lh / 2, K[2 * k + 1], k == 3 ? COL_YELLOW : COL_DIM, sc) + u * 1.0f;
+            }
+        }
+    }
+}
+
+static void draw_welcome(int w, int h);
+static void draw_menu(void *user, int w, int h);
 
 static void draw(void *user, int w, int h)
+{
+    draw_menu(user, w, h);
+    if (M.start && M.welcome && M.shown > 0)
+        draw_welcome(w, h);
+}
+
+static void draw_menu(void *user, int w, int h)
 {
     float u, pad, pw, ph, x, y, cut, rowh, head_h, tab_h, help_h, foot_h, rows_y, slide, dt;
     int list[MAX_ITEMS], n, i, maxrows = 0, fit;
@@ -1153,6 +1559,10 @@ static void draw(void *user, int w, int h)
     ui_alpha = ui_ease_out(M.shown);
 
     u = gfx_ui_line(1.0f);
+    if (M.start && w >= u * 34 && h >= u * 20) {   /* a wide screen: the two-box layout */
+        draw_start(w, h, u, t, dt);
+        return;
+    }
     pad = u * 0.75f;
     cut = u * 0.9f;
     rowh = u * 1.3f;
@@ -1181,7 +1591,7 @@ static void draw(void *user, int w, int h)
          (M.start ? u * 2.0f : 0);   /* (the start menu's PLAY button under the rows) */
     slide = (1 - ui_alpha) * u * 4;
     if (M.start) {   /* centred, under the title */
-        draw_start_backdrop((float)w, (float)h, u, t);
+        draw_start_backdrop((float)w, (float)h, u, t, 1);
         x = (w - pw) / 2;
         y = u * 4.6f + (h - u * 4.6f - u * 0.6f - ph) / 2;
     } else {
@@ -1322,11 +1732,15 @@ static void draw(void *user, int w, int h)
             float save = ui_alpha;
             int sel = list[M.scroll + i] == M.cursor && !(M.start && M.on_play);
             ui_alpha *= fade_in;
-            if (i > 0)
-                gfx_ui_rect(x + pad * 1.2f, ry, pw - pad * 2.2f, 1, ui_col(0x14FFFFFF));
-            ui_text(x + pad * 1.6f, cy - gfx_ui_font_line(UI_FONT_BODY, 0.9f) / 2, it->label,
-                 sel ? 0xFFFFFFFF : 0xFFC4D3E2, 0.9f);
-            draw_value(it, x + pw - pad * 1.2f, cy, u, sel, t);
+            if (it->kind == IT_SECTION) {
+                start_section(x + pad * 1.2f, ry, pw - pad * 2.4f, rowh, u, it->label);
+            } else {
+                if (i > 0 && g_items[list[M.scroll + i - 1]].kind != IT_SECTION)
+                    gfx_ui_rect(x + pad * 1.2f, ry, pw - pad * 2.2f, 1, ui_col(0x14FFFFFF));
+                ui_text(x + pad * 1.6f, cy - gfx_ui_font_line(UI_FONT_BODY, 0.9f) / 2, it->label,
+                        sel ? 0xFFFFFFFF : 0xFFC4D3E2, 0.9f);
+                draw_value(it, x + pw - pad * 1.2f, cy, u, sel, t);
+            }
             ui_alpha = save;
         }
     }
@@ -1414,7 +1828,7 @@ static void draw(void *user, int w, int h)
             int pairs = M.start ? 4 : 3, k;
             float caps = 0, rest = 0, gap = u * 0.7f, room = pw - pad * 2.4f;
             for (k = 0; k < pairs; k++) {   /* a wide system font: the labels and gaps give way (caps stay) */
-                caps += gfx_ui_font_width(UI_FONT_BODY, kv[2 * k], 0.58f) + r * 1.9f * 0.8f + u * 0.25f;
+                caps += ui_cap_width(r * 1.9f, kv[2 * k]) + u * 0.25f;
                 rest += gfx_ui_font_width(UI_FONT_BODY, kv[2 * k + 1], sc) + (k + 1 < pairs ? gap : 0);
             }
             if (caps + rest > room && rest > 0 && room > caps) {
@@ -1482,34 +1896,57 @@ static int read_keys(WORD *buttons)
     return k;
 }
 
+/* a row the cursor can be on (section headings are not) */
+static int selectable(int item)
+{
+    return g_items[item].kind != IT_SECTION;
+}
+
+/* the list position of the first (dir > 0) or last (dir < 0) selectable row; -1 if none */
+static int end_row(const int *list, int n, int dir)
+{
+    int k;
+    for (k = 0; k < n; k++) {
+        int pos = dir > 0 ? k : n - 1 - k;
+        if (selectable(list[pos]))
+            return pos;
+    }
+    return -1;
+}
+
 static void set_page(int page)
 {
-    int list[MAX_ITEMS];
+    int list[MAX_ITEMS], n, first;
     M.on_play = 0;
     M.page = (page + NPAGES) % NPAGES;
-    M.cursor = page_list(M.page, list) ? list[0] : 0;
+    n = page_list(M.page, list);
+    first = end_row(list, n, 1);
+    M.cursor = first >= 0 ? list[first] : 0;
     M.scroll = 0;
     M.page_since = now_s();
 }
 
 static void move_cursor(int dir)
 {
-    int list[MAX_ITEMS], n = page_list(M.page, list), pos;
-    if (!n)
+    int list[MAX_ITEMS], n = page_list(M.page, list), pos, first = end_row(list, n, 1), last = end_row(list, n, -1);
+    if (first < 0)
         return;
     pos = list_pos(list, n, M.cursor);
     if (M.start) {   /* rows, then PLAY, then round again */
         if (M.on_play) {
             M.on_play = 0;
-            M.cursor = list[dir > 0 ? 0 : n - 1];
+            M.cursor = list[dir > 0 ? first : last];
             return;
         }
-        if ((dir > 0 && pos == n - 1) || (dir < 0 && pos == 0)) {
+        if ((dir > 0 && pos >= last) || (dir < 0 && pos <= first)) {
             M.on_play = 1;
             return;
         }
     }
-    M.cursor = list[(pos + dir + n) % n];
+    do   /* (over the headings) */
+        pos = (pos + dir + n) % n;
+    while (!selectable(list[pos]));
+    M.cursor = list[pos];
 }
 
 static void set_open(int open)
@@ -1523,6 +1960,130 @@ static void set_open(int open)
     log_printf("menu: %s", open ? "open" : "closed");
 }
 
+/* ---- the first run: nothing imported yet ----
+   Before anything else, a prompt over the menu says what the app needs (the player's own copy of
+   the game) and offers the two imports, or Later. It comes up whenever no version is there, so an
+   updated app, or a folder Setup patched in place, never sees it. */
+
+static const char *const WELCOME_BTN[] = { "Import Mega Man Legends (US)", "Import Rockman DASH (JP)", "Later" };
+
+/* the GAME page's row of this kind shown here (the importers have a row per platform) */
+static int start_row(int kind)
+{
+    int list[MAX_ITEMS], n = page_list(PAGE_FILES, list), i;
+    for (i = 0; i < n; i++)
+        if (g_items[list[i]].kind == kind)
+            return list[i];
+    return -1;
+}
+
+static void welcome_input(int pressed)
+{
+    int row;
+    if (plat_take_back() || (pressed & K_BACK)) {
+        M.welcome_sel = 2;
+        pressed |= K_OK;
+    }
+    if (pressed & (K_UP | K_LEFT))
+        M.welcome_sel = (M.welcome_sel + 2) % 3;
+    if (pressed & (K_DOWN | K_RIGHT))
+        M.welcome_sel = (M.welcome_sel + 1) % 3;
+    if (!(pressed & (K_OK | K_PLAY)))
+        return;
+    M.welcome = 0;
+    log_printf("menu: first run: %s", WELCOME_BTN[M.welcome_sel]);
+    set_page(PAGE_FILES);
+    if (M.welcome_sel == 2)
+        return;
+    row = start_row(M.welcome_sel ? IT_GF_JP : IT_GF_US);
+    if (row >= 0) {   /* (its row shows the import's progress from here) */
+        M.cursor = row;
+        M.on_play = 0;
+        change_item(&g_items[row], 1);
+    }
+}
+
+static void draw_welcome(int w, int h)
+{
+    float u = gfx_ui_line(1.0f), pw = u * 24, ph, x, y, pad = u * 1.1f, ts = 0.7f, bh = u * 1.6f, ty;
+    double t = now_s();
+    const char *body = "The project runs on your own copy of the PC game. Import it to start: pick the folder "
+                       "that has MEGAMAN.EXE (Mega Man Legends, the US release) or ROCKMAN.EXE (Rockman DASH, the "
+                       "Japanese one). Its files are copied into this app's folder; the folder you pick isn't "
+                       "changed. The other version can be imported any time on the GAME page.";
+    int i;
+    float save = ui_alpha;
+    if (pw > w - u * 2)
+        pw = w - u * 2;
+    g_help_h = 1e9f;
+    ph = pad + gfx_ui_font_line(UI_FONT_DISPLAY, ts) + u * 0.7f + wrap_text(0, 0, pw - pad * 2, body, 0, 0.9f, 0) +
+         u * 0.8f + 3 * (bh + u * 0.35f) + u * 0.3f + u * 1.3f + pad * 0.6f;
+    x = (w - pw) / 2;
+    y = (h - ph) / 2;
+    if (y < u * 0.5f)
+        y = u * 0.5f;
+    gfx_ui_rect(0, 0, (float)w, (float)h, ui_col(0xB0020610));   /* the menu behind, dimmed */
+    ui_panel(x + u * 0.25f, y + u * 0.3f, pw, ph, u * 0.9f, 0x60000000, 0x60000000);
+    ui_panel(x, y, pw, ph, u * 0.9f, COL_PANEL_TOP, COL_PANEL_BOT);
+    ui_panel_edge(x, y, pw, ph, u * 0.9f, u * 0.08f, COL_EDGE);
+    {
+        float b = u * 0.7f, th = u * 0.12f;
+        ui_line(x, y + b, x, y - th / 2, th, COL_YELLOW);
+        ui_line(x - th / 2, y, x + b, y, th, COL_YELLOW);
+        ui_line(x + pw, y + ph - b, x + pw, y + ph + th / 2, th, COL_YELLOW);
+        ui_line(x + pw + th / 2, y + ph, x + pw - b, y + ph, th, COL_YELLOW);
+    }
+    ty = y + pad;
+    ui_text_outlined(UI_FONT_DISPLAY, x + pad, ty, "IMPORT YOUR GAME", 0xFFFFFFFF, 0xFF9EE2FF, ts, u * 0.06f,
+                     0xFF061226);
+    ty += gfx_ui_font_line(UI_FONT_DISPLAY, ts) + u * 0.25f;
+    gfx_ui_hgrad(x + pad, ty, pw - pad * 2, 1.5f, ui_col(0xA05CC8FF), ui_col(0x005CC8FF));
+    ty += u * 0.45f;
+    ty += wrap_text(x + pad, ty, pw - pad * 2, body, 0xFFD2DEEA, 0.9f, 1) + u * 0.8f;
+    for (i = 0; i < 3; i++) {
+        float bx = x + pad, bw = pw - pad * 2, lw = gfx_ui_font_width(UI_FONT_BODY, WELCOME_BTN[i], 0.95f);
+        float lh = gfx_ui_font_line(UI_FONT_BODY, 0.95f);
+        int sel = i == M.welcome_sel;
+        if (sel) {
+            float pulse = 0.5f + 0.5f * sinf((float)t * 5.0f);
+            ui_slant(bx - u * 0.1f, ty - u * 0.1f, bw + u * 0.2f, bh + u * 0.2f, bh * 0.4f,
+                     ui_with_alpha(COL_YELLOW, 0.3f + 0.3f * pulse), 0x00FFD23A);
+            ui_slant(bx, ty, bw, bh, bh * 0.35f, COL_YELLOW, COL_YELLOW_LO);
+            ui_arrow(bx - u * 0.4f + sinf((float)t * 6.0f) * u * 0.08f, ty + bh / 2, u * 0.4f, 1, COL_YELLOW);
+        } else {
+            ui_slant(bx, ty, bw, bh, bh * 0.35f, i < 2 ? COL_BLUE : 0xFF183052, i < 2 ? COL_BLUE_DARK : 0xFF122440);
+        }
+        ui_text(bx + (bw - lw) / 2, ty + (bh - lh) / 2, WELCOME_BTN[i], sel ? COL_NAVY : (i < 2 ? 0xFFFFFFFF : COL_DIM),
+                0.95f);
+        ty += bh + u * 0.35f;
+    }
+    {   /* the prompts */
+        float fy = ty + u * 0.65f, fx = x + pad, r = u * 0.34f, sc = 0.7f, lh = gfx_ui_font_line(UI_FONT_BODY, sc);
+        gfx_ui_rect(x + pad, ty + u * 0.05f, pw - pad * 2, 1, ui_col(0x14FFFFFF));
+        if (M.pad_ui) {
+            fx += dpad_glyph(fx, fy, r * 2) + u * 0.25f;
+            fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 0.7f;
+            fx += pad_button(fx, fy, r, "A", 0xFF3FA34D) + u * 0.25f;
+            fx += ui_text(fx, fy - lh / 2, "Select", COL_DIM, sc) + u * 0.7f;
+            fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.25f;
+            ui_text(fx, fy - lh / 2, "Later", COL_DIM, sc);
+        } else {
+            fx += ui_key_cap(fx, fy, r * 1.9f, "Arrows") + u * 0.25f;
+            fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 0.7f;
+            fx += ui_key_cap(fx, fy, r * 1.9f, "Enter") + u * 0.25f;
+            fx += ui_text(fx, fy - lh / 2, "Select", COL_DIM, sc) + u * 0.7f;
+            fx += ui_key_cap(fx, fy, r * 1.9f, "Esc") + u * 0.25f;
+            ui_text(fx, fy - lh / 2, "Later", COL_DIM, sc);
+        }
+    }
+    ui_alpha = save;
+}
+
+int menu_pad_buttons(void)
+{
+    return M.ready ? M.pad_now : 0;
+}
+
 void menu_frame(void)
 {
     WORD buttons;
@@ -1531,6 +2092,7 @@ void menu_frame(void)
     if (!M.ready)
         return;
     keys = read_keys(&buttons);
+    M.pad_now = buttons;
     pressed = keys & ~M.prev_keys;
     M.prev_keys = keys;
     if (M.cap) {   /* a key row waits for its new key: nothing else counts */
@@ -1605,7 +2167,7 @@ void menu_frame(void)
             if (st != M.up_state) {
                 log_printf("menu: update %d -> %d (%s)", M.up_state, st, line);
                 if (st == UPD_AVAILABLE && M.up_state == UPD_CHECKING && !M.up_manual)
-                    note("A new version is out: see the APP page");
+                    note("A new version is out: see the GAME page");
             }
             M.up_state = st;
 #ifdef _WIN32
@@ -1617,6 +2179,10 @@ void menu_frame(void)
         }
         if (M.block) {   /* (see above) */
             plat_take_back();
+            return;
+        }
+        if (M.welcome) {
+            welcome_input(pressed);
             return;
         }
         if (plat_take_back() || (pressed & K_BACK)) {   /* B or Android's Back: close the app */
@@ -1860,7 +2426,7 @@ void menu_install(const char *ini, const char *game_dir)
 /* ---- the start menu ---- */
 
 /* behind the start menu's panel: the project's colours, a slow sweep of light, the title */
-static void draw_start_backdrop(float w, float h, float u, double t)
+static void draw_start_backdrop(float w, float h, float u, double t, int with_title)
 {
     float band = u * 2.6f, ty, tw, sweep;
     const char *title = "MEGA MAN LEGENDS", *sub = "MODERNIZATION PROJECT";
@@ -1872,6 +2438,8 @@ static void draw_start_backdrop(float w, float h, float u, double t)
         for (sx = -sh; sx < w; sx += step)
             ui_slant(sx, h - sh, step * 0.5f, sh, sh, 0x50FFD23A, 0x50FFA81C);
     }
+    if (!with_title)
+        return;
     tw = gfx_ui_font_width(UI_FONT_DISPLAY, title, 1.15f);
     ty = u * 0.7f;
     ui_slant((w - tw) / 2 - u * 1.2f, ty - u * 0.1f, tw + u * 2.4f, band, band * 0.4f, COL_BLUE, COL_BLUE_DARK);
@@ -1888,7 +2456,7 @@ int menu_start(const char *ini, const char *game_dir)
     g_items = g_start_items;
     NITEMS = (int)(sizeof g_start_items / sizeof g_start_items[0]);
     PAGES = START_PAGES;
-    NPAGES = PAGE_FILES + 1;
+    NPAGES = (int)(sizeof START_PAGES / sizeof START_PAGES[0]);
     M.start = 1;
     load_values(ini, game_dir);
     {
@@ -1896,6 +2464,8 @@ int menu_start(const char *ini, const char *game_dir)
         gamefiles_dir(game_dir, 1, jp, sizeof jp);
         M.gf_ready[0] = gamefiles_version_ready(game_dir, 0);
         M.gf_ready[1] = gamefiles_can_import() && gamefiles_version_ready(game_dir, 1);
+        M.welcome = gamefiles_can_import() && !M.gf_ready[0] && !M.gf_ready[1];
+        M.welcome_sel = 0;
         M.edition = gamefiles_edition(game_dir);
         {
             char p[MAX_PATH];

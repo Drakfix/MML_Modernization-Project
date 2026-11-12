@@ -39,6 +39,22 @@ int gamefiles_can_import(void)
     return 1;
 }
 
+/* the app again from the start (the start menu): MmlActivity.restartApp has a small activity in
+   a process of its own end this one and start the app anew */
+void android_restart(void)
+{
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jclass c = env ? activity_class(env) : NULL;
+    jmethodID m = c ? (*env)->GetStaticMethodID(env, c, "restartApp", "()V") : NULL;
+    if (m)
+        (*env)->CallStaticVoidMethod(env, c, m);
+    else
+        log_printf("android: no restartApp");
+    clear_exception(env);
+    if (c)
+        (*env)->DeleteLocalRef(env, c);
+}
+
 void gamefiles_import_begin(const char *dir, int jp)
 {
     JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();

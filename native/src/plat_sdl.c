@@ -4,6 +4,12 @@
 #ifndef _WIN32
 #include <windows.h>
 #include <SDL3/SDL.h>
+#ifndef __ANDROID__
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#include <unistd.h>
+#endif
 
 #include "kbm.h"
 #include "log.h"
@@ -308,6 +314,51 @@ void plat_quit(void)
 {
     g_quit = 1;
 }
+
+#ifdef __ANDROID__
+void android_restart(void);   /* android_files.c */
+
+int plat_relaunch_menu(const char *home)
+{
+    (void)home;
+    log_printf("plat: back to the start menu: the app restarts");
+    android_restart();
+    return 1;
+}
+#else
+/* this program again, with the same arguments (the game folder: the same one) */
+int plat_relaunch_menu(const char *home)
+{
+    static char buf[8192];
+    char *argv[64];
+    int fd = open("/proc/self/cmdline", O_RDONLY), n = 0, argc = 0, i;
+    (void)home;
+    if (fd >= 0) {
+        n = (int)read(fd, buf, sizeof buf - 1);
+        close(fd);
+    }
+    if (n <= 0)
+        return 0;
+    buf[n] = 0;
+    for (i = 0; i < n && argc < 63; i += (int)strlen(buf + i) + 1)
+        argv[argc++] = buf + i;
+    argv[argc] = NULL;
+    {   /* the program's own path (exec'd as /proc/self/exe it would be named "exe") */
+        static char self[4096];
+        ssize_t len = readlink("/proc/self/exe", self, sizeof self - 1);
+        if (len <= 0)
+            return 0;
+        self[len] = 0;
+        log_printf("plat: back to the start menu: %s starts again", self);
+        SDL_Quit();   /* (the window and the display go first) */
+        for (fd = 3; fd < 1024; fd++)   /* (nothing open carries over: the debug pad's socket, files) */
+            close(fd);
+        execv(self, argv);
+    }
+    log_printf("plat: it didn't start again (errno %d)", errno);
+    return 0;
+}
+#endif
 
 int plat_pump(void)
 {

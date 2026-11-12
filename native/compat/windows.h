@@ -218,6 +218,7 @@ typedef struct IUnknown { void **lpVtbl; } IUnknown, *LPUNKNOWN;
 #define VK_DOWN                              0x00000028u
 #define VK_ESCAPE                            0x0000001Bu
 #define VK_F1                                0x00000070u
+#define VK_F2                                0x00000071u
 #define VK_F5                                0x00000074u
 #define VK_F6                                0x00000075u
 #define VK_LBUTTON                           0x00000001u

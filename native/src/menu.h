@@ -8,3 +8,4 @@ void menu_frame(void);          /* once per game frame, game thread */
 int menu_blocks_input(void);    /* open (or just closed, until everything is let go) */
 void menu_filter_buttons(unsigned short *buttons);   /* pad poll: keeps the Back chords from the game */
 int menu_take_quicksave(void);   /* Back + RB was pressed (once per press) */
+int menu_pad_buttons(void);      /* the controller's buttons now (BTN_*; 0 without SDL's controller) */
