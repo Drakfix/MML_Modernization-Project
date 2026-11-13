@@ -275,7 +275,7 @@ void *recomp_routine_host(uint32_t addr)
 #endif
 
 /* ---- C versions of our assembly routines (recomp.h) ---- */
-uint32_t g_rt_bypass;
+uint32_t g_rt_bypass, g_rt_bypassed;   /* (recomp_rt.h: rt_bypass_take) */
 static struct {
     uint32_t routine, original;
     double (*st0)(double);

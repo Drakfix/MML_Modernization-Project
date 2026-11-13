@@ -345,13 +345,19 @@ void rt_unsupported(RCtx *c, uint32_t at, const char *what);
 typedef uint32_t (*rfunc)(RCtx *c);   /* returns a tail-jump target or 0 */
 
 /* A JMP that mml.dll put at a function's entry sends the function to our routine; when the
-   runtime runs that routine's C version, which calls the original, the entry is passed once. */
-extern uint32_t g_rt_bypass;
+   runtime runs that routine's C version, which calls the original, the entry is passed once.
+   The original's next instructions are then checked for a JMP too, at addresses that lie inside
+   ours: an operand byte of 0xE9 (where our routine sits decides it, 1 in 256 per byte) must not
+   count as one (it would jump into garbage). g_rt_bypassed: the entry passed last. */
+extern uint32_t g_rt_bypass, g_rt_bypassed;
 static __inline int rt_bypass_take(uint32_t a)
 {
+    if (a - g_rt_bypassed - 1u < 4u && *HPTR(g_rt_bypassed) == 0xE9)
+        return 1;   /* our JMP's operand */
     if (g_rt_bypass != a)
         return 0;
     g_rt_bypass = 0;
+    g_rt_bypassed = a;
     return 1;
 }
 typedef struct {
