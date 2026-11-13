@@ -13,5 +13,7 @@ void lockon_test_reticle(int on);    /* dev: draw the reticle on Mega Man ([debu
 unsigned lockon_alpha(void);         /* reticle opacity the renderer applies (0..255) */
 void lockon_set_color(unsigned rgb);  /* 0xRRGGBB */
 unsigned lockon_color(void);         /* the reticle colour, 0xRRGGBB (the crosshair uses it too) */
+/* the enemies in range this frame (hit volume centres, one per enemy, world units): their count */
+int lockon_volumes(int (*xyz)[3], int max);
 /* world point -> the game's 320x240 screen through the current camera; 0 = behind it */
 int lockon_project(double wx, double wy, double wz, double *sx, double *sy);

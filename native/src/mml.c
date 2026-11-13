@@ -698,6 +698,7 @@ void mml_init(void)
         ini_string("controls", "shoulder", "right", s, sizeof s);
         controls_lockon_camera(_stricmp(c, "shoulder") == 0, _stricmp(s, "left") == 0);
     }
+    controls_aim_sensitivity(GetPrivateProfileIntA("controls", "aim_sensitivity", 60, g_ini));
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, g_ini))
         controls_debug_pad();
     if (GetPrivateProfileIntA("debug", "lock_test", 0, g_ini))

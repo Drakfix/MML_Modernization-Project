@@ -51,7 +51,7 @@
 enum {
     IT_FPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
-    IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR, IT_LOCKCAM,
+    IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR, IT_LOCKCAM, IT_AIMSENS,
     /* the keyboard's keys for the modern controls ([controls] key_*: two each), and putting them back */
     IT_KEY, IT_KEY_RESET,
     IT_SECTION,  /* a heading over the rows after it (the start menu's): not selectable
@@ -104,6 +104,7 @@ typedef struct {
 static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS" };
 #define AIM_HELP "Camera: firing turns Mega Man to where the camera looks. Character: shots go where he faces."
 #define XH_HELP "With camera aim, a marker shows where your shots go."
+#define AIMSENS_HELP "Camera speed while aiming over the shoulder with no target, for finer aim."
 #define LOCKCAM_HELP "Over the shoulder: aiming looks past Mega Man's shoulder, at the locked enemy or the horizon, and he keeps moving. R3 swaps sides."
 
 static const item g_game_items[] = {
@@ -126,6 +127,7 @@ static const item g_game_items[] = {
     { 2, IT_AIM, "Shots aim", AIM_HELP },
     { 2, IT_CROSSHAIR, "Crosshair", XH_HELP },
     { 2, IT_LOCKCAM, "Lock-on camera", LOCKCAM_HELP },
+    { 2, IT_AIMSENS, "Aim sensitivity", AIMSENS_HELP },
 };
 
 /* ---- the start menu's pages: everything the launcher has ----
@@ -316,6 +318,8 @@ static const item g_start_items[] = {
     { PG_CONTROLS, IT_LOCKCAM, "Lock-on camera", "Classic: while locked on, the camera swings behind Mega Man, and aiming with no target " 
       "roots him in place. Over the shoulder: the camera moves in beside him and looks past his shoulder, at " 
       "the locked enemy or, with no target, the horizon; he keeps moving and shots go to the crosshair. The " "shoulder swap button (R3) switches sides." },
+    { PG_CONTROLS, IT_AIMSENS, "Aim sensitivity", "Camera and mouse speed while aiming over the shoulder with no "
+      "target, relative to the normal camera speed. Lower is finer aim." },
     { PG_CONTROLS, IT_RETICLE, "Reticle colour", "Colour of the lock-on marker on the targeted enemy, and of the "
       "crosshair." },
     { PG_CONTROLS, IT_SECTION, "Mouse and keyboard", NULL, NULL, 0, WL },
@@ -369,6 +373,7 @@ typedef char game_items_fit[sizeof g_game_items / sizeof g_game_items[0] <= MAX_
 
 static const int SPEEDS[] = { 50, 75, 100, 125, 150, 200 };
 static const int MOUSE[] = { 0, 50, 75, 100, 150, 200 };
+static const int AIMSENS[] = { 40, 60, 80, 100 };
 static const struct { const char *name; unsigned rgb; } RETICLES[] = {
     { "Yellow", 0xFFD840 }, { "Orange", 0xFF9A2E }, { "Red", 0xFF4040 }, { "Pink", 0xFF6EC7 },
     { "Purple", 0xB47CFF }, { "Blue", 0x4AA3FF }, { "Cyan", 0x3EE0E0 }, { "Green", 0x5BE36B },
@@ -403,7 +408,7 @@ static struct {
     char ini[MAX_PATH], game_dir[MAX_PATH];
     /* values */
     int fps60, vsync, res, msaa, shader_game_res, nearest, aniso, fog, lod_full, hdtex;
-    int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder;
+    int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens;
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
     char **presets;
@@ -774,6 +779,11 @@ static void apply(int kind)
         ini_str("controls", "lockon_camera", M.lock_shoulder ? "shoulder" : "classic");
         break;
     }
+    case IT_AIMSENS:
+        if (!M.start)
+            controls_aim_sensitivity(AIMSENS[M.aim_sens]);
+        ini_int("controls", "aim_sensitivity", AIMSENS[M.aim_sens]);
+        break;
     default:
         break;
     }
@@ -820,6 +830,7 @@ static void change(int kind, int dir)
     case IT_RETICLE: M.reticle = cycle(M.reticle, (int)(sizeof RETICLES / sizeof RETICLES[0]), dir); break;
     case IT_AIM: M.aim_camera = !M.aim_camera; break;
     case IT_LOCKCAM: M.lock_shoulder = !M.lock_shoulder; break;
+    case IT_AIMSENS: M.aim_sens = cycle(M.aim_sens, 4, dir); break;
     case IT_CROSSHAIR: M.crosshair = !M.crosshair; break;
     default: return;
     }
@@ -959,6 +970,7 @@ static void value_text(int kind, char *out, size_t n)
     case IT_RETICLE: strcpy_s(out, n, RETICLES[M.reticle].name); break;
     case IT_AIM: strcpy_s(out, n, M.aim_camera ? "Camera" : "Character"); break;
     case IT_LOCKCAM: strcpy_s(out, n, M.lock_shoulder ? "Over the shoulder" : "Classic"); break;
+    case IT_AIMSENS: _snprintf_s(out, n, _TRUNCATE, "%d%%", AIMSENS[M.aim_sens]); break;
     case IT_CROSSHAIR: strcpy_s(out, n, M.crosshair ? "On" : "Off"); break;
     case IT_GF_EDITION: strcpy_s(out, n, M.edition ? "Rockman DASH (JP)" : "Mega Man Legends (US)"); break;
     case IT_KEY_RESET: strcpy_s(out, n, "Reset"); break;
@@ -2413,6 +2425,7 @@ static void load_values(const char *ini, const char *game_dir)
     M.crosshair = GetPrivateProfileIntA("controls", "crosshair", 1, ini) != 0;
     GetPrivateProfileStringA("controls", "lockon_camera", "classic", s, sizeof s, ini);
     M.lock_shoulder = _stricmp(s, "shoulder") == 0;
+    M.aim_sens = nearest_index(AIMSENS, 4, GetPrivateProfileIntA("controls", "aim_sensitivity", 60, ini));
     /* presets */
     if (!M.presets && (M.presets = (char **)calloc(MAX_PRESETS, sizeof *M.presets)) != NULL) {   /* (once) */
         _snprintf_s(dir, sizeof dir, _TRUNCATE, "%s\\Modernization\\shaders", game_dir);

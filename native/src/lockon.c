@@ -53,6 +53,7 @@ typedef struct { int id; int x, y, z; int seen, central; } cand_t;
 
 static cand_t g_cand[MAX_CAND];
 static int g_ncand;
+static int g_vol[MAX_CAND][3], g_nvol;   /* this frame's enemies (positions), for lockon_volumes */
 static int g_lock_id = -1, g_had;
 static int g_lx, g_ly, g_lz;
 static volatile LONG g_want, g_switch;
@@ -197,13 +198,20 @@ static int next_to(int cur, int dir)
 static void on_target_store(regs_t *r)
 {
     int k = -1, sw;
+    collect();   /* every frame: camera aim's view ray hits these too (lockon_volumes) */
+    g_nvol = g_ncand;
+    for (k = 0; k < g_ncand; k++) {
+        g_vol[k][0] = g_cand[k].x;
+        g_vol[k][1] = g_cand[k].y;
+        g_vol[k][2] = g_cand[k].z;
+    }
+    k = -1;
     if (!g_want) {
         g_lock_id = -1;
         g_had = 0;
         g_switch = 0;
         return;
     }
-    collect();
     classify();
     if (g_lock_id >= 0)
         for (k = 0; k < g_ncand && g_cand[k].id != g_lock_id; k++)
@@ -236,6 +244,17 @@ static void on_target_store(regs_t *r)
         r->eax = ((obj_from_id_fn)(void *)obj_from_id_thunk)((uint32_t)g_lock_id);
 #endif
     }
+}
+
+int lockon_volumes(int (*xyz)[3], int max)
+{
+    int i, n = g_nvol < max ? g_nvol : max;
+    for (i = 0; i < n; i++) {
+        xyz[i][0] = g_vol[i][0];
+        xyz[i][1] = g_vol[i][1];
+        xyz[i][2] = g_vol[i][2];
+    }
+    return n;
 }
 
 void lockon_want(int want)

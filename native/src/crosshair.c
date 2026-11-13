@@ -35,6 +35,8 @@
 #define XH_RIM    0.0016f   /* dark rim around the lines */
 #define XH_FEATHER 1.0f     /* window pixels the outer edge fades over */
 #define XH_ALPHA  0.65f     /* at full visibility; it fades out a few seconds after the last shot */
+#define XH_ON_TIGHT 0.15f   /* with an enemy under it: the box closes in by this much and goes opaque */
+#define XH_ON_EASE  0.2f    /* per drawn frame toward on/off */
 
 /* the polyline P[0..3] offset sideways by d (left normal), mitred at the two inner points; the
    ends pushed out along the line by `ext` */
@@ -107,10 +109,14 @@ static void draw(void *user, int w, int h)
 {
     double yaw, sx, sy, px, py, pz;
     float aw = (float)display_native_width(), ah = 480.0f, s, ox, oy, cx, cy, u, half, rim, fe;
-    float a = XH_ALPHA * controls_crosshair();
+    float vis = controls_crosshair(), a, sc;
+    static float on;   /* 0..1, eased: an enemy is under the crosshair */
     unsigned col = lockon_color(), dark;
     int c, k;
     (void)user;
+    on += ((controls_aim_on_enemy() ? 1.0f : 0.0f) - on) * XH_ON_EASE;
+    a = vis * (XH_ALPHA + (1.0f - XH_ALPHA) * on);
+    sc = 1.0f - XH_ON_TIGHT * on;
     if (a <= 0.0f || menu_blocks_input())
         return;
     if (controls_aim_point(&px, &py, &pz)) {   /* vertical aim: where the camera looks */
@@ -140,8 +146,8 @@ static void draw(void *user, int w, int h)
             { XH_HALF, XH_HALF - XH_CHAMF }, { XH_HALF, XH_HALF - XH_ARM },
         };
         for (k = 0; k < 4; k++) {
-            p[k][0] = cx + mx * base[k][0] * u;
-            p[k][1] = cy + my * base[k][1] * u;
+            p[k][0] = cx + mx * base[k][0] * sc * u;
+            p[k][1] = cy + my * base[k][1] * sc * u;
         }
         /* the line, the rim around it (sides and ends, not under it: both are see-through), and
            the rim's fading outer edges */

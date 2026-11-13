@@ -201,7 +201,7 @@ DEFAULTS = {"renderer": "mml", "window": "fullscreen", "engine": "classic",
             "voices": "english", "subtitles": "on",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
             "lod": "full", "fps": "60", "reticle": "FFD840", "aim": "character", "crosshair": "on",
-            "lockon_camera": "classic",
+            "lockon_camera": "classic", "aim_sens": "60",
             "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
             "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display",
             "mouse": "100", "shader": "", "shader_res": "game", "texpack": "on", "texdump": "off"}
@@ -383,6 +383,9 @@ def import_mml_ini(s):
     v = get("controls", "lockon_camera")
     if v in ("classic", "shoulder"):
         s["lockon_camera"] = v
+    v = num("controls", "aim_sensitivity")
+    if v is not None:
+        s["aim_sens"] = str(min((40, 60, 80, 100), key=lambda x: abs(x - v)))
 
 
 def save_settings(s):
@@ -555,6 +558,7 @@ def controls_ini(s):
         "aim": "camera" if s.get("aim") == "camera" else "character",
         "crosshair": 0 if s.get("crosshair") == "off" else 1,
         "lockon_camera": "shoulder" if s.get("lockon_camera") == "shoulder" else "classic",
+        "aim_sensitivity": int(s["aim_sens"]) if str(s.get("aim_sens")) in ("40", "60", "80", "100") else 60,
         "mouse_keyboard": 0 if s["mouse"] == "off" else 1,
         "mouse_speed": int(s["mouse"]) if str(s["mouse"]).isdigit() else 100,
         "mouse_invert_y": 1 if s["invert_y"] == "on" else 0,
@@ -854,6 +858,8 @@ class App:
         option("Crosshair", "crosshair", [("Off", "off"), ("On", "on")], row=r, side="right")
         option("Lock-on camera", "lockon_camera", [("Classic", "classic"), ("Over the shoulder", "shoulder")],
                "over the shoulder: also when aiming with no target, and you keep moving; R3 swaps sides")
+        option("Aim sensitivity", "aim_sens", [("40%", "40"), ("60%", "60"), ("80%", "80"), ("100%", "100")],
+               "camera speed while aiming over the shoulder with no target")
         self.reticle_card(page[0])
 
         # ---- Buttons ----

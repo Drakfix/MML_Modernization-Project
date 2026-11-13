@@ -41,6 +41,9 @@ void controls_aim(int camera, int crosshair);
 /* Lock-on camera: classic (swings behind Mega Man) or over the shoulder (closer, beside him, looking
  * along the line to the enemy); the shoulder side, swapped with the shoulder action (R3) */
 void controls_lockon_camera(int shoulder, int left);
+/* % camera speed while aiming over the shoulder; whether the aim's line of sight is on an enemy */
+void controls_aim_sensitivity(int pct);
+int controls_aim_on_enemy(void);
 /* Jet Skates: top speed and lightest-tilt speed in % of the stock top speed; toggle = the button toggles */
 void controls_skates(int max_pct, int min_pct, int toggle);
 float controls_crosshair(void);

@@ -234,13 +234,21 @@ static double since_fire = 1e9;   /* 1/60 s since the last shot with camera aim 
 #define G_CAM_PLACED      0x77E9E8u   /* s32 x, y, z: where cam_apply_angles put the camera */
 #define G_CAM_PITCH_NOW   0x77EA08u
 #define G_CAM_YAW_NOW     0x77EA0Au
-#define AIM_DIST          2000.0
+#define AIM_DIST          2000.0      /* the aim point's distance when the view ray isn't cast */
+#define AIM_RAY_MAX       3500.0      /* the view ray's reach (nothing hit: the point out there) */
+#define AIM_RAY_STEP      64.0        /* march step (then 4 halvings: ~4 units) */
+#define AIM_RAY_SKIP      40.0        /* the ray starts this far past Mega Man (not the space behind him) */
+#define AIM_ENEMY_R       90.0        /* an enemy's hit volume radius for the ray */
+#define AIM_FACE_MIN      250.0       /* closer than this, he faces the camera's heading instead */
 #define AIM_CHEST         100         /* the buster's height above the player's position (y down) */
 #define AIM_PITCH_MAX     0x300       /* shots no steeper than ~67 degrees */
 #define SHOT_PITCH_SIGN   (1)         /* the spawners' pitch: + = ... (checked in game) */
 static volatile uint8_t *g_shot_flag;
 static volatile int32_t *g_shot_pitch;
 static double aim_px, aim_py, aim_pz;   /* where the camera looks (world), refreshed per camera update */
+static volatile LONG aim_face;          /* the facing that sends shots to that point */
+static volatile LONG aim_on_enemy;      /* the view ray stopped at an enemy (crosshair feedback) */
+static int g_aim_sens = 60;             /* % camera speed while shoulder-aiming ([controls] aim_sensitivity) */
 static LONG aim_since;   /* frame_tick when camera aim started (the shot waits for the turn) */
 static int air_travel, air_steered;   /* a jump's heading; +0x116 was set for it in a face hold */
 static int g_sh_mode, g_sh_side = 1;  /* over-the-shoulder lock-on camera; side +1 right, -1 left */
@@ -581,6 +589,7 @@ static void input_update(void)
     LARGE_INTEGER now;
     double ticks = 0, n;
     int f5, click, aiming, moving = 0, fwd = 0, facing = 0, mdx = 0, mdy = 0, mwheel = 0, firing;
+    double aim_scale;
 
     pad_read(&p);
     if (g_kbm && g_modern) {
@@ -742,19 +751,21 @@ static void input_update(void)
         cam_aim = aim_hold > 0;
         if (cam_aim && !was)
             aim_since = frame_tick;
-        face_dir = lock_active ? lock_face : (((int)st_yaw + FACE_OFFSET) & 0xfff);
+        face_dir = lock_active ? lock_face : aim_face;   /* (toward the aim point, aim_point_update) */
     }
     /* mouse look (raw counts), wheel = next lock-on target */
+    /* shoulder aim: a slower camera for fine aiming ([controls] aim_sensitivity) */
+    aim_scale = sh_aim ? g_aim_sens / 100.0 : 1.0;
     if (st_active && st_allowed && (mdx || mdy || mwheel)) {
         if (lock_active) {
             if (mwheel)
                 lockon_switch(mwheel < 0 ? 1 : -1);
         } else if (!aiming || lock_free || sh_aim) {
-            st_yaw = fmod(st_yaw + mdx * MOUSE_YAW_PER_COUNT * g_mouse_scale + 65536.0, 65536.0);
+            st_yaw = fmod(st_yaw + mdx * MOUSE_YAW_PER_COUNT * g_mouse_scale * aim_scale + 65536.0, 65536.0);
         }
         if (!aiming || lock_active || lock_free || sh_aim)
-            st_pitch = clampd(st_pitch - mdy * MOUSE_PITCH_PER_COUNT * g_mouse_scale * (g_mouse_invert_y ? -1 : 1),
-                              PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+            st_pitch = clampd(st_pitch - mdy * MOUSE_PITCH_PER_COUNT * g_mouse_scale * aim_scale *
+                              (g_mouse_invert_y ? -1 : 1), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
         else {   /* stock aim (no target): the mouse turns and tilts Mega Man, see on_player_update */
             InterlockedExchangeAdd(&g_aim_mdx, mdx);
             InterlockedExchangeAdd(&g_aim_mdy, mdy);
@@ -770,13 +781,13 @@ static void input_update(void)
     } else {
         n = stick_norm(p.sThumbRX);
         if (n != 0) {
-            st_yaw = fmod(st_yaw + g_yaw_speed * n * ticks, 65536.0);
+            st_yaw = fmod(st_yaw + g_yaw_speed * n * ticks * aim_scale, 65536.0);
             if (st_yaw < 0)
                 st_yaw += 65536.0;
         }
         n = stick_norm(p.sThumbRY);   /* stick up tilts the view up */
         if (n != 0)
-            st_pitch = clampd(st_pitch + g_pitch_speed * n * ticks, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+            st_pitch = clampd(st_pitch + g_pitch_speed * n * ticks * aim_scale, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
         else if (sh_aim && sh_aim_age < SH_LEVEL_TIME && !mdy)   /* shoulder aim starts level, at the horizon */
             st_pitch += (0.0 - st_pitch) * (1.0 - pow(1.0 - 2 * SH_PITCH_EASE, ticks));
     }
@@ -941,16 +952,65 @@ static void shoulder_apply(regs_t *r)
     r->edx = (uint32_t)iround((int)r->edx * (1.0 - sh_blend * (1.0 - SH_DIST)));
 }
 
-/* the point the camera looks at, AIM_DIST out along its view (the camera as the game last placed
-   it: the same framing the reticle projects through) */
+/* The point the camera looks at (the camera as the game last placed it: the same framing the
+ * reticle projects through): the first thing the view ray meets past Mega Man, an enemy (its
+ * hit volume, AIM_ENEMY_R around the centre) or the level (the collision test the camera uses:
+ * walls, and the floor from below), else AIM_DIST out. Shots and the facing aim at it, so they
+ * converge on whatever is under the crosshair at any range, also with the camera beside him
+ * (over the shoulder). Cast only while some aiming is on. */
 static void aim_point_update(void)
 {
     double yaw = (RD16(G_CAM_YAW_NOW) & 0xfff) * (PI / 2048.0);
     int pr = RD16(G_CAM_PITCH_NOW) & 0xfff;
     double p = -(pr > 2048 ? pr - 4096 : pr) * (PI / 2048.0);
-    aim_px = RD32(G_CAM_PLACED) + AIM_DIST * sin(yaw) * cos(p);
-    aim_py = RD32(G_CAM_PLACED + 4) + AIM_DIST * sin(p);
-    aim_pz = RD32(G_CAM_PLACED + 8) + AIM_DIST * cos(yaw) * cos(p);
+    double fx = sin(yaw) * cos(p), fy = sin(p), fz = cos(yaw) * cos(p);
+    double cx = RD32(G_CAM_PLACED), cy = RD32(G_CAM_PLACED + 4), cz = RD32(G_CAM_PLACED + 8);
+    double px = S16(0x14), py = S16(0x16) - AIM_CHEST, pz = S16(0x18), dist = AIM_DIST, dx, dz, h;
+    int on_enemy = 0;
+    if (cam_active && (cam_aim || sh_aim || since_fire < 600)) {
+        int vol[64][3], n = lockon_volumes(vol, 64), i;
+        double s0 = (px - cx) * fx + (py - cy) * fy + (pz - cz) * fz + AIM_RAY_SKIP, s;
+        if (s0 < AIM_RAY_SKIP)
+            s0 = AIM_RAY_SKIP;
+        dist = AIM_RAY_MAX;
+        for (i = 0; i < n; i++) {   /* enemies: the nearest whose volume the ray passes through */
+            double rx = vol[i][0] - cx, ry = vol[i][1] - cy, rz = vol[i][2] - cz;
+            double t = rx * fx + ry * fy + rz * fz, d2 = rx * rx + ry * ry + rz * rz - t * t;
+            if (t > s0 && d2 < AIM_ENEMY_R * AIM_ENEMY_R) {
+                t -= sqrt(AIM_ENEMY_R * AIM_ENEMY_R - d2);
+                if (t < dist) {
+                    dist = t < s0 ? s0 : t;
+                    on_enemy = 1;
+                }
+            }
+        }
+        for (s = s0; s < dist; s += AIM_RAY_STEP) {   /* the level: march, then narrow it down */
+            if (cam_probe(cx + fx * s, cy + fy * s, cz + fz * s) != 0) {
+                double lo = s - AIM_RAY_STEP < s0 ? s0 : s - AIM_RAY_STEP, hi = s;
+                for (i = 0; i < 4; i++) {
+                    double mid = (lo + hi) / 2;
+                    if (cam_probe(cx + fx * mid, cy + fy * mid, cz + fz * mid) != 0)
+                        hi = mid;
+                    else
+                        lo = mid;
+                }
+                dist = lo;
+                on_enemy = 0;   /* a wall in front of the enemy */
+                break;
+            }
+        }
+    }
+    aim_px = cx + fx * dist;
+    aim_py = cy + fy * dist;
+    aim_pz = cz + fz * dist;
+    aim_on_enemy = on_enemy;
+    /* the facing that sends shots there: toward the point, unless it's so close (or beside him)
+       that the direction would swing around: then the camera's own heading */
+    dx = aim_px - px, dz = aim_pz - pz, h = sqrt(dx * dx + dz * dz);
+    if (h > AIM_FACE_MIN && dx * fx + dz * fz > 0)
+        aim_face = (iround(atan2(dx, dz) * 2048.0 / PI) + 0x800) & 0xfff;
+    else
+        aim_face = (cam_yaw + FACE_OFFSET) & 0xfff;
 }
 
 /* what FUN_0042A85C returns now: the game's own value, or the camera-aimed pitch */
@@ -1939,6 +1999,18 @@ void controls_skates(int max_pct, int min_pct, int toggle)
     g_skate_toggle = toggle != 0;
     log_printf("controls: Jet Skates %d%% of stock at full tilt, %d%% at a light tilt, button %s", g_skate_max,
                g_skate_min, g_skate_toggle ? "toggles" : "held");
+}
+
+void controls_aim_sensitivity(int pct)
+{
+    if (pct >= 10 && pct <= 200)
+        g_aim_sens = pct;
+    log_printf("controls: aim sensitivity %d%%", g_aim_sens);
+}
+
+int controls_aim_on_enemy(void)
+{
+    return aim_on_enemy != 0;
 }
 
 void controls_lockon_camera(int shoulder, int left)

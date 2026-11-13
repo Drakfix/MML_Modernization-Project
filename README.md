@@ -387,7 +387,7 @@ menu shows each setting's full description and choices beside the list.
 | Game | Version to play, importing each version, English subtitles, voice language, start menu at launch (show / skip), intro video, title screen hints, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio, frame rate, V-Sync, executable |
 | Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement |
-| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, aim mode, crosshair, lock-on camera (classic / over the shoulder), reticle colour, mouse sensitivity |
+| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, aim mode, crosshair, lock-on camera (classic / over the shoulder), aim sensitivity, reticle colour, mouse sensitivity |
 | Buttons | Controller and keyboard remapping |
 
 Settings that only exist on Windows (Graphics API, display mode, executable, input API, shaders)
