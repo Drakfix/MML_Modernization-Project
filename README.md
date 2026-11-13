@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.8.2 beta.** The 0.1 releases are kept on the
+**Current version: 0.8.3 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -80,6 +80,13 @@ copy.
   default).
 - Fix: the game could crash at the title screen with the Japanese voices or the subtitles on, in
   some builds of the recompiled game.
+
+0.8.3 adds:
+
+- **Modern controls on the boat.** On Roll's boat rides, the sticks and the mouse aim with analog
+  speed and RT shoots, as everywhere else. See [Boat shooting sections](#boat-shooting-sections).
+- **Zoom on the boat:** hold LT (or right click) to zoom in on distant enemies, with a slower aim.
+- **Crosshair on the boat:** it shows where the shots go, while zoomed and after each shot.
 
 The separate launcher (`MML Launcher.exe`) is still installed in game folders that an earlier
 Setup patched in place, and updating such a folder keeps it. New installs use the start menu.
