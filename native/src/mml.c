@@ -804,7 +804,7 @@ void mml_init(void)
                 char pr[32];
                 ini_string("debug", "probe", "", pr, sizeof pr);
                 if (pr[0])
-                    sscanf_s(pr, "%d,%d", &g_probe_x, &g_probe_y);
+                    sscanf_s(pr, "%f,%f", &g_probe_x, &g_probe_y);
             }
             /* Per-monitor DPI aware: otherwise on a scaled display (4K at 200%) Windows
              * hands us a 1080p window and the desktop compositor stretches every frame

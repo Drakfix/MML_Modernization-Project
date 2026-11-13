@@ -37,6 +37,18 @@ struct PSIn
     float fog : FOG;
 };
 
+// The game's depth is camera z / 16384, so everything past 16384 units has
+// z > 1 and the depth clip would throw it away: with the wider draw distance
+// that is the far side of the big maps (Uptown's horizon). Depth tests only
+// need the order, so z is kept as it is up to DEPTH_KNEE and squeezed into
+// the rest of 0..1 beyond it (monotonic, never reaching 1).
+#define DEPTH_KNEE 0.9
+float depth_range(float z)
+{
+    float s = max(z - DEPTH_KNEE, 0.0) / (1.0 - DEPTH_KNEE);
+    return z <= DEPTH_KNEE ? z : DEPTH_KNEE + (1.0 - DEPTH_KNEE) * s / (1.0 + s);
+}
+
 PSIn vs_main(VSIn i)
 {
     PSIn o;
@@ -49,7 +61,7 @@ PSIn vs_main(VSIn i)
                         1.0 - i.pos.y / app_size.y * 2.0);
     // multiply through by w so texture coordinates and colours interpolate
     // with perspective, exactly like rhw did on the old pipeline
-    o.pos = float4(ndc * w, i.pos.z * w, w);
+    o.pos = float4(ndc * w, depth_range(i.pos.z) * w, w);
     o.color = i.diffuse;
     o.flat_color = i.diffuse;
     o.uv = i.uv;

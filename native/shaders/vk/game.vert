@@ -11,6 +11,15 @@ layout(location = 1) flat out vec4 v_flat;
 layout(location = 2) out vec2 v_uv;
 layout(location = 3) out float v_fog;
 
+// camera z / 16384 goes past 1 beyond 16384 units: kept up to the knee, squeezed below 1
+// after it, so the far side of the big maps isn't clipped (game.hlsl's depth_range)
+const float DEPTH_KNEE = 0.9;
+float depth_range(float z)
+{
+    float s = max(z - DEPTH_KNEE, 0.0) / (1.0 - DEPTH_KNEE);
+    return z <= DEPTH_KNEE ? z : DEPTH_KNEE + (1.0 - DEPTH_KNEE) * s / (1.0 + s);
+}
+
 void main()
 {
     float w = 1.0 / max(in_pos.w, 1e-10);
@@ -20,7 +29,7 @@ void main()
     // points down, as the game's does
     vec2 ndc = vec2(in_pos.x / pc.app_size.x * 2.0 - 1.0, in_pos.y / pc.app_size.y * 2.0 - 1.0);
     // multiplied through by w so texture coordinates and colours interpolate with perspective
-    gl_Position = vec4(ndc * w, in_pos.z * w, w);
+    gl_Position = vec4(ndc * w, depth_range(in_pos.z) * w, w);
     v_color = in_diffuse.bgra;
     v_flat = in_diffuse.bgra;
     v_uv = in_uv;

@@ -1092,7 +1092,7 @@ static void fog_debug(const gfx_state *s, const gfx_vertex *v, DWORD n)
 
 /* [debug] probe=x,y (game coordinates): once every 2 s, log the triangles of
  * one frame that cover that point, with their vertices and state */
-int g_probe_x = -1, g_probe_y = -1;
+float g_probe_x = -1, g_probe_y = -1;
 static int g_probe_armed, g_probe_logged;
 
 static float edge(const gfx_vertex *a, const gfx_vertex *b, float px, float py)
@@ -1114,11 +1114,11 @@ static void probe(const device *d, int pt, const gfx_vertex *v, DWORD n)
     for (k = 0; k + 2 < n; k += (pt == D3DPT_TRIANGLELIST ? 3 : 1)) {
         const gfx_vertex *a = &v[k], *b = &v[k + 1], *c = &v[k + 2];
         int j;
-        if (!covers(a, b, c, (float)g_probe_x, (float)g_probe_y))
+        if (!covers(a, b, c, g_probe_x, g_probe_y))
             continue;
         g_probe_logged++;
-        log_printf("probe: tri in draw of %lu (type %d) tex %p z %lu/%lu/%lu blend %lu %lu/%lu fog %lu alphatest %lu",
-                   n, pt, (void *)d->tex, d->rs[D3DRENDERSTATE_ZENABLE], d->rs[D3DRENDERSTATE_ZWRITEENABLE],
+        log_printf("probe: tri in draw of %lu (type %d) bucket %d pkt op %02X tex %p z %lu/%lu/%lu blend %lu %lu/%lu fog %lu alphatest %lu",
+                   n, pt, g_cur_bucket, g_cur_pkt ? g_cur_pkt[7] : 0, (void *)d->tex, d->rs[D3DRENDERSTATE_ZENABLE], d->rs[D3DRENDERSTATE_ZWRITEENABLE],
                    d->rs[D3DRENDERSTATE_ZFUNC], d->rs[D3DRENDERSTATE_ALPHABLENDENABLE], d->rs[D3DRENDERSTATE_SRCBLEND],
                    d->rs[D3DRENDERSTATE_DESTBLEND], d->rs[D3DRENDERSTATE_FOGENABLE], d->rs[D3DRENDERSTATE_ALPHATESTENABLE]);
         for (j = 0; j < 3; j++) {
@@ -1166,7 +1166,7 @@ void ddshim_frame(void)
         else if (++frames % 60 == 0) {
             g_probe_armed = 1;
             g_probe_logged = 0;
-            log_printf("probe: frame at (%d,%d)", g_probe_x, g_probe_y);
+            log_printf("probe: frame at (%.2f,%.2f)", g_probe_x, g_probe_y);
         }
         return;
     }
@@ -1191,9 +1191,37 @@ void ddshim_frame(void)
  * for anything it doesn't cover (or terrain_clip=0), matching the old look. */
 int g_drop_clamped = 1;
 
+/* The clamp writes exactly 1.0 (0x4F0242 / 0x4F0165). A vertex really
+ * farther than 16384 units also has z >= 1 and rhw <= 0.1, so a range test
+ * here dropped the far side of the big maps (with the wider draw distance,
+ * hundreds of triangles a frame on Uptown's horizon). */
 static int clamped(const gfx_vertex *v)
 {
-    return v->z >= 0.99999f && v->rhw <= 0.10001f;
+    return v->z == 1.0f && v->rhw >= 0.09999f && v->rhw <= 0.10001f;
+}
+
+/* Translucent world polygons (water, glass) are drawn with ZFUNC ALWAYS and
+ * no depth write: the game relies on the ordering table to put them after
+ * what is behind them. That order breaks past the original draw distance:
+ * flagged terrain cells (Lake Jyun's water) go into a fixed bucket at depth
+ * 16000 (0x4346C6 / 0x434D25: big OT + 8000 bytes), which was "behind
+ * everything" when nothing was drawn past ~14336, but now the far wall at
+ * 18000+ is drawn before it and the water painted over the wall. A draw that
+ * lies wholly beyond the original range (vanilla depth cap 0xE00 * 4 = 14336,
+ * z = 0.875) gets a real depth test (still no write); nearer draws keep the
+ * game's ALWAYS untouched. World vertices have rhw = 0.1 / z exactly, which
+ * keeps 2D overlays out. */
+static int beyond_original_range(const gfx_vertex *v, DWORD n)
+{
+    DWORD k;
+    if (!n)
+        return 0;
+    for (k = 0; k < n; k++) {
+        float r = v[k].rhw * v[k].z;
+        if (!(v[k].z > 0.875f) || r < 0.0999f || r > 0.1001f)
+            return 0;
+    }
+    return 1;
 }
 
 /* returns the number of vertices written to out (a triangle list) */
@@ -1525,6 +1553,9 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
         const gfx_vertex *v0 = (const gfx_vertex *)(g_display_raw_verts ? g_display_raw_verts : verts);
         s.scene_depth = !(v0->z == 0.1f && v0->rhw == 1.0f) && v0->z < 0.98f;
     }
+    if (g_cur_bucket == 4 && s.z_enable && s.z_func == D3DCMP_ALWAYS && beyond_original_range(
+            (const gfx_vertex *)(g_display_raw_verts ? g_display_raw_verts : verts), n))
+        s.z_func = D3DCMP_LESSEQUAL;
     rec_state(&s);
     if (g_fog_debug)
         fog_debug(&s, (const gfx_vertex *)verts, n);
@@ -1622,6 +1653,8 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
         }
         g_tint = 0;
     }
+    if (g_probe_armed)
+        probe(d, (int)pt, (const gfx_vertex *)verts, n);
     rec_draw((int)pt, (const gfx_vertex *)verts, prevs, (int)n);
     return D3D_OK;
 }
