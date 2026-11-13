@@ -684,6 +684,9 @@ void mml_init(void)
                   GetPrivateProfileIntA("controls", "walk_tilt", -1, g_ini),
                   GetPrivateProfileIntA("controls", "walk_min", -1, g_ini),
                   GetPrivateProfileIntA("controls", "run_min", -1, g_ini));
+    controls_skates(GetPrivateProfileIntA("controls", "skates_speed", 130, g_ini),
+                    GetPrivateProfileIntA("controls", "skates_min", -1, g_ini),
+                    GetPrivateProfileIntA("controls", "skates_toggle", 0, g_ini));
     {
         char a[16];
         ini_string("controls", "aim", "character", a, sizeof a);

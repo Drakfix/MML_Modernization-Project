@@ -163,7 +163,7 @@ static const choice CH_UPDATES[] = { { "On", "general.check_updates=1" }, { "Off
 static const choice CH_ACTION[] = { { "Jump", "=jump" }, { "Shoot", "=shoot" }, { "Special", "=special" },
                                     { "Talk / check", "=talk" }, { "Roll", "=roll" }, { "Aim / lock-on", "=aim" },
                                     { "Modern on/off", "=orbit" }, { "Menu", "=menu" }, { "Select", "=select" },
-                                    { "Nothing", "=none" } };
+                                    { "Jet Skates", "=skates" }, { "Nothing", "=none" } };
 #define NCH(a) ((int)(sizeof a / sizeof a[0]))
 /* the confirm button in a help text: A with a controller, Space with the keyboard (button_words) */
 #define OK_KEY "\x01"
@@ -346,6 +346,7 @@ static const item g_start_items[] = {
     { PG_BUTTONS, IT_KEY, "Game menu", KEY_HELP, NULL, 0, WL, "key_menu" },
     { PG_BUTTONS, IT_KEY, "Select", KEY_HELP, NULL, 0, WL, "key_select" },
     { PG_BUTTONS, IT_KEY, "Modern controls on/off", KEY_HELP, NULL, 0, WL, "key_orbit" },
+    { PG_BUTTONS, IT_KEY, "Jet Skates", KEY_HELP, NULL, 0, WL, "key_skates" },
     { PG_BUTTONS, IT_KEY_RESET, "Reset keys", "Puts every key above back to its default: WASD, Space, the mouse "
       "buttons and the rest.", NULL, 0, WL },
 };
@@ -471,7 +472,7 @@ static const struct { const char *key, *def; } KEY_DEFS[] = {   /* (mml_gui.py K
     { "key_up", "W,UP" }, { "key_down", "S,DOWN" }, { "key_left", "A,LEFT" }, { "key_right", "D,RIGHT" },
     { "key_walk", "LCTRL" }, { "key_jump", "SPACE" }, { "key_shoot", "MOUSE1" }, { "key_aim", "MOUSE2" },
     { "key_roll", "LSHIFT" }, { "key_talk", "E" }, { "key_special", "Q" }, { "key_menu", "TAB" },
-    { "key_select", "M" }, { "key_orbit", "F5" },
+    { "key_select", "M" }, { "key_orbit", "F5" }, { "key_skates", "C,MOUSE4" },
 };
 
 static const char *key_default(const char *key)

@@ -80,6 +80,18 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define CAM_MIN_DIST     80
 #define CAM_EASE_OUT     0.12    /* fraction of the gap regained per update after a hit clears */
 #define STALE_POLLS      30
+/* Jet Skates (state 3). Stock speeds: 0x400 stick forward, 0x340 coasting, 0x280 braking. Rates
+ * are per update at 30 updates/s (frame step 2) and scale with the frame step. */
+#define SKATE_STOCK      0x400
+#define SKATE_MAX_DEF    130     /* % of the stock top speed at full tilt */
+#define SKATE_MIN_DEF    25      /* % of the stock top speed at the lightest tilt */
+#define SKATE_ACCEL      0x48    /* speed gained per update toward what the stick asks */
+#define SKATE_DECEL      0x40    /* speed lost per update when it asks for less (or nothing) */
+#define SKATE_TURN_STEP  0xC0    /* max facing turn per update (0x400 = 90 deg) */
+#define SKATE_SHARP      0x500   /* a turn wider than this slows to the low speed while carving */
+#define SKATE_LEAN_MIN   0x30    /* a turn of this much per update leans into it */
+#define SKATE_LEAN_HOLD  6       /* updates a lean stays after the turn eases off */
+#define SKATE_BRAKE_HOLD 8       /* updates a turn-around at speed skids (stock brake: smoke at the feet) */
 
 #define PI 3.14159265358979323846
 
@@ -101,15 +113,15 @@ static int g_modern;
  * Y Circle, LB R2, Start, Back Select); roll, aim/lock-on and the orbit toggle
  * are ours. Menus and orbit-off tank controls keep the stock layout. */
 enum { ACT_NONE, ACT_JUMP, ACT_SHOOT, ACT_SPECIAL, ACT_TALK, ACT_ROLL, ACT_AIM, ACT_ORBIT, ACT_MENU, ACT_SELECT,
-       ACT_COUNT };
+       ACT_SKATES, ACT_COUNT };
 enum { PH_A, PH_B, PH_X, PH_Y, PH_LB, PH_RB, PH_LT, PH_RT, PH_L3, PH_R3, PH_BACK, PH_START, PH_COUNT };
 static const char *const g_act_names[ACT_COUNT] = { "none", "jump", "shoot", "special", "talk", "roll", "aim",
-                                                    "orbit", "menu", "select" };
+                                                    "orbit", "menu", "select", "skates" };
 static const char *const g_ph_keys[PH_COUNT] = { "btn_a", "btn_b", "btn_x", "btn_y", "btn_lb", "btn_rb", "btn_lt",
                                                  "btn_rt", "btn_l3", "btn_r3", "btn_back", "btn_start" };
 static const WORD g_ph_btn[PH_COUNT] = { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LB, BTN_RB, 0, 0, BTN_L3, BTN_R3,
                                          BTN_BACK, BTN_START };
-static uint8_t g_map[PH_COUNT] = { ACT_JUMP, ACT_SPECIAL, ACT_ROLL, ACT_TALK, ACT_AIM, ACT_NONE, ACT_AIM, ACT_SHOOT,
+static uint8_t g_map[PH_COUNT] = { ACT_JUMP, ACT_SPECIAL, ACT_ROLL, ACT_TALK, ACT_AIM, ACT_SKATES, ACT_AIM, ACT_SHOOT,
                                    ACT_ORBIT, ACT_ORBIT, ACT_SELECT, ACT_MENU };
 #define ACT(set, a) (((set) >> (a)) & 1u)
 
@@ -129,7 +141,7 @@ static unsigned actions_of(const pad_t *p)
 
 /* keyboard + mouse (orbit layout): bindable slots, two keys each ([controls] key_*) */
 enum { KS_UP, KS_DOWN, KS_LEFT, KS_RIGHT, KS_WALK, KS_JUMP, KS_SHOOT, KS_AIM, KS_ROLL, KS_TALK, KS_SPECIAL,
-       KS_MENU, KS_SELECT, KS_ORBIT, KS_COUNT };
+       KS_MENU, KS_SELECT, KS_ORBIT, KS_SKATES, KS_COUNT };
 static const struct { const char *key; uint8_t act; int def0, def1; } g_slot_info[KS_COUNT] = {
     { "key_up", ACT_NONE, 'W', VK_UP },          { "key_down", ACT_NONE, 'S', VK_DOWN },
     { "key_left", ACT_NONE, 'A', VK_LEFT },      { "key_right", ACT_NONE, 'D', VK_RIGHT },
@@ -138,6 +150,7 @@ static const struct { const char *key; uint8_t act; int def0, def1; } g_slot_inf
     { "key_roll", ACT_ROLL, VK_LSHIFT, 0 },      { "key_talk", ACT_TALK, 'E', 0 },
     { "key_special", ACT_SPECIAL, 'Q', 0 },      { "key_menu", ACT_MENU, VK_TAB, 0 },
     { "key_select", ACT_SELECT, 'M', 0 },        { "key_orbit", ACT_ORBIT, VK_F5, 0 },
+    { "key_skates", ACT_SKATES, 'C', VK_XBUTTON1 },
 };
 static int g_slot_vk[KS_COUNT][2];
 
@@ -238,6 +251,17 @@ static int g_walk_min = WALK_MIN_PCT, g_run_min = RUN_MIN_PCT;
 static int loco_anim_acc, loco_pct = 100;
 static uint16_t talk_saved;
 static int talk_hidden, walk_injected;
+
+/* Jet Skates: the skates button (held, or toggled) skates whenever Mega Man could stand or run */
+static volatile LONG skate_want;
+static int g_skate_max = SKATE_MAX_DEF, g_skate_min = SKATE_MIN_DEF, g_skate_toggle;
+static int skate_speed;            /* forward speed we hand the game while skating (and in a skate jump) */
+static int skate_air;              /* in a jump that started on skates */
+static int skate_turn;             /* facing change of the last camera update (- left, + right) */
+static int skate_lean, skate_lean_hold;   /* carving: -1 left, +1 right (held a few updates) */
+static int skate_anim_acc;         /* skating loop: hold ticks owed (its rate follows the speed) */
+static int skate_brake;            /* updates left of a turn-around skid: the stock brake (smoke at the feet) */
+static uint16_t skate_inj_held, skate_inj_pressed;   /* stock turn / brake buttons we handed the game */
 
 /* input state (this was the Python thread) */
 static double st_yaw, st_pitch;
@@ -367,6 +391,13 @@ void controls_debug_pad(void)
 static FARPROC(WINAPI *g_real_gpa)(HMODULE, LPCSTR);
 
 static int iround(double v) { return (int)floor(v + 0.5); }
+
+/* game updates per 1/60 s step: 2 = 30 updates/s */
+static int frame_step(void)
+{
+    int s = GVAR(uint8_t, G_FRAME_STEP);
+    return s < 1 ? 1 : s > 4 ? 4 : s;
+}
 static double clampd(double v, double lo, double hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 /* ---- reading the physical pad ---- */
@@ -727,7 +758,18 @@ static void input_update(void)
            checking, kicking, ladders, knockback, Jet Skates keep their own facing (with the
            camera turning, the hold turned Mega Man in the middle of a conversation) */
         int st = P8(PL_STATE), aim_state = st <= 2 || st == 6 || st == 7 || st == 8;
-        face_hold = lock_active || (cam_aim && !back && aim_state);
+        face_hold = (lock_active && st != 3) || (cam_aim && !back && aim_state);
+    }
+    /* Jet Skates button: held, or a press toggles them ([controls] skates_toggle=1) */
+    {
+        static int prev_sk, sk_on;
+        int sk = ACT(actions_of(&p) | (unsigned)g_kbm_acts, ACT_SKATES) != 0, live = st_active && st_allowed;
+        if (sk && !prev_sk)
+            sk_on = !sk_on;
+        if (!live)
+            sk_on = 0;
+        prev_sk = sk;
+        skate_want = live && (g_skate_toggle ? sk_on : sk);
     }
     cam_yaw = (int)st_yaw & 0xffff;
     cam_active = st_active && st_allowed;
@@ -874,6 +916,7 @@ static void on_cam_apply(regs_t *r)
 
     gate = move_gate;
     ready = 1;
+    skate_turn = 0;
     if (face_hold && !roll_latch && !(P8(PL_INPUT_FLAGS) & 0x60)) {
         int cur = (RD32(G_PLAYER_FACING) >> 16) & 0xfff, step = lock_active ? LOCK_TURN_STEP : AIM_TURN_STEP;
         int d = ((face_dir - cur + 2048) & 0xfff) - 2048;
@@ -885,8 +928,20 @@ static void on_cam_apply(regs_t *r)
         d = ((face_dir - cur - d + 2048) & 0xfff) - 2048;
         ready = !cam_aim || lock_active || (d <= AIM_FIRE_TOL && d >= -AIM_FIRE_TOL) ||
                 (LONG)(frame_tick - aim_since) >= AIM_FIRE_WAIT;
-    } else if (move_active && !roll_latch && (gate > 0 || pos_move_credit > 0))
-        write_facing(move_face);
+    } else if (move_active && !roll_latch && (gate > 0 || pos_move_credit > 0)) {
+        if (P8(PL_STATE) == 3 && !(P8(PL_INPUT_FLAGS) & 0x60)) {
+            /* on skates he carves: the facing turns toward the stick at a limited rate */
+            int cur = (RD32(G_PLAYER_FACING) >> 16) & 0xfff, step = SKATE_TURN_STEP * frame_step() / 2;
+            int d = ((move_face - cur + 2048) & 0xfff) - 2048;
+            if (d > step) d = step;
+            if (d < -step) d = -step;
+            if (d)
+                write_facing(cur + d);
+            skate_turn = d;
+        } else {
+            write_facing(move_face);
+        }
+    }
     aim_ready = ready;
     if (gate > 0)
         move_gate = gate - 1;
@@ -1085,6 +1140,202 @@ static void locomotion_tune(void)
     }
 }
 
+/* ---- Jet Skates ----
+ *
+ * Stock, the skates start from standing only: the walk button (Y here, shared with talk) held for 8
+ * updates (player_try_jetskates, from pre_00), then a start-up animation (state 3 subs 0-2) before
+ * he moves; state 3 never checks jump; it skates while the walk button stays held (pre_03 / sub 4),
+ * and letting go brakes to a stop (sub 5). Sub 3 waits for the current animation to end, plays the
+ * jet sound and falls into sub 4 in the same update, so entering sub 3 with the animation marked
+ * ended skates at once from any grounded state. A jump is the game's running jump (state 8); its
+ * landing (sub 6) goes back into sub 3 the same way. The skates button stands in for the walk
+ * button: injected while wanted, kept from the game otherwise. */
+
+static void inject_walk(void)
+{
+    uint16_t walk = P16(PL_MASK_WALK);
+    walk_injected = 1;
+    P16(PL_HELD) |= walk;
+    /* walk and talk share a button: an injected walk must not open a conversation with whoever
+       stands in front (the real button still does) */
+    if (!talk_hidden && !(GVAR(uint16_t, G_PAD_HELD) & walk) && (P16(PL_MASK_TALK) & walk)) {
+        talk_saved = P16(PL_MASK_TALK);
+        P16(PL_MASK_TALK) = (uint16_t)(talk_saved & ~walk);
+        talk_hidden = 1;
+    }
+}
+
+static int skate_try_start(void)
+{
+    int st = P8(PL_STATE), speed = 0, cur;
+    if (st != 0 && st != 1 && st != 2 && st != 4 && st != 5 && st != 6 && !(st == 8 && P8(PL_SUBSTATE) >= 6))
+        return 0;
+    if (P8(PL_AIRBORNE) || (P8(PL_INPUT_FLAGS) & 0x60) || !(P8(PL_ITEMS) & 2) || P8(PL_SKATE_BLOCK) ||
+        (P8(PL_FIRE_FLAGS) & 0xC0) || lock_active || roll_ours)
+        return 0;
+    if (st == 2)
+        speed = 0x200 * loco_pct / 100;          /* from a run: keep its speed */
+    else if (st == 8)
+        speed = skate_air ? skate_speed : S16(PL_VEL_FWD);   /* landing: keep the jump's */
+    if (speed < 0) speed = 0;
+    /* travel along where he was going (a turned run has its body off the facing) */
+    cur = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
+    write_facing(cur - S16(PL_MOVE_ANGLE));
+    P8(PL_FIRE_FLAGS) |= 4;                       /* (set by the stock start, sub 0) */
+    P8(PL_STATE) = 3;
+    P8(PL_SUBSTATE) = 3;
+    P8(PL_VARIANT) = 0;
+    P8(PL_RUN_DIR) = 0;
+    S16(PL_MOVE_ANGLE) = 0;
+    P16(0xB4) = 0;
+    S16(PL_VEL_SIDE) = 0;
+    S16(PL_VEL_FWD) = (int16_t)speed;
+    P8(PL_ANIM_FLAGS) = 0xFF;                     /* "current animation finished": sub 3 goes on at once */
+    P8(PL_SKATE_COUNT) = 0x20;
+    skate_speed = speed;
+    skate_air = 0;
+    skate_lean = skate_lean_hold = skate_brake = 0;
+    return 1;
+}
+
+/* after the walk-injection bookkeeping of the update; returns 1 while skates own the walk button */
+static int skate_update(void)
+{
+    int st = P8(PL_STATE), sub = P8(PL_SUBSTATE);
+    uint16_t walk = P16(PL_MASK_WALK);
+    static int prev_st;
+    int new_lean = 0;
+    /* take back the stock buttons handed over last update (the pad copy may not have run since) */
+    P16(PL_HELD) &= (uint16_t)~(skate_inj_held & ~GVAR(uint16_t, G_PAD_HELD));
+    P16(PL_PRESSED) &= (uint16_t)~skate_inj_pressed;
+    skate_inj_held = skate_inj_pressed = 0;
+    if (st == 3) {
+        /* carving: the facing turned this much on the last camera update */
+        int lean = skate_turn <= -SKATE_LEAN_MIN ? -1 : skate_turn >= SKATE_LEAN_MIN ? 1 : 0;
+        if (lean) {
+            new_lean = lean != skate_lean;
+            skate_lean = lean;
+            skate_lean_hold = SKATE_LEAN_HOLD;
+        } else if (skate_lean_hold > 0 && --skate_lean_hold == 0) {
+            skate_lean = 0;
+        }
+    } else {
+        skate_lean = skate_lean_hold = skate_brake = 0;
+    }
+    if (prev_st == 3 && (st == 7 || st == 8))
+        skate_air = 1;                 /* skated off a ledge: the fall keeps the speed too */
+    prev_st = st;
+    if (skate_air && st != 7 && st != 8)
+        skate_air = 0;
+    if (st == 0)
+        P8(PL_SKATE_COUNT) = 0;        /* no stock start from holding Y: the skates button does it */
+    if (!skate_want || (P8(PL_INPUT_FLAGS) & 0x60)) {
+        if ((st == 3 || skate_air) && !(GVAR(uint16_t, G_PAD_HELD) & walk))
+            P16(PL_HELD) &= (uint16_t)~walk;   /* (a light tilt's walk must not keep them going) */
+        return st == 3 || skate_air;
+    }
+    if (st == 3 && (sub == 3 || sub == 4) && !P8(PL_AIRBORNE) && (P16(PL_PRESSED) & P16(PL_MASK_JUMP))) {
+        /* jump: the running jump (state 8 sub 0 takes off: anim, height, sound), at skating speed */
+        P8(PL_STATE) = 8;
+        P8(PL_SUBSTATE) = 0;
+        P8(PL_VARIANT) = 0;
+        P8(PL_RUN_DIR) = 0;
+        S16(PL_MOVE_ANGLE) = 0;
+        P16(0xB4) = 0;
+        S16(PL_VEL_SIDE) = 0;
+        S16(PL_VEL_FWD) = (int16_t)skate_speed;
+        skate_air = 1;
+    } else if (st != 3) {
+        skate_try_start();
+    }
+    if (P8(PL_STATE) == 3 && (P8(PL_SUBSTATE) == 3 || P8(PL_SUBSTATE) == 4)) {
+        /* Our turns write the facing, so the stock turn and brake buttons never reach the skates
+           and neither do their effects: the turn button held picks the lean animation (0x3C/0x3D)
+           and keeps the turn's skid sound going (going straight plays 0x8F over it), its press
+           puffs smoke (effect 0x89), and back held brakes with smoke at both feet (effect 0x83).
+           Hand them over: the stock turn adds a little (+-0x10 per update) to ours. */
+        uint16_t m = 0;
+        if (skate_lean) {
+            m = P16(skate_lean > 0 ? PL_MASK_TURN_R : PL_MASK_TURN_L);
+            if (new_lean)
+                skate_inj_pressed = m;
+        }
+        if (skate_brake) {
+            /* (sub 4 checks forward before back: a held forward would skip the brake) */
+            m |= P16(PL_MASK_BACK);
+            P16(PL_HELD) &= (uint16_t)~P16(PL_MASK_FWD);
+        }
+        skate_inj_held = (uint16_t)(m & ~GVAR(uint16_t, G_PAD_HELD));
+        P16(PL_HELD) |= m;
+        P16(PL_PRESSED) |= skate_inj_pressed;
+    }
+    if (P8(PL_STATE) == 3 || skate_air) {
+        inject_walk();
+        return 1;
+    }
+    return 0;
+}
+
+/* player_apply_velocity on skates: analog speed, carving; a skate jump keeps its speed */
+static void skate_velocity(regs_t *r, int st)
+{
+    int sub = P8(PL_SUBSTATE);
+    if (st == 3 && (sub == 3 || sub == 4)) {
+        int top = SKATE_STOCK * g_skate_max / 100, low = SKATE_STOCK * g_skate_min / 100, want = 0;
+        int fs = frame_step(), sharp = 0;
+        if (move_active) {
+            want = low + (int)((top - low) * (move_fwd / 32767.0));
+            sharp = ang_dist(move_face, (RD32(G_PLAYER_FACING) >> 16) & 0xfff) > SKATE_SHARP;
+            if (sharp && want > low)
+                want = low;   /* turning around: carve at the low speed */
+        }
+        /* turning around at speed skids for a moment: slowing down, with the stock brake handed over
+           from the next update */
+        if (sharp && want < skate_speed - SKATE_DECEL && !skate_brake)
+            skate_brake = SKATE_BRAKE_HOLD;
+        else if (skate_brake > 0)
+            skate_brake--;
+        if (skate_brake && want > low)
+            want = low;
+        if (skate_speed < want) {
+            skate_speed += SKATE_ACCEL * fs / 2;
+            if (skate_speed > want) skate_speed = want;
+        } else if (skate_speed > want) {
+            skate_speed -= SKATE_DECEL * fs / 2;
+            if (skate_speed < want) skate_speed = want;
+        }
+        r->edx = (uint32_t)skate_speed;
+        S16(PL_VEL_FWD) = (int16_t)skate_speed;
+        /* the skating loops (0x39 straight, 0x3C/0x3D leaning) step a pose every update, a small
+           jet shake: it follows the speed, from still (no shake) to the stock rate at the stock top
+           speed and above, by holding poses longer (anim_tick counts +0xA5 down after this) */
+        {
+            int id = P8(PL_ANIM_ID), pct = skate_speed * 100 / SKATE_STOCK;
+            if (pct > 100) pct = 100;
+            if (id == 0x39 || id == 0x3C || id == 0x3D) {
+                skate_anim_acc += 100 - pct;
+                while (skate_anim_acc >= 100) {
+                    skate_anim_acc -= 100;
+                    if (P8(PL_ANIM_HOLD) < 0x7F)
+                        P8(PL_ANIM_HOLD)++;
+                }
+            } else {
+                skate_anim_acc = 0;
+            }
+        }
+    } else if (st == 3 && sub == 5) {
+        /* braking to a stop (-0x28 per update until its animation ends): never into reverse */
+        if ((int16_t)r->edx < 0) {
+            r->edx = 0;
+            S16(PL_VEL_FWD) = 0;
+        }
+    } else if (skate_air && (st == 7 || st == 8) && P8(PL_SUBSTATE) < 6) {
+        /* the air control caps a held forward at 0x280 */
+        r->edx = (uint32_t)skate_speed;
+        S16(PL_VEL_FWD) = (int16_t)skate_speed;
+    }
+}
+
 static void on_player_update(regs_t *r)
 {
     if (r->eax != G_PLAYER)
@@ -1173,21 +1424,13 @@ static void on_player_update(regs_t *r)
     if (walk_injected && !(GVAR(uint16_t, G_PAD_HELD) & P16(PL_MASK_WALK)))
         P16(PL_HELD) &= (uint16_t)~P16(PL_MASK_WALK);   /* in case held wasn't refreshed yet */
     walk_injected = 0;
+    if (skate_update())
+        return;
     /* in a face hold, a light tilt walks too (sidestep / backstep facing the target or the
      * camera's way), but only from standing or walking: walk + strafe while running turns in place */
     if (move_walk && move_active && inject_fwd && !roll_ours && !(P8(PL_INPUT_FLAGS) & 0x60) &&
-        (!face_hold || P8(PL_STATE) == 0 || P8(PL_STATE) == 1 || P8(PL_STATE) == 6)) {
-        uint16_t walk = P16(PL_MASK_WALK);
-        walk_injected = 1;
-        P16(PL_HELD) |= walk;
-        /* walk and talk share a button: an injected walk must not open a
-         * conversation with whoever stands in front (the real button still does) */
-        if (!(GVAR(uint16_t, G_PAD_HELD) & walk) && (P16(PL_MASK_TALK) & walk)) {
-            talk_saved = P16(PL_MASK_TALK);
-            P16(PL_MASK_TALK) = (uint16_t)(talk_saved & ~walk);
-            talk_hidden = 1;
-        }
-    }
+        (!face_hold || P8(PL_STATE) == 0 || P8(PL_STATE) == 1 || P8(PL_STATE) == 6))
+        inject_walk();
 }
 
 /* player_apply_velocity(EAX p, EDX fwd, EBX vert, ECX side): the walk state
@@ -1199,6 +1442,8 @@ static void on_apply_velocity(regs_t *r)
     if (r->eax != G_PLAYER)
         return;
     st = P8(PL_STATE);
+    if (cam_active && (st == 3 || skate_air))
+        skate_velocity(r, st);
     /* in a face hold the run state only knows 4 directions; steer the travel to
      * the exact stick heading (travel = facing - +0x116) */
     if (face_hold && move_active && st == 2) {
@@ -1243,7 +1488,7 @@ static void on_player_move(regs_t *r)
 static void on_player_turn_ret(regs_t *r)
 {
     (void)r;
-    if (face_hold)
+    if (face_hold || P8(PL_STATE) == 3)   /* (on skates the camera hook turns him at its own rate) */
         return;
     if (move_active && !roll_latch && (move_gate > 0 || pos_move_credit > 0))
         write_facing(move_face);
@@ -1445,6 +1690,21 @@ void controls_load_buttons(const char *ini)
 {
     char v[32], line[256] = "";
     int i, a;
+    /* RB had no action before the Jet Skates got one, and older settings wrote that default
+       (btn_rb=none) into mml.ini: hand it over once, unless the skates are on a button already */
+    if (!GetPrivateProfileIntA("controls", "skates_rb", 0, ini)) {
+        int taken = 0;
+        for (i = 0; i < PH_COUNT; i++) {
+            GetPrivateProfileStringA("controls", g_ph_keys[i], "", v, sizeof v, ini);
+            taken |= _stricmp(v, "skates") == 0;
+        }
+        GetPrivateProfileStringA("controls", "btn_rb", "none", v, sizeof v, ini);
+        if (!taken && _stricmp(v, "none") == 0) {
+            WritePrivateProfileStringA("controls", "btn_rb", "skates", ini);
+            log_printf("controls: RB (unbound) is now the Jet Skates button");
+        }
+        WritePrivateProfileStringA("controls", "skates_rb", "1", ini);
+    }
     for (i = 0; i < PH_COUNT; i++) {
         GetPrivateProfileStringA("controls", g_ph_keys[i], "", v, sizeof v, ini);
         if (!v[0])
@@ -1554,6 +1814,17 @@ void controls_tune(int roll_speed, int roll_anim_pct, int walk_pct, int walk_min
         g_walk_frac = walk_pct / 100.0;
     log_printf("controls: roll speed 0x%X, roll animation +%d%%, walk below %d%% tilt, walk from %d%%, run from %d%%",
                g_roll_speed, g_roll_anim, (int)(g_walk_frac * 100), g_walk_min, g_run_min);
+}
+
+void controls_skates(int max_pct, int min_pct, int toggle)
+{
+    if (max_pct >= 50 && max_pct <= 300)
+        g_skate_max = max_pct;
+    if (min_pct >= 0 && min_pct <= g_skate_max)
+        g_skate_min = min_pct;
+    g_skate_toggle = toggle != 0;
+    log_printf("controls: Jet Skates %d%% of stock at full tilt, %d%% at a light tilt, button %s", g_skate_max,
+               g_skate_min, g_skate_toggle ? "toggles" : "held");
 }
 
 void controls_aim(int camera, int crosshair)

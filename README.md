@@ -138,6 +138,10 @@ the Japanese line being spoken.
   optional crosshair. Mega Man turns to the camera's direction only while firing, so movement
   stays free in every direction.
 - **Analog movement.** A light stick tilt walks, a full tilt runs.
+- **Jet Skates on RB.** Hold RB to skate at once from standing or running, with no start-up
+  pause. Speed follows the stick, up to 30% faster than the original at full tilt. Jumps work
+  on skates and keep their speed. Hard turns and turn-arounds keep the original lean, sound
+  and smoke.
 - **Any controller.** SDL3 supports Xbox, PlayStation, Switch and most other pads, and the
   built-in controls of Android handhelds. The D-pad works as a second movement input, as in
   the PS1 version.
@@ -297,6 +301,7 @@ Enter plays, Esc quits, and Q and E switch pages.
 | Y | Talk / check |
 | LT or LB | Aim / lock-on |
 | RT | Shoot |
+| RB (hold) | Jet Skates |
 | L3 or R3 | Modern controls on/off |
 | Start | Game menu |
 | Back | Select |
@@ -323,6 +328,7 @@ pressed twice. In the start menu, **Start** plays and **B** quits. On the title 
 | Q | Special weapon |
 | Tab | Game menu |
 | M | Select |
+| C or mouse button 4 (hold) | Jet Skates |
 | F5 | Modern controls on/off |
 | F1 | Settings menu |
 | F6 | Quick save |

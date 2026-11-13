@@ -38,6 +38,8 @@ void controls_camera(int speed_x_pct, int speed_y_pct, int invert_x, int invert_
  * where he faces. crosshair = a marker where those shots go. controls_crosshair: how visible it
  * is now (0 = hidden, 1 = fully; it fades out a few seconds after the last shot). */
 void controls_aim(int camera, int crosshair);
+/* Jet Skates: top speed and lightest-tilt speed in % of the stock top speed; toggle = the button toggles */
+void controls_skates(int max_pct, int min_pct, int toggle);
 float controls_crosshair(void);
 /* the world point camera-aimed shots go toward (the camera's view, a fixed distance out);
    0 = no vertical aim (shots stay level) */

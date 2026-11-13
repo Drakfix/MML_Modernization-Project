@@ -50,6 +50,16 @@
 #define PL_HELD                 0x11C       /* u16 held buttons (PS1 bits) */
 #define PL_MASK_WALK            0x134       /* u16 walk-modifier button mask (0x2000) */
 #define PL_MASK_TALK            0x136       /* u16 talk/check mask: the same button as walk */
+#define PL_PRESSED              0x11E       /* u16 buttons pressed this frame */
+#define PL_MASK_FWD             0x124       /* u16 forward mask */
+#define PL_MASK_BACK            0x126       /* u16 back mask (on skates: brake) */
+#define PL_MASK_TURN_L          0x128       /* u16 turn left mask (player_turn: facing -) */
+#define PL_MASK_TURN_R          0x12A       /* u16 turn right mask (facing +) */
+#define PL_MASK_JUMP            0x138       /* u16 jump mask */
+#define PL_ANIM_PREV            0xAD        /* u8 last update's anim id (a change starts the new one) */
+#define PL_ITEMS                0x16B       /* u8: 1 Jump Springs, 2 Jet Skates */
+#define PL_SKATE_COUNT          0x54A       /* u8: walk button held count (> 8 starts the skates), > 0x10 skating */
+#define PL_SKATE_BLOCK          0x54B       /* u8: != 0 = no skates here */
 #define G_PLAYER_STATE          0x5F836Cu   /* +0x08: bit 0x800 busy/roll, bit 0x01000000 roll side (1 = left) */
 #define G_PLAYER_X              0x5F8380u   /* s32 16.16 */
 #define G_PLAYER_Z              0x5F8388u
