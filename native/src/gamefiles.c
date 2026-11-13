@@ -161,8 +161,9 @@ int gamefiles_version_ready(const char *root, int jp)
     gamefiles_dir(root, jp, dir, sizeof dir);
     exe = exists(dir, jp ? "ROCKMAN_NATIVE.EXE" : "MEGAMAN_NATIVE.EXE");
 #ifdef _WIN32
-    /* (a folder Setup patched in place before the start menu imported games: its own exe) */
-    exe = exe || exists(dir, jp ? "ROCKMAN.EXE" : "MEGAMAN.EXE");
+    /* (a folder Setup patched in place before the start menu imported games: its own exe; not in the
+       app's folder, where the exe is the player's original until gamefiles_adopt patches a copy) */
+    exe = exe || (exists(dir, jp ? "ROCKMAN.EXE" : "MEGAMAN.EXE") && !exists(root, GAMEFILES_APP_MARKER));
 #endif
     return exe && exists(dir, "DAT") && exists(dir, "BGM") && exists(dir, "SPH");
 }
@@ -266,6 +267,30 @@ int gamefiles_finish(const char *dir, char *msg, size_t n)
     (void)dir;
     _snprintf_s(msg, n, _TRUNCATE, "No patch data in this build.");
     return 0;
+#endif
+}
+
+/* The app installed into the player's game folder (Setup lets them pick it): the game there is the
+   app's own, played in place. The first time, its program gets the patched copy beside it
+   (*_NATIVE.EXE), as an import would make; the player's own exe is left as it is. */
+void gamefiles_adopt(const char *root)
+{
+#if defined(_WIN32) && defined(MML_PATCH_DATA)
+    int jp;
+    if (!exists(root, GAMEFILES_APP_MARKER))
+        return;
+    for (jp = 0; jp < 2; jp++) {
+        char msg[200];
+        if (!exists(root, jp ? "ROCKMAN.EXE" : "MEGAMAN.EXE") || exists(root, jp ? "ROCKMAN_NATIVE.EXE" : "MEGAMAN_NATIVE.EXE"))
+            continue;
+        if (gamefiles_finish(root, msg, sizeof msg)) {
+            log_printf("gamefiles: the game in the app's own folder is ready to play");
+            gamefiles_defaults(root);
+        } else
+            log_printf("gamefiles: the game in the app's own folder: %s", msg);
+    }
+#else
+    (void)root;
 #endif
 }
 

@@ -372,6 +372,7 @@ static int start_menu_windows(void)
     log_open_file(log);
     log_printf("start menu %s in %s", MML_NATIVE_BUILD, dir);
     _snprintf_s(ini, sizeof ini, _TRUNCATE, "%s\\mml.ini", dir);
+    gamefiles_adopt(dir);   /* (the app installed into the player's game folder: that game, ready) */
     if (skip_start_menu(dir, ini))   /* (straight into the game) */
         return launch_game(dir, ini, 0);
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, ini))   /* (test tools drive the menu too) */

@@ -37,6 +37,9 @@ int gamefiles_bundled_intro(const char *dir);
 /* what a fresh game folder lacks, never overwriting: our default mml.ini (bundled), and with a
    version's files the intro and CAPCOM.AVI (see gamefiles.c). Before anything reads mml.ini. */
 void gamefiles_defaults(const char *dir);
+/* Windows: the app installed into the player's game folder: that game made ready to play there (once) */
+void gamefiles_adopt(const char *root);
+#define GAMEFILES_APP_MARKER "Modernization\\app-folder.txt"   /* (Setup's: the app's folder) */
 int gamefiles_bundled_file(const char *name, const char *dir);   /* an app file into dir (platform) */
 #ifdef _WIN32
 /* the Windows start menu: mml.dll and the wrapper DLLs from the app's folder (root) beside the

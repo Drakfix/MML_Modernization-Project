@@ -5,7 +5,7 @@ a single executable with PyInstaller that bundles everything needed, so the end 
 not have to install anything separately.
 
 Setup installs the app (do_app_install): the start menu, both game engines, the runtime and the
-intro, into a folder the player chooses. The games are added in the start menu (its APP page):
+intro, into a folder the player chooses. The games are added in the start menu (its Game page):
 the player picks their Mega Man Legends and/or Rockman DASH folder and it is copied into the app's
 folder, patched there. A game folder an earlier Setup (0.5 to 0.7) patched in place is still
 updated where it is (do_install). Both are plain functions, independent of the GUI, so they can
@@ -70,13 +70,27 @@ def is_game_folder(path):
     return game_exe(path) is not None
 
 
+def fixed_drives():
+    """the computer's fixed disks' roots ("D:\\"), C: first"""
+    if os.name != "nt":
+        return []
+    try:
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+        roots = [f"{chr(65 + i)}:\\" for i in range(26) if mask >> i & 1]
+        return [r for r in roots if ctypes.windll.kernel32.GetDriveTypeW(r) == 3]   # DRIVE_FIXED
+    except Exception:
+        return []
+
+
 def detect_game_folder(exe=None):
     """Best-effort auto-detect of a game install (exe: only a folder with that game exe)."""
     cands = []
     for root in [os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
                  os.environ.get("ProgramFiles", r"C:\Program Files"),
-                 r"C:\Games", r"C:\GOG Games", r"C:\\", os.path.expanduser("~\\Desktop")]:
-        if root and os.path.isdir(root):
+                 r"C:\Games", r"C:\GOG Games", r"C:\\", os.path.expanduser("~\\Desktop")] + \
+            [os.path.join(d, sub) for d in fixed_drives() if not d.upper().startswith("C:")
+             for sub in ("", "Games", "GOG Games")]:
+        if root and os.path.isdir(root) and root not in cands:
             cands.append(root)
     names = ("megaman legends", "mega man legends", "rockman dash", "mml")
     for base in cands:
@@ -242,6 +256,34 @@ KEEP_IF_PRESENT = {"mml.ini"}
 MAX_INTRO_DIR = 116
 
 
+def quarantine_wrappers(game_dir, log):
+    """other fix packs' wrapper DLLs in a game folder, moved to Modernization\\quarantined-wrappers
+    (ReShade is kept)"""
+    log("Checking for conflicting mods...", 0.40)
+    qdir = os.path.join(game_dir, "Modernization", "quarantined-wrappers")
+    for fn in list(os.listdir(game_dir)):
+        low = fn.lower()
+        if low not in HOOK_DLL_NAMES:
+            continue
+        p = os.path.join(game_dir, fn)
+        if not os.path.isfile(p):
+            continue
+        if low in M.OUR_DLLS and sha256(p) == M.OUR_DLLS[low]:
+            continue
+        if low in ("dxgi.dll", "d3d11.dll") and is_reshade(p):
+            log(f"Kept ReShade ('{fn}'): it works with the Modern renderer.", 0.42)
+            continue
+        os.makedirs(qdir, exist_ok=True)
+        dst = os.path.join(qdir, fn)
+        i = 2
+        while os.path.exists(dst):
+            b, e = os.path.splitext(fn)
+            dst = os.path.join(qdir, f"{b}.{i}{e}")
+            i += 1
+        shutil.move(p, dst)
+        log(f"Set aside a conflicting '{fn}'.", 0.42)
+
+
 def do_install(game_dir, add_desktop_shortcut, log, jp_dir=None, subtitles=False):
     """Patch + install into game_dir. `log(msg, frac)` reports progress (frac 0..1).
     US version only: subtitles downloads the English subtitles for the cutscenes; jp_dir, a
@@ -289,29 +331,7 @@ def do_install(game_dir, add_desktop_shortcut, log, jp_dir=None, subtitles=False
             else f"Game patched and verified ({ed.name} version).", 0.30)
 
     # 2. quarantine foreign wrapper DLLs -----------------------------------------
-    log("Checking for conflicting mods...", 0.40)
-    qdir = os.path.join(game_dir, "Modernization", "quarantined-wrappers")
-    for fn in list(os.listdir(game_dir)):
-        low = fn.lower()
-        if low not in HOOK_DLL_NAMES:
-            continue
-        p = os.path.join(game_dir, fn)
-        if not os.path.isfile(p):
-            continue
-        if low in M.OUR_DLLS and sha256(p) == M.OUR_DLLS[low]:
-            continue
-        if low in ("dxgi.dll", "d3d11.dll") and is_reshade(p):
-            log(f"Kept ReShade ('{fn}'): it works with the Modern renderer.", 0.42)
-            continue
-        os.makedirs(qdir, exist_ok=True)
-        dst = os.path.join(qdir, fn)
-        i = 2
-        while os.path.exists(dst):
-            b, e = os.path.splitext(fn)
-            dst = os.path.join(qdir, f"{b}.{i}{e}")
-            i += 1
-        shutil.move(p, dst)
-        log(f"Set aside a conflicting '{fn}'.", 0.42)
+    quarantine_wrappers(game_dir, log)
 
     # 3. runtime stack ------------------------------------------------------------
     for rel in LEGACY_FILES:
@@ -370,7 +390,8 @@ def do_install(game_dir, add_desktop_shortcut, log, jp_dir=None, subtitles=False
 # The app's folder (do_app_install) has this file: Setup and its updates tell it from a game folder
 # an earlier Setup patched in place (the app's folder holds games too once they are imported).
 APP_MARKER = os.path.join("Modernization", "app-folder.txt")
-DEFAULT_APP_DIR = r"C:\Games\Mega Man Legends Modernization"
+APP_FOLDER_NAME = "Mega Man Legends Modernization"
+DEFAULT_APP_DIR = os.path.join("C:\\", "Games", APP_FOLDER_NAME)
 RUNNER64 = "mml_run64.exe"
 
 
@@ -378,12 +399,57 @@ def is_app_folder(path):
     return bool(path) and os.path.isfile(os.path.join(path, APP_MARKER))
 
 
+# what an earlier Setup left in a game folder it patched in place (0.1 to 0.7: the launcher, the
+# runtime, the settings, the executable's backup)
+PATCHED_SIGNS = ("MML Launcher.exe", "mml.dll", "mml.ini")
+
+
+def was_patched(path):
+    """a game folder an earlier Setup patched in place: its files, or an executable already patched"""
+    exe = game_exe(path)
+    if not exe:
+        return False
+    if any(os.path.isfile(os.path.join(path, f)) for f in PATCHED_SIGNS + (exe + ".vanilla-backup",)):
+        return True
+    patched = {M.PATCHED_SHA256, *M.PREVIOUS_PATCHED_SHA256}
+    if getattr(M, "JP_PATCHED_SHA256", None):
+        patched.add(M.JP_PATCHED_SHA256)
+    try:
+        return sha256(os.path.join(path, exe)) in patched
+    except OSError:
+        return False
+
+
 def install_kind(path):
     """'update': a game folder an earlier Setup patched in place (updated there, do_install);
+    'game': a game folder the patch was never installed in (the app goes into it and plays that copy:
+            do_app_install, the start menu patches a copy of the exe beside the original);
     'app': the app (new, or one to update, do_app_install)"""
-    if path and not is_app_folder(path) and game_exe(path):
-        return "update"
-    return "app"
+    if not path or is_app_folder(path) or not game_exe(path):
+        return "app"
+    return "update" if was_patched(path) else "game"
+
+
+def in_program_files(path):
+    full = os.path.normcase(os.path.abspath(path))
+    for v in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        pf = os.environ.get(v)
+        if pf and (full + os.sep).startswith(os.path.normcase(os.path.abspath(pf)) + os.sep):
+            return True
+    return False
+
+
+def suggested_app_dir(game_dir=""):
+    """where the app goes for a game folder: beside it, on its drive (players keep games on the disk
+    they chose); else that drive's Games folder; without one, C:\\Games"""
+    if not game_dir:
+        return DEFAULT_APP_DIR
+    full = os.path.abspath(game_dir)
+    parent = os.path.dirname(full.rstrip("\\/")) or full
+    if os.path.isdir(parent) and not in_program_files(parent) and is_writable(parent):
+        return os.path.join(parent, APP_FOLDER_NAME)
+    drive = os.path.splitdrive(full)[0]
+    return os.path.join(drive + "\\", "Games", APP_FOLDER_NAME) if drive else DEFAULT_APP_DIR
 
 
 def do_app_install(app_dir, add_desktop_shortcut, log):
@@ -397,6 +463,8 @@ def do_app_install(app_dir, add_desktop_shortcut, log):
         return False, f"The folder couldn't be made ({e}).\nNothing was changed."
     if not is_writable(app_dir):
         return False, NOT_WRITABLE_APP + "\nNothing was changed."
+    if game_exe(app_dir):   # (the player's game folder: it becomes the app's, the game stays in it)
+        quarantine_wrappers(app_dir, log)
     log("Installing the app...", 0.10)
     gf = os.path.join(res, "game-files")
     copied = 0
@@ -417,6 +485,9 @@ def do_app_install(app_dir, add_desktop_shortcut, log):
     src_avi = os.path.join(res, "CAPCOM.AVI")
     dst_avi = os.path.join(app_dir, "CAPCOM.AVI")
     if os.path.isfile(src_avi) and not (os.path.isfile(dst_avi) and sha256(dst_avi) == M.INTRO_SHA256):
+        keep = os.path.join(app_dir, "CAPCOM.AVI.original")
+        if os.path.isfile(dst_avi) and game_exe(app_dir) and not os.path.exists(keep):
+            shutil.move(dst_avi, keep)   # (the game's own intro, kept)
         shutil.copyfile(src_avi, dst_avi)
     with open(os.path.join(app_dir, APP_MARKER), "w", encoding="utf-8") as f:
         f.write("This folder holds the Mega Man Legends Modernization Project app. Its start menu imports\n"
@@ -510,9 +581,10 @@ def run_gui():
     tk.Label(p1, text="This installs widescreen, modern controls, an audio fix and more\n"
                       "for the Mega Man Legends PC game.",
              bg=BG, fg=TEXT, font=("Segoe UI", 11), justify="left").pack(anchor="w")
-    tk.Label(p1, text="Your game is added afterwards, in the app's start menu (its APP page): pick your "
-                      "Mega Man Legends and/or Rockman DASH folder there, and it is copied into the app's "
-                      "folder. Your own game folders aren't changed.",
+    tk.Label(p1, text="Install the app into any folder, on any disk. Pick your game's own folder to play that "
+                      "copy where it is; pick another folder and the app's start menu (its Game page) copies "
+                      "your Mega Man Legends and/or Rockman DASH game into it. Either way your game's own "
+                      "files aren't changed.",
              bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left", wraplength=px(580)).pack(anchor="w", pady=(4, 14))
 
     def check(parent, text, var, command=None, bold=False):
@@ -540,7 +612,8 @@ def run_gui():
         return (e, b), st
 
     tk.Label(p1, text="Install folder", bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w")
-    dir_var = tk.StringVar(value=given or DEFAULT_APP_DIR)
+    found = "" if given else detect_game_folder()   # (a game found on any disk: the app goes beside it)
+    dir_var = tk.StringVar(value=given or suggested_app_dir(found))
     _, dir_status = folder_row(p1, dir_var, "Select the folder to install into")
     tk.Checkbutton(p1, text="  Add a shortcut on my Desktop", variable=state["shortcut"],
                    bg=BG, fg=TEXT, selectcolor=FIELD, activebackground=BG, activeforeground=TEXT,
@@ -555,6 +628,17 @@ def run_gui():
         ok, col = True, GREEN
         if not d or not os.path.isabs(d):
             ok, col, text = False, DIM, "Pick the folder to install into (a full path, like " + DEFAULT_APP_DIR + ")."
+        elif install_kind(d) == "game":
+            jp = game_exe(d) == "ROCKMAN.EXE"
+            exe = "ROCKMAN" if jp else "MEGAMAN"
+            text = (f"✓  This is your {'Rockman DASH' if jp else 'Mega Man Legends'} folder: the app goes into "
+                    f"it and plays this copy of the game, with its saves. Nothing is copied, and {exe}.EXE "
+                    f"stays as it is (the patched program is added beside it as {exe}_NATIVE.EXE).")
+            if jp:
+                text += (" The US version can't be added to this folder later: for both versions, install "
+                         "into a folder of its own.")
+            if not is_writable(d):
+                ok, col, text = False, AMBER, NOT_WRITABLE_APP.replace("\n", " ")
         elif install_kind(d) == "update":
             name = "Rockman DASH" if game_exe(d) == "ROCKMAN.EXE" else "Mega Man Legends"
             text = (f"✓  This is your {name} folder from an earlier version of the patch: Setup updates it "
@@ -637,8 +721,12 @@ def run_gui():
             done_lbl.configure(text="All set!")
             note = msg.split("\n\n", 1)[1] if "\n\n" in msg else ""
             shortcut = "A shortcut was added to your Desktop.\n" if state["shortcut"].get() else ""
-            if kind == "app":
-                text = ("The app is installed. Play now opens its start menu: on its APP page, import your "
+            if kind == "game":
+                text = ("The app is installed with your game. Play now opens its start menu, which gets the "
+                        "game ready the first time.\n" + shortcut +
+                        f"You can also start it any time with {RUNNER64} --menu in that folder.")
+            elif kind == "app":
+                text = ("The app is installed. Play now opens its start menu: on its Game page, import your "
                         "Mega Man Legends (and/or Rockman DASH) folder, then press Play.\n" + shortcut +
                         f"You can also start it any time with {RUNNER64} --menu in the install folder.")
             else:

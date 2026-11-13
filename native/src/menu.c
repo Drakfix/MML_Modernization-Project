@@ -883,7 +883,14 @@ static void change_item(const item *it, int dir)
     }
     if (it->kind == IT_GF_US || it->kind == IT_GF_JP) {
         if (!gf_busy() && M.tk_state != TASK_RUNNING && dir > 0) {
-            char d[MAX_PATH];
+            char d[MAX_PATH], rock[MAX_PATH];
+            _snprintf_s(rock, sizeof rock, _TRUNCATE, "%s\\ROCKMAN.EXE", M.game_dir);
+            if (it->kind == IT_GF_US && GetFileAttributesA(rock) != INVALID_FILE_ATTRIBUTES) {
+                /* (the app in a Rockman DASH folder: the US version's DAT would land on its own) */
+                note("This app's folder is your Rockman DASH folder: for the US version too, install the "
+                     "app into a folder of its own");
+                return;
+            }
             M.gf_jp = it->kind == IT_GF_JP;
             M.gf_state = IMPORT_PICKING;
             M.gf_line[0] = 0;
