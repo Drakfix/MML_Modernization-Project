@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.8.1 beta.** The 0.1 releases are kept on the
+**Current version: 0.8.2 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -63,6 +63,23 @@ copy.
 - **Updates on Linux.** The start menu's **Update** downloads the new archive, checks it, installs
   it over the app and starts it again.
 - Fix (Linux): holding Back / F2 on the title screen could crash instead of opening the start menu.
+
+0.8.2 adds:
+
+- **Jet Skates on RB.** Hold RB to skate at once, with no start-up pause. Speed follows the stick,
+  up to 30% faster than the original at full tilt, and jumps work on skates.
+- **Over-the-shoulder camera** (Settings, **Lock-on camera**). While locked on, the camera moves in
+  beside Mega Man and looks past his shoulder at the enemy. With nothing targeted, it replaces the
+  original aim, which stops Mega Man in place: he keeps moving and shots go to the crosshair. R3
+  swaps the side. L3 alone now switches the modern controls on and off.
+- **Shots go to the crosshair.** With camera aim or the over-the-shoulder camera, shots now meet at
+  whatever is under the crosshair (an enemy, a wall, the floor) at any distance.
+- **The crosshair reacts to enemies:** it turns fully opaque and closes in while an enemy is under
+  it.
+- **Aim sensitivity:** a slower camera while aiming over the shoulder, for finer aim (60% by
+  default).
+- Fix: the game could crash at the title screen with the Japanese voices or the subtitles on, in
+  some builds of the recompiled game.
 
 The separate launcher (`MML Launcher.exe`) is still installed in game folders that an earlier
 Setup patched in place, and updating such a folder keeps it. New installs use the start menu.
@@ -137,8 +154,8 @@ the Japanese line being spoken.
   camera** moves in beside Mega Man and looks past his shoulder: at the locked enemy, or at the
   horizon when nothing is targeted, where it replaces the original aim (which stops Mega Man in
   place) so he keeps moving and shots go to the crosshair. R3 swaps the side.
-- **Camera aim** (optional). Shots go where the camera looks, up and down included, with an
-  optional crosshair. Mega Man turns to the camera's direction only while firing, so movement
+- **Camera aim** (optional). Shots go where the camera looks, up and down included, and meet at
+  whatever is under the optional crosshair, which reacts when an enemy is under it. Mega Man turns to the camera's direction only while firing, so movement
   stays free in every direction.
 - **Analog movement.** A light stick tilt walks, a full tilt runs.
 - **Jet Skates on RB.** Hold RB to skate at once from standing or running, with no start-up
