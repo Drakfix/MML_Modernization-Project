@@ -68,6 +68,15 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define LOOK_ORBIT_MAX   100     /* the camera orbits up to this pitch; looking further up tilts in place */
 #define ORBIT_SETTLE     20      /* camera calls the game camera keeps after a handover */
 #define LOCK_CAM_EASE    0.12    /* per 1/60 s: how fast the camera swings behind Mega Man on lock-on */
+/* over-the-shoulder lock-on camera ([controls] lockon_camera=shoulder) */
+#define SH_SIDE          110     /* world units the view point slides beside Mega Man */
+#define SH_LIFT          25      /* ...and up (y grows downward) */
+#define SH_DIST          0.62    /* camera distance, share of the normal one */
+#define SH_EASE          0.14    /* per 1/60 s: easing into / out of the shoulder framing */
+#define SH_SWAP_EASE     0.16    /* per 1/60 s: sliding across on a shoulder swap */
+#define SH_PITCH_EASE    0.08    /* per 1/60 s: tilting toward the enemy's height */
+#define SH_CHEST         100     /* the view point's height above Mega Man's position */
+#define SH_LEVEL_TIME    24      /* 1/60 s: shoulder aim levels the view toward the horizon at first */
 #define LOCK_STEP_PCT    200     /* walk / backstep speed while locked on, % of stock */
 #define LOCK_SIDESTEP_PCT 500    /* sidestep while locked on (stock 0x20 is 1/16 of a run) */
 #define LOCK_TURN_STEP   0x100   /* max facing turn per update toward the target */
@@ -113,16 +122,16 @@ static int g_modern;
  * Y Circle, LB R2, Start, Back Select); roll, aim/lock-on and the orbit toggle
  * are ours. Menus and orbit-off tank controls keep the stock layout. */
 enum { ACT_NONE, ACT_JUMP, ACT_SHOOT, ACT_SPECIAL, ACT_TALK, ACT_ROLL, ACT_AIM, ACT_ORBIT, ACT_MENU, ACT_SELECT,
-       ACT_SKATES, ACT_COUNT };
+       ACT_SKATES, ACT_SHOULDER, ACT_COUNT };
 enum { PH_A, PH_B, PH_X, PH_Y, PH_LB, PH_RB, PH_LT, PH_RT, PH_L3, PH_R3, PH_BACK, PH_START, PH_COUNT };
 static const char *const g_act_names[ACT_COUNT] = { "none", "jump", "shoot", "special", "talk", "roll", "aim",
-                                                    "orbit", "menu", "select", "skates" };
+                                                    "orbit", "menu", "select", "skates", "shoulder" };
 static const char *const g_ph_keys[PH_COUNT] = { "btn_a", "btn_b", "btn_x", "btn_y", "btn_lb", "btn_rb", "btn_lt",
                                                  "btn_rt", "btn_l3", "btn_r3", "btn_back", "btn_start" };
 static const WORD g_ph_btn[PH_COUNT] = { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LB, BTN_RB, 0, 0, BTN_L3, BTN_R3,
                                          BTN_BACK, BTN_START };
 static uint8_t g_map[PH_COUNT] = { ACT_JUMP, ACT_SPECIAL, ACT_ROLL, ACT_TALK, ACT_AIM, ACT_SKATES, ACT_AIM, ACT_SHOOT,
-                                   ACT_ORBIT, ACT_ORBIT, ACT_SELECT, ACT_MENU };
+                                   ACT_ORBIT, ACT_SHOULDER, ACT_SELECT, ACT_MENU };
 #define ACT(set, a) (((set) >> (a)) & 1u)
 
 static unsigned actions_of(const pad_t *p)
@@ -141,7 +150,7 @@ static unsigned actions_of(const pad_t *p)
 
 /* keyboard + mouse (orbit layout): bindable slots, two keys each ([controls] key_*) */
 enum { KS_UP, KS_DOWN, KS_LEFT, KS_RIGHT, KS_WALK, KS_JUMP, KS_SHOOT, KS_AIM, KS_ROLL, KS_TALK, KS_SPECIAL,
-       KS_MENU, KS_SELECT, KS_ORBIT, KS_SKATES, KS_COUNT };
+       KS_MENU, KS_SELECT, KS_ORBIT, KS_SKATES, KS_SHOULDER, KS_COUNT };
 static const struct { const char *key; uint8_t act; int def0, def1; } g_slot_info[KS_COUNT] = {
     { "key_up", ACT_NONE, 'W', VK_UP },          { "key_down", ACT_NONE, 'S', VK_DOWN },
     { "key_left", ACT_NONE, 'A', VK_LEFT },      { "key_right", ACT_NONE, 'D', VK_RIGHT },
@@ -151,6 +160,7 @@ static const struct { const char *key; uint8_t act; int def0, def1; } g_slot_inf
     { "key_special", ACT_SPECIAL, 'Q', 0 },      { "key_menu", ACT_MENU, VK_TAB, 0 },
     { "key_select", ACT_SELECT, 'M', 0 },        { "key_orbit", ACT_ORBIT, VK_F5, 0 },
     { "key_skates", ACT_SKATES, 'C', VK_XBUTTON1 },
+    { "key_shoulder", ACT_SHOULDER, VK_MBUTTON, 0 },
 };
 static int g_slot_vk[KS_COUNT][2];
 
@@ -233,6 +243,14 @@ static volatile int32_t *g_shot_pitch;
 static double aim_px, aim_py, aim_pz;   /* where the camera looks (world), refreshed per camera update */
 static LONG aim_since;   /* frame_tick when camera aim started (the shot waits for the turn) */
 static int air_travel, air_steered;   /* a jump's heading; +0x116 was set for it in a face hold */
+static int g_sh_mode, g_sh_side = 1;  /* over-the-shoulder lock-on camera; side +1 right, -1 left */
+/* shoulder aim: with the shoulder camera on, aiming with nothing locked = the shoulder camera
+   with free movement (instead of the original aim state, which roots Mega Man) */
+static volatile LONG sh_aim;
+static double sh_aim_age;   /* 1/60 s since shoulder aim began (the view levels at first) */
+static double sh_blend, sh_side_cur = 1.0;   /* eased: 0 classic .. 1 shoulder; -1 left .. +1 right */
+static int32_t *g_sh_target;          /* the view point handed to cam_apply_angles: in guest memory */
+static char g_ini_path[MAX_PATH];     /* (the shoulder side is remembered there) */
 static volatile LONG frame_tick;
 static volatile LONG move_gate;
 
@@ -604,6 +622,19 @@ static void input_update(void)
     prev_key = f5;
     prev_click = click;
 
+    /* shoulder swap (R3 by default): the over-the-shoulder lock-on camera's side, remembered */
+    {
+        static int prev_sh;
+        int sh = ACT(actions_of(&p) | (unsigned)g_kbm_acts, ACT_SHOULDER) != 0;
+        if (g_modern && g_sh_mode && sh && !prev_sh) {
+            g_sh_side = -g_sh_side;
+            if (g_ini_path[0])
+                WritePrivateProfileStringA("controls", "shoulder", g_sh_side > 0 ? "right" : "left", g_ini_path);
+            log_printf("lock-on camera: %s shoulder", g_sh_side > 0 ? "right" : "left");
+        }
+        prev_sh = sh;
+    }
+
     /* the orbit only drives the plain follow camera with the player in control;
      * cutscenes, scripted cameras, talk/boss framing get the game camera back */
     {
@@ -647,12 +678,25 @@ static void input_update(void)
             double want, d;
             if (g_lock_test) {
                 tx = GVAR(int16_t, G_SUPPORT_OBJ + 0x14);
+                ty = GVAR(int16_t, G_SUPPORT_OBJ + 0x16);
                 tz = GVAR(int16_t, G_SUPPORT_OBJ + 0x18);
             } else {
                 lockon_pos(&tx, &ty, &tz);
             }
             lock_face = face_toward(tx, tz);
             want = (double)((lock_face - FACE_OFFSET) & 0xfff);
+            if (g_sh_mode) {
+                /* over the shoulder: look from the shoulder point to the enemy (the view point
+                   sits beside Mega Man, so aim the camera from there to keep the enemy centred),
+                   and tilt toward the enemy's height */
+                double a = fmod(st_yaw, 4096.0) * (PI / 2048.0), lat = sh_side_cur * SH_SIDE * sh_blend;
+                double sx = S16(0x14) + cos(a) * lat, sz = S16(0x18) - sin(a) * lat;
+                double sy = S16(0x16) - SH_CHEST - SH_LIFT * sh_blend;
+                double h = sqrt((tx - sx) * (tx - sx) + (tz - sz) * (tz - sz)), pt;
+                want = fmod(atan2(tx - sx, tz - sz) * (2048.0 / PI) + 4096.0, 4096.0);
+                pt = clampd(atan2(sy - ty, h) * (2048.0 / PI), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+                st_pitch += (pt - st_pitch) * sh_blend * (1.0 - pow(1.0 - SH_PITCH_EASE, ticks));
+            }
             d = fmod(want - fmod(st_yaw, 4096.0) + 6144.0, 4096.0) - 2048.0;
             st_yaw = fmod(st_yaw + d * (1.0 - pow(1.0 - LOCK_CAM_EASE, ticks)) + 65536.0, 65536.0);
             /* right stick flick: next enemy to that side (re-arms near centre) */
@@ -666,6 +710,14 @@ static void input_update(void)
         }
         if (lock_active && !was)
             log_printf("lock-on: on");
+        /* shoulder aim: nothing locked (no target, or the lock was lost) with the shoulder camera on */
+        {
+            int was_sh = sh_aim;
+            sh_aim = g_sh_mode && hold && !lock_active;
+            sh_aim_age = sh_aim && was_sh ? sh_aim_age + ticks : 0;
+            if (sh_aim && !was_sh)
+                log_printf("shoulder aim: on");
+        }
     }
     /* camera aim: firing turns Mega Man to where the camera looks and he keeps moving freely
      * around that direction (like lock-on), for a moment after the last shot too; otherwise
@@ -697,10 +749,10 @@ static void input_update(void)
         if (lock_active) {
             if (mwheel)
                 lockon_switch(mwheel < 0 ? 1 : -1);
-        } else if (!aiming || lock_free) {
+        } else if (!aiming || lock_free || sh_aim) {
             st_yaw = fmod(st_yaw + mdx * MOUSE_YAW_PER_COUNT * g_mouse_scale + 65536.0, 65536.0);
         }
-        if (!aiming || lock_active || lock_free)
+        if (!aiming || lock_active || lock_free || sh_aim)
             st_pitch = clampd(st_pitch - mdy * MOUSE_PITCH_PER_COUNT * g_mouse_scale * (g_mouse_invert_y ? -1 : 1),
                               PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
         else {   /* stock aim (no target): the mouse turns and tilts Mega Man, see on_player_update */
@@ -712,7 +764,7 @@ static void input_update(void)
         n = stick_norm(p.sThumbRY);
         if (n != 0)
             st_pitch = clampd(st_pitch + g_pitch_speed * n * ticks, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
-    } else if (st_active && aiming && !lock_free) {
+    } else if (st_active && aiming && !lock_free && !sh_aim) {
         st_yaw = game_yaw();
         st_pitch = clampd(game_pitch(), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
     } else {
@@ -725,10 +777,12 @@ static void input_update(void)
         n = stick_norm(p.sThumbRY);   /* stick up tilts the view up */
         if (n != 0)
             st_pitch = clampd(st_pitch + g_pitch_speed * n * ticks, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+        else if (sh_aim && sh_aim_age < SH_LEVEL_TIME && !mdy)   /* shoulder aim starts level, at the horizon */
+            st_pitch += (0.0 - st_pitch) * (1.0 - pow(1.0 - 2 * SH_PITCH_EASE, ticks));
     }
 
     /* camera-relative movement on the left stick */
-    if (st_active && st_allowed && (!aiming || lock_active || lock_free)) {
+    if (st_active && st_allowed && (!aiming || lock_active || lock_free || sh_aim)) {
         double mag = sqrt((double)p.sThumbLX * p.sThumbLX + (double)p.sThumbLY * p.sThumbLY);
         if (mag > g_stick_dz) {
             double theta = atan2((double)p.sThumbLX, (double)p.sThumbLY);   /* 0 = up, + = right */
@@ -758,7 +812,7 @@ static void input_update(void)
            checking, kicking, ladders, knockback, Jet Skates keep their own facing (with the
            camera turning, the hold turned Mega Man in the middle of a conversation) */
         int st = P8(PL_STATE), aim_state = st <= 2 || st == 6 || st == 7 || st == 8;
-        face_hold = (lock_active && st != 3) || (cam_aim && !back && aim_state);
+        face_hold = (lock_active && st != 3) || (cam_aim && !back && aim_state) || (sh_aim && aim_state);
     }
     /* Jet Skates button: held, or a press toggles them ([controls] skates_toggle=1) */
     {
@@ -773,7 +827,7 @@ static void input_update(void)
     }
     cam_yaw = (int)st_yaw & 0xffff;
     cam_active = st_active && st_allowed;
-    cam_suppress = cam_active && aiming && !lock_active && !lock_free;
+    cam_suppress = cam_active && aiming && !lock_active && !lock_free && !sh_aim;
     /* the cursor stays put and hidden while the orbit drives gameplay */
     kbm_capture(g_kbm && g_modern && cam_active);
 }
@@ -841,6 +895,52 @@ static void place_camera(regs_t *r, int yaw, int pitch, int mode)
     }
 }
 
+/* Over-the-shoulder lock-on camera: while locked on, cam_apply_angles gets a view point slid
+ * beside Mega Man (and up a little) and a shorter distance, so the camera looks past his shoulder
+ * along the line to the enemy (the yaw and pitch toward the enemy from that point are set with
+ * the lock, input_update). Eased in and out, and across on a swap. The slide stops in front of a
+ * wall beside him; place_camera then collides the camera line from the view point as usual. */
+static void shoulder_apply(regs_t *r)
+{
+    static LARGE_INTEGER last;
+    LARGE_INTEGER now;
+    double ticks = 0, a, lat, rx, rz, want = (g_sh_mode && (lock_active || sh_aim)) ? 1.0 : 0.0;
+    const int32_t *t;
+    int s, step = 24;
+    QueryPerformanceCounter(&now);
+    if (last.QuadPart)
+        ticks = clampd((double)(now.QuadPart - last.QuadPart) / qpc_freq.QuadPart, 0, 0.1) * 60.0;
+    last = now;
+    sh_blend += (want - sh_blend) * (1.0 - pow(1.0 - SH_EASE, ticks));
+    sh_side_cur += (g_sh_side - sh_side_cur) * (1.0 - pow(1.0 - SH_SWAP_EASE, ticks));
+    if (sh_blend < 0.002) {
+        sh_blend = want > 0 ? sh_blend : 0;
+        if (!want)
+            return;
+    }
+    t = (const int32_t *)GUEST(r->eax);
+    a = (cam_yaw & 0xfff) * (PI / 2048.0);
+    rx = cos(a), rz = -sin(a);   /* the view's right, horizontal */
+    lat = sh_side_cur * SH_SIDE * sh_blend;
+    for (s = step; s <= (int)fabs(lat) + CAM_MARGIN; s += step) {   /* a wall beside him: stop short */
+        double k = lat < 0 ? -s : s;
+        if (cam_probe(t[0] + rx * k, t[1] - SH_LIFT * sh_blend, t[2] + rz * k) != 0) {
+            double room = s - CAM_MARGIN > 0 ? s - CAM_MARGIN : 0;
+            if (room < fabs(lat))
+                lat = lat < 0 ? -room : room;
+            break;
+        }
+    }
+    if (!g_sh_target)
+        g_sh_target = (int32_t *)GUEST(guest_alloc(16));
+    g_sh_target[0] = iround(t[0] + rx * lat);
+    g_sh_target[1] = iround(t[1] - SH_LIFT * sh_blend);
+    g_sh_target[2] = iround(t[2] + rz * lat);
+    g_sh_target[3] = t[3];
+    r->eax = GADDR(g_sh_target);
+    r->edx = (uint32_t)iround((int)r->edx * (1.0 - sh_blend * (1.0 - SH_DIST)));
+}
+
 /* the point the camera looks at, AIM_DIST out along its view (the camera as the game last placed
    it: the same framing the reticle projects through) */
 static void aim_point_update(void)
@@ -858,7 +958,7 @@ static void shot_pitch_sync(void)
 {
     if (!g_shot_flag)
         return;
-    if (cam_aim && face_hold && !lock_active) {
+    if ((cam_aim || sh_aim) && face_hold && !lock_active) {
         double dx = aim_px - S16(0x14), dz = aim_pz - S16(0x18), dy = aim_py - (S16(0x16) - AIM_CHEST);
         int pitch = iround(SHOT_PITCH_SIGN * atan2(dy, sqrt(dx * dx + dz * dz)) * (2048.0 / PI));
         if (pitch > AIM_PITCH_MAX) pitch = AIM_PITCH_MAX;
@@ -926,7 +1026,7 @@ static void on_cam_apply(regs_t *r)
             write_facing(cur + d);
         /* camera aim: the shot goes out once he faces the camera's way (or after a moment) */
         d = ((face_dir - cur - d + 2048) & 0xfff) - 2048;
-        ready = !cam_aim || lock_active || (d <= AIM_FIRE_TOL && d >= -AIM_FIRE_TOL) ||
+        ready = !(cam_aim || sh_aim) || lock_active || (d <= AIM_FIRE_TOL && d >= -AIM_FIRE_TOL) ||
                 (LONG)(frame_tick - aim_since) >= AIM_FIRE_WAIT;
     } else if (move_active && !roll_latch && (gate > 0 || pos_move_credit > 0)) {
         if (P8(PL_STATE) == 3 && !(P8(PL_INPUT_FLAGS) & 0x60)) {
@@ -967,6 +1067,7 @@ static void on_cam_apply(regs_t *r)
     if (cam_active && !cam_suppress) {
         r->ebx = (uint32_t)cam_yaw;
         true_orbit();
+        shoulder_apply(r);
         place_camera(r, cam_yaw, iround(st_pitch), 0);
     } else if (cam_active && cam_suppress && is_gameplay_cam) {
         /* stock aim (no target): the game's own, closer aim camera; same wall
@@ -1553,10 +1654,10 @@ void controls_filter(pad_t *p)
     if (ACT(acts, ACT_TALK))    out |= BTN_Y;      /* Circle: talk / check / walk */
     if (ACT(acts, ACT_MENU))    out |= BTN_START;
     if (ACT(acts, ACT_SELECT))  out |= BTN_BACK;
-    if (aiming && !lock_active && !lock_free)   /* locked on: no stock aim state, it roots Mega Man */
+    if (aiming && !lock_active && !lock_free && !sh_aim)   /* locked on / shoulder aim: no stock aim state, it roots Mega Man */
         out |= BTN_LB;                             /* R2 */
 
-    if (roll && !prev_roll && (!aiming || lock_active || lock_free)) {
+    if (roll && !prev_roll && (!aiming || lock_active || lock_free || sh_aim)) {
         dodge_req = 1;
         req_age = 0;
     }
@@ -1589,7 +1690,7 @@ void controls_filter(pad_t *p)
             else
                 p->sThumbLY = -32767;
         }
-    } else if (aiming && !lock_free) {
+    } else if (aiming && !lock_free && !sh_aim) {
         SHORT lx = p->sThumbLX, ly = p->sThumbLY;
         p->sThumbLX = p->sThumbRX;
         p->sThumbLY = p->sThumbRY;
@@ -1704,6 +1805,19 @@ void controls_load_buttons(const char *ini)
             log_printf("controls: RB (unbound) is now the Jet Skates button");
         }
         WritePrivateProfileStringA("controls", "skates_rb", "1", ini);
+    }
+    /* L3 and R3 both toggled modern controls by default; R3 is now the shoulder swap (once, and
+       only where both still had that old default) */
+    strcpy_s(g_ini_path, sizeof g_ini_path, ini);
+    if (!GetPrivateProfileIntA("controls", "shoulder_r3", 0, ini)) {
+        char l3[32];
+        GetPrivateProfileStringA("controls", "btn_l3", "orbit", l3, sizeof l3, ini);
+        GetPrivateProfileStringA("controls", "btn_r3", "orbit", v, sizeof v, ini);
+        if (_stricmp(l3, "orbit") == 0 && _stricmp(v, "orbit") == 0) {
+            WritePrivateProfileStringA("controls", "btn_r3", "shoulder", ini);
+            log_printf("controls: R3 is now the shoulder swap (L3 toggles modern controls)");
+        }
+        WritePrivateProfileStringA("controls", "shoulder_r3", "1", ini);
     }
     for (i = 0; i < PH_COUNT; i++) {
         GetPrivateProfileStringA("controls", g_ph_keys[i], "", v, sizeof v, ini);
@@ -1827,6 +1941,15 @@ void controls_skates(int max_pct, int min_pct, int toggle)
                g_skate_min, g_skate_toggle ? "toggles" : "held");
 }
 
+void controls_lockon_camera(int shoulder, int left)
+{
+    g_sh_mode = shoulder != 0;
+    g_sh_side = left ? -1 : 1;
+    sh_side_cur = g_sh_side;
+    log_printf("controls: lock-on camera %s (%s shoulder)", g_sh_mode ? "over the shoulder" : "classic",
+               left ? "left" : "right");
+}
+
 void controls_aim(int camera, int crosshair)
 {
     g_aim_camera = camera != 0;
@@ -1850,8 +1973,11 @@ float controls_crosshair(void)
     } else if (idle < 1000) {
         idle++;
     }
-    if (!(g_aim_camera && g_crosshair && cam_active && !cam_suppress && !lock_active && idle < 6 &&
-          controls_in_gameplay()) || since_fire >= XH_SHOW + XH_FADE)
+    if (!(g_crosshair && cam_active && !cam_suppress && !lock_active && idle < 6 && controls_in_gameplay()))
+        return 0;
+    if (sh_aim)   /* shoulder aim: shown the whole time you aim */
+        return 1.0f;
+    if (!g_aim_camera || since_fire >= XH_SHOW + XH_FADE)
         return 0;
     return since_fire <= XH_SHOW ? 1.0f : (float)(1.0 - (since_fire - XH_SHOW) / XH_FADE);
 }
@@ -1888,7 +2014,7 @@ void controls_install(int modern, int intro_pad_skip)
         hook_mid(G_SITE_PLAYER_TURN_RET, sizeof player_turn_ret_bytes, player_turn_ret_bytes, on_player_turn_ret) &&
         hook_mid(G_FN_PLAYER_UPDATE, sizeof player_update_bytes, player_update_bytes, on_player_update) &&
         hook_mid(G_FN_PLAYER_APPLY_VEL, sizeof apply_velocity_bytes, apply_velocity_bytes, on_apply_velocity))
-        log_printf("controls: %s (F5 / L3 / R3 toggles modern controls)", modern ? "modern" : "vanilla");
+        log_printf("controls: %s (F5 / L3 toggles modern controls)", modern ? "modern" : "vanilla");
     else
         log_printf("controls: game hooks failed");
 

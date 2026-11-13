@@ -692,6 +692,12 @@ void mml_init(void)
         ini_string("controls", "aim", "character", a, sizeof a);
         controls_aim(_stricmp(a, "camera") == 0, GetPrivateProfileIntA("controls", "crosshair", 1, g_ini));
     }
+    {
+        char c[16], s[16];
+        ini_string("controls", "lockon_camera", "classic", c, sizeof c);
+        ini_string("controls", "shoulder", "right", s, sizeof s);
+        controls_lockon_camera(_stricmp(c, "shoulder") == 0, _stricmp(s, "left") == 0);
+    }
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, g_ini))
         controls_debug_pad();
     if (GetPrivateProfileIntA("debug", "lock_test", 0, g_ini))

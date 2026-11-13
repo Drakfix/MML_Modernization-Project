@@ -51,7 +51,7 @@
 enum {
     IT_FPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
-    IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR,
+    IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR, IT_LOCKCAM,
     /* the keyboard's keys for the modern controls ([controls] key_*: two each), and putting them back */
     IT_KEY, IT_KEY_RESET,
     IT_SECTION,  /* a heading over the rows after it (the start menu's): not selectable
@@ -104,6 +104,7 @@ typedef struct {
 static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS" };
 #define AIM_HELP "Camera: firing turns Mega Man to where the camera looks. Character: shots go where he faces."
 #define XH_HELP "With camera aim, a marker shows where your shots go."
+#define LOCKCAM_HELP "Over the shoulder: aiming looks past Mega Man's shoulder, at the locked enemy or the horizon, and he keeps moving. R3 swaps sides."
 
 static const item g_game_items[] = {
     { 0, IT_FPS, "Frame rate", "60 fps adds in-between frames for smooth motion. The game itself still runs at 30." },
@@ -124,6 +125,7 @@ static const item g_game_items[] = {
     { 2, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to, and of the crosshair." },
     { 2, IT_AIM, "Shots aim", AIM_HELP },
     { 2, IT_CROSSHAIR, "Crosshair", XH_HELP },
+    { 2, IT_LOCKCAM, "Lock-on camera", LOCKCAM_HELP },
 };
 
 /* ---- the start menu's pages: everything the launcher has ----
@@ -163,7 +165,7 @@ static const choice CH_UPDATES[] = { { "On", "general.check_updates=1" }, { "Off
 static const choice CH_ACTION[] = { { "Jump", "=jump" }, { "Shoot", "=shoot" }, { "Special", "=special" },
                                     { "Talk / check", "=talk" }, { "Roll", "=roll" }, { "Aim / lock-on", "=aim" },
                                     { "Modern on/off", "=orbit" }, { "Menu", "=menu" }, { "Select", "=select" },
-                                    { "Jet Skates", "=skates" }, { "Nothing", "=none" } };
+                                    { "Jet Skates", "=skates" }, { "Nothing", "=none" }, { "Shoulder swap", "=shoulder" } };
 #define NCH(a) ((int)(sizeof a / sizeof a[0]))
 /* the confirm button in a help text: A with a controller, Space with the keyboard (button_words) */
 #define OK_KEY "\x01"
@@ -311,6 +313,9 @@ static const item g_start_items[] = {
     { PG_CONTROLS, IT_SECTION, "Aiming" },
     { PG_CONTROLS, IT_AIM, "Aim mode", START_AIM_HELP },
     { PG_CONTROLS, IT_CROSSHAIR, "Crosshair", START_XH_HELP },
+    { PG_CONTROLS, IT_LOCKCAM, "Lock-on camera", "Classic: while locked on, the camera swings behind Mega Man, and aiming with no target " 
+      "roots him in place. Over the shoulder: the camera moves in beside him and looks past his shoulder, at " 
+      "the locked enemy or, with no target, the horizon; he keeps moving and shots go to the crosshair. The " "shoulder swap button (R3) switches sides." },
     { PG_CONTROLS, IT_RETICLE, "Reticle colour", "Colour of the lock-on marker on the targeted enemy, and of the "
       "crosshair." },
     { PG_CONTROLS, IT_SECTION, "Mouse and keyboard", NULL, NULL, 0, WL },
@@ -328,7 +333,7 @@ static const item g_start_items[] = {
     { PG_BUTTONS, IT_CHOICE, "LT", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lt", 5 },
     { PG_BUTTONS, IT_CHOICE, "RT", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rt", 1 },
     { PG_BUTTONS, IT_CHOICE, "L3 (left stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_l3", 6 },
-    { PG_BUTTONS, IT_CHOICE, "R3 (right stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_r3", 6 },
+    { PG_BUTTONS, IT_CHOICE, "R3 (right stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_r3", 11 },
     { PG_BUTTONS, IT_CHOICE, "Back", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_back", 8 },
     { PG_BUTTONS, IT_CHOICE, "Start", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_start", 7 },
     { PG_BUTTONS, IT_SECTION, "Keyboard and mouse", NULL, NULL, 0, WL },
@@ -347,6 +352,7 @@ static const item g_start_items[] = {
     { PG_BUTTONS, IT_KEY, "Select", KEY_HELP, NULL, 0, WL, "key_select" },
     { PG_BUTTONS, IT_KEY, "Modern controls on/off", KEY_HELP, NULL, 0, WL, "key_orbit" },
     { PG_BUTTONS, IT_KEY, "Jet Skates", KEY_HELP, NULL, 0, WL, "key_skates" },
+    { PG_BUTTONS, IT_KEY, "Shoulder swap", KEY_HELP, NULL, 0, WL, "key_shoulder" },
     { PG_BUTTONS, IT_KEY_RESET, "Reset keys", "Puts every key above back to its default: WASD, Space, the mouse "
       "buttons and the rest.", NULL, 0, WL },
 };
@@ -397,7 +403,7 @@ static struct {
     char ini[MAX_PATH], game_dir[MAX_PATH];
     /* values */
     int fps60, vsync, res, msaa, shader_game_res, nearest, aniso, fog, lod_full, hdtex;
-    int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair;
+    int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder;
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
     char **presets;
@@ -472,7 +478,7 @@ static const struct { const char *key, *def; } KEY_DEFS[] = {   /* (mml_gui.py K
     { "key_up", "W,UP" }, { "key_down", "S,DOWN" }, { "key_left", "A,LEFT" }, { "key_right", "D,RIGHT" },
     { "key_walk", "LCTRL" }, { "key_jump", "SPACE" }, { "key_shoot", "MOUSE1" }, { "key_aim", "MOUSE2" },
     { "key_roll", "LSHIFT" }, { "key_talk", "E" }, { "key_special", "Q" }, { "key_menu", "TAB" },
-    { "key_select", "M" }, { "key_orbit", "F5" }, { "key_skates", "C,MOUSE4" },
+    { "key_select", "M" }, { "key_orbit", "F5" }, { "key_skates", "C,MOUSE4" }, { "key_shoulder", "MOUSE3" },
 };
 
 static const char *key_default(const char *key)
@@ -760,6 +766,14 @@ static void apply(int kind)
         ini_str("controls", "aim", M.aim_camera ? "camera" : "character");
         ini_int("controls", "crosshair", M.crosshair);
         break;
+    case IT_LOCKCAM: {
+        char side[16];
+        GetPrivateProfileStringA("controls", "shoulder", "right", side, sizeof side, M.ini);   /* (the game keeps the side there) */
+        if (!M.start)
+            controls_lockon_camera(M.lock_shoulder, _stricmp(side, "left") == 0);
+        ini_str("controls", "lockon_camera", M.lock_shoulder ? "shoulder" : "classic");
+        break;
+    }
     default:
         break;
     }
@@ -805,6 +819,7 @@ static void change(int kind, int dir)
     case IT_MOUSE: M.mouse = cycle(M.mouse, 6, dir); break;
     case IT_RETICLE: M.reticle = cycle(M.reticle, (int)(sizeof RETICLES / sizeof RETICLES[0]), dir); break;
     case IT_AIM: M.aim_camera = !M.aim_camera; break;
+    case IT_LOCKCAM: M.lock_shoulder = !M.lock_shoulder; break;
     case IT_CROSSHAIR: M.crosshair = !M.crosshair; break;
     default: return;
     }
@@ -943,6 +958,7 @@ static void value_text(int kind, char *out, size_t n)
         break;
     case IT_RETICLE: strcpy_s(out, n, RETICLES[M.reticle].name); break;
     case IT_AIM: strcpy_s(out, n, M.aim_camera ? "Camera" : "Character"); break;
+    case IT_LOCKCAM: strcpy_s(out, n, M.lock_shoulder ? "Over the shoulder" : "Classic"); break;
     case IT_CROSSHAIR: strcpy_s(out, n, M.crosshair ? "On" : "Off"); break;
     case IT_GF_EDITION: strcpy_s(out, n, M.edition ? "Rockman DASH (JP)" : "Mega Man Legends (US)"); break;
     case IT_KEY_RESET: strcpy_s(out, n, "Reset"); break;
@@ -2395,6 +2411,8 @@ static void load_values(const char *ini, const char *game_dir)
     GetPrivateProfileStringA("controls", "aim", "character", s, sizeof s, ini);
     M.aim_camera = _stricmp(s, "camera") == 0;
     M.crosshair = GetPrivateProfileIntA("controls", "crosshair", 1, ini) != 0;
+    GetPrivateProfileStringA("controls", "lockon_camera", "classic", s, sizeof s, ini);
+    M.lock_shoulder = _stricmp(s, "shoulder") == 0;
     /* presets */
     if (!M.presets && (M.presets = (char **)calloc(MAX_PRESETS, sizeof *M.presets)) != NULL) {   /* (once) */
         _snprintf_s(dir, sizeof dir, _TRUNCATE, "%s\\Modernization\\shaders", game_dir);

@@ -393,7 +393,7 @@ static void read_bindings(const char *ini)
     static const struct { const char *key, *name, *def; } B[] = {
         { "btn_a", "A", "jump" }, { "btn_b", "B", "special" }, { "btn_x", "X", "roll" }, { "btn_y", "Y", "talk" },
         { "btn_lb", "LB", "aim" }, { "btn_rb", "RB", "skates" }, { "btn_lt", "LT", "aim" },
-        { "btn_rt", "RT", "shoot" }, { "btn_l3", "L3", "orbit" }, { "btn_r3", "R3", "orbit" },
+        { "btn_rt", "RT", "shoot" }, { "btn_l3", "L3", "orbit" }, { "btn_r3", "R3", "shoulder" },
         { "btn_back", "Back", "select" }, { "btn_start", "Start", "menu" },
     };
     char v[32], mode[32];

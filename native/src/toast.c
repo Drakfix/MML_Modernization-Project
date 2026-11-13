@@ -277,7 +277,7 @@ void toast_post(int icon_kind, int tone, const char *title, const char *badge, c
     }
 }
 
-/* the modern controls toggle (F5 / L3 / R3); internally still "the orbit" */
+/* the modern controls toggle (F5 / L3); internally still "the orbit" */
 void toast_show(int on)
 {
     toast_post(TOAST_ICON_PAD, on ? TOAST_GOOD : TOAST_OFF, "MODERN CONTROLS", on ? "ON" : "OFF",

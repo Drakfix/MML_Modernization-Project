@@ -201,6 +201,7 @@ DEFAULTS = {"renderer": "mml", "window": "fullscreen", "engine": "classic",
             "voices": "english", "subtitles": "on",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
             "lod": "full", "fps": "60", "reticle": "FFD840", "aim": "character", "crosshair": "on",
+            "lockon_camera": "classic",
             "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
             "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display",
             "mouse": "100", "shader": "", "shader_res": "game", "texpack": "on", "texdump": "off"}
@@ -213,9 +214,9 @@ BUTTONS = [("btn_a", "A", "Cross"), ("btn_b", "B", "Circle"), ("btn_x", "X", "Sq
            ("btn_start", "Start", "Options / +")]
 ACTIONS = [("jump", "Jump"), ("shoot", "Shoot"), ("special", "Special"), ("talk", "Talk / check"),
            ("roll", "Roll"), ("aim", "Aim / lock-on"), ("orbit", "Modern on/off"),
-           ("menu", "Menu"), ("select", "Select"), ("skates", "Jet Skates"), ("none", "Nothing")]
+           ("menu", "Menu"), ("select", "Select"), ("skates", "Jet Skates"), ("shoulder", "Shoulder swap"), ("none", "Nothing")]
 BUTTON_DEFAULTS = {"btn_a": "jump", "btn_b": "special", "btn_x": "roll", "btn_y": "talk", "btn_lb": "aim",
-                   "btn_rb": "skates", "btn_lt": "aim", "btn_rt": "shoot", "btn_l3": "orbit", "btn_r3": "orbit",
+                   "btn_rb": "skates", "btn_lt": "aim", "btn_rt": "shoot", "btn_l3": "orbit", "btn_r3": "shoulder",
                    "btn_back": "select", "btn_start": "menu"}
 DEFAULTS.update(BUTTON_DEFAULTS)
 
@@ -223,11 +224,11 @@ DEFAULTS.update(BUTTON_DEFAULTS)
 KEY_SLOTS = [("key_up", "Forward"), ("key_down", "Back"), ("key_left", "Left"), ("key_right", "Right"),
              ("key_walk", "Walk (hold)"), ("key_jump", "Jump"), ("key_shoot", "Shoot"), ("key_aim", "Aim / lock"),
              ("key_roll", "Roll"), ("key_talk", "Talk / check"), ("key_special", "Special"), ("key_menu", "Menu"),
-             ("key_select", "Select"), ("key_orbit", "Modern on/off"), ("key_skates", "Jet Skates")]
+             ("key_select", "Select"), ("key_orbit", "Modern on/off"), ("key_skates", "Jet Skates"), ("key_shoulder", "Shoulder swap")]
 KEY_DEFAULTS = {"key_up": "W,UP", "key_down": "S,DOWN", "key_left": "A,LEFT", "key_right": "D,RIGHT",
                 "key_walk": "LCTRL", "key_jump": "SPACE", "key_shoot": "MOUSE1", "key_aim": "MOUSE2",
                 "key_roll": "LSHIFT", "key_talk": "E", "key_special": "Q", "key_menu": "TAB",
-                "key_select": "M", "key_orbit": "F5", "key_skates": "C,MOUSE4"}
+                "key_select": "M", "key_orbit": "F5", "key_skates": "C,MOUSE4", "key_shoulder": "MOUSE3"}
 DEFAULTS.update(KEY_DEFAULTS)
 DEFAULTS["buttons_view"] = "pad"
 DEFAULTS["updates"] = "on"   # look for a new version when the launcher opens (mml_update.py)
@@ -379,6 +380,9 @@ def import_mml_ini(s):
     v = num("controls", "crosshair")
     if v is not None:
         s["crosshair"] = "on" if v else "off"
+    v = get("controls", "lockon_camera")
+    if v in ("classic", "shoulder"):
+        s["lockon_camera"] = v
 
 
 def save_settings(s):
@@ -550,6 +554,7 @@ def controls_ini(s):
         "reticle_color": reticle_hex(s),
         "aim": "camera" if s.get("aim") == "camera" else "character",
         "crosshair": 0 if s.get("crosshair") == "off" else 1,
+        "lockon_camera": "shoulder" if s.get("lockon_camera") == "shoulder" else "classic",
         "mouse_keyboard": 0 if s["mouse"] == "off" else 1,
         "mouse_speed": int(s["mouse"]) if str(s["mouse"]).isdigit() else 100,
         "mouse_invert_y": 1 if s["invert_y"] == "on" else 0,
@@ -847,6 +852,8 @@ class App:
         r = pair()
         option("Shots aim", "aim", [("Character", "character"), ("Camera", "camera")], row=r, side="left")
         option("Crosshair", "crosshair", [("Off", "off"), ("On", "on")], row=r, side="right")
+        option("Lock-on camera", "lockon_camera", [("Classic", "classic"), ("Over the shoulder", "shoulder")],
+               "over the shoulder: also when aiming with no target, and you keep moving; R3 swaps sides")
         self.reticle_card(page[0])
 
         # ---- Buttons ----

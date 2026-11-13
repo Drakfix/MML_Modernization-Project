@@ -133,7 +133,10 @@ the Japanese line being spoken.
   with the original controls and camera.
 - **Lock-on targeting.** Hold aim to lock on to the nearest enemy in view. Mega Man keeps
   facing the target while moving freely; flick the right stick (or use the mouse wheel) to
-  switch targets. The reticle colour is configurable.
+  switch targets. The reticle colour is configurable. An optional **over-the-shoulder
+  camera** moves in beside Mega Man and looks past his shoulder: at the locked enemy, or at the
+  horizon when nothing is targeted, where it replaces the original aim (which stops Mega Man in
+  place) so he keeps moving and shots go to the crosshair. R3 swaps the side.
 - **Camera aim** (optional). Shots go where the camera looks, up and down included, with an
   optional crosshair. Mega Man turns to the camera's direction only while firing, so movement
   stays free in every direction.
@@ -302,7 +305,8 @@ Enter plays, Esc quits, and Q and E switch pages.
 | LT or LB | Aim / lock-on |
 | RT | Shoot |
 | RB (hold) | Jet Skates |
-| L3 or R3 | Modern controls on/off |
+| L3 | Modern controls on/off |
+| R3 | Swap shoulders (over-the-shoulder camera) |
 | Start | Game menu |
 | Back | Select |
 | Back + Start | Settings menu |
@@ -329,6 +333,7 @@ pressed twice. In the start menu, **Start** plays and **B** quits. On the title 
 | Tab | Game menu |
 | M | Select |
 | C or mouse button 4 (hold) | Jet Skates |
+| Middle click | Swap shoulders (over-the-shoulder camera) |
 | F5 | Modern controls on/off |
 | F1 | Settings menu |
 | F6 | Quick save |
@@ -382,7 +387,7 @@ menu shows each setting's full description and choices beside the list.
 | Game | Version to play, importing each version, English subtitles, voice language, start menu at launch (show / skip), intro video, title screen hints, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio, frame rate, V-Sync, executable |
 | Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement |
-| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, aim mode, crosshair, reticle colour, mouse sensitivity |
+| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, aim mode, crosshair, lock-on camera (classic / over the shoulder), reticle colour, mouse sensitivity |
 | Buttons | Controller and keyboard remapping |
 
 Settings that only exist on Windows (Graphics API, display mode, executable, input API, shaders)
