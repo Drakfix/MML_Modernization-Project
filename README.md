@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.8.3 beta.** The 0.1 releases are kept on the
+**Current version: 0.8.4 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -87,6 +87,16 @@ copy.
   speed and RT shoots, as everywhere else. See [Boat shooting sections](#boat-shooting-sections).
 - **Zoom on the boat:** hold LT (or right click) to zoom in on distant enemies, with a slower aim.
 - **Crosshair on the boat:** it shows where the shots go, while zoomed and after each shot.
+
+0.8.4 adds:
+
+- **Full draw distance on the big maps.** Far geometry past the original draw distance (Uptown's
+  town wall and gatehouse behind the dome, the far shore at Lake Jyun) is drawn instead of
+  appearing only when you come closer.
+- **Install anywhere** (Windows). Setup installs the app into any folder on any disk, your game
+  folder included: the app then plays that copy where it is, with its saves, and copies nothing.
+- Fix (Windows): Setup pointed at a game folder installed the old launcher instead of the start
+  menu.
 
 The separate launcher (`MML Launcher.exe`) is still installed in game folders that an earlier
 Setup patched in place, and updating such a folder keeps it. New installs use the start menu.
@@ -240,16 +250,23 @@ the Japanese line being spoken.
 ## Installation on Windows
 
 1. Download `MML-Setup.exe` from the [latest release](../../releases).
-2. Run it, choose where to install the app (by default
-   `C:\Games\Mega Man Legends Modernization`) and click **Install**.
+2. Run it, choose where to install the app (any folder, on any disk) and click **Install**. To
+   play your game where it is, choose the game's own folder (the one with `MEGAMAN.EXE`).
 3. Start **Mega Man Legends** from the desktop shortcut (or `mml_run64.exe --menu` in the app's
    folder). The start menu opens.
-4. On first launch it asks for your game: choose **Import Mega Man Legends (US)** and pick the
-   folder with `MEGAMAN.EXE`, or **Import Rockman DASH (JP)** and pick the folder with
-   `ROCKMAN.EXE`.
-5. Wait for the copy to finish, then press **Play** (Start, or Enter).
+4. If you installed into another folder, the start menu asks for your game on first launch:
+   choose **Import Mega Man Legends (US)** and pick the folder with `MEGAMAN.EXE`, or **Import
+   Rockman DASH (JP)** and pick the folder with `ROCKMAN.EXE`, then wait for the copy to finish.
+5. Press **Play** (Start, or Enter).
 
-The import copies the game into the app's folder (Rockman DASH into its own `Japanese` folder,
+**In the game folder,** the app plays that copy of the game with its saves, and nothing is copied.
+`MEGAMAN.EXE` is not changed: the patched program is added beside it as `MEGAMAN_NATIVE.EXE` the
+first time the start menu opens. Conflicting wrapper DLLs from other fix packs are moved to
+`Modernization\quarantined-wrappers`, and the game's intro is kept as `CAPCOM.AVI.original`. In a
+Rockman DASH folder, the US version can't be added as well: for both versions, install the app
+into a folder of its own.
+
+**In another folder,** the import copies the game into the app's folder (Rockman DASH into its own `Japanese` folder,
 with its own saves) and patches the copy. It verifies the game executable by hash and refuses
 an unknown build, and it leaves the folder you picked unchanged. To bring your saves along, make
 sure the `DASH_*.MCD` files are in that folder. The other version can be imported any time on the
@@ -466,6 +483,18 @@ fallback.
 the desktop shortcut. The folder holds the imported games and the saves made with them: copy the
 `DASH_*.MCD` files out of it (and out of its `Japanese` folder) first if you want to keep them.
 The folder you imported from is not changed.
+
+**Windows, the app installed into the game folder:** don't delete the folder, it is your game.
+
+1. Rename `CAPCOM.AVI.original` back to `CAPCOM.AVI`.
+2. Delete `MEGAMAN_NATIVE.EXE` (or `ROCKMAN_NATIVE.EXE`), `mml.dll`, `mml_run64.exe`, `mml.ini`,
+   `DDrawCompat.ini.16to9`, `DDrawCompat.ini.4to3`, `THIRD-PARTY-NOTICES.txt`, and the `x64`,
+   `licenses` and `Modernization` folders. Restore any wrappers you had from
+   `Modernization\quarantined-wrappers` first.
+3. Delete the added DLLs: `SDL3.dll`, `librashader.dll`, `ddraw.dll`, `dinput.dll`, `dsound.dll`
+   and `dsoal-aldrv.dll`.
+
+`MEGAMAN.EXE` itself was never changed, and the saves stay where they are.
 
 **Windows, a game folder patched in place by an earlier Setup:**
 
