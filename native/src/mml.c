@@ -115,11 +115,16 @@ float mml_h_x(void)
     return g_widescreen_on ? *g_shadow_h_x : GVAR(float, G_GTE_H_FLOAT);
 }
 
+static float g_base_h;   /* H as the scene set it (after g_closer), before any zoom */
+static float g_zoom = 1.0f;
+
 static void on_h_set(regs_t *r)
 {
     volatile float *h = &GVAR(float, G_GTE_H_FLOAT);
     float adj = *h * g_closer;
     (void)r;
+    g_base_h = adj;
+    g_zoom = 1.0f;   /* a new scene: no zoom carried into it (the zoom's owner applies it again) */
     *h = adj;
     *g_shadow_h_x = adj * g_ratio;
     if (g_h_set_logs < 8) {
@@ -145,6 +150,31 @@ static void on_near_written(regs_t *r)
 {
     (void)r;
     GVAR(float, G_GTE_NEAR) = GVAR(float, G_GTE_H_FLOAT) * GVAR(float, G_NEAR_FACTOR);
+}
+
+/* Zoom (1 = none): a narrower view by a longer projection distance. H, the widescreen X copy
+ * and the near distance (H-relative, see above) move together from the scene's own H. Game
+ * thread. Without our H hooks (4:3) the H in place when the zoom starts is the base. */
+float mml_zoom_get(void)
+{
+    return g_zoom;
+}
+
+void mml_zoom(float z)
+{
+    float h;
+    if (z < 1.0f)
+        z = 1.0f;
+    if (!g_widescreen_on && g_zoom == 1.0f)
+        g_base_h = GVAR(float, G_GTE_H_FLOAT);
+    if (g_base_h <= 0.0f || (z == g_zoom && z == 1.0f))
+        return;
+    g_zoom = z;
+    h = g_base_h * z;
+    GVAR(float, G_GTE_H_FLOAT) = h;
+    if (g_widescreen_on)
+        *g_shadow_h_x = h * g_ratio;
+    GVAR(float, G_GTE_NEAR) = h * GVAR(float, G_NEAR_FACTOR);
 }
 
 static void install_widescreen(void)

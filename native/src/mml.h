@@ -10,6 +10,10 @@ float mml_hud_ratio(void);
  * anamorphic mode pre-squeezes X through a shadow copy of H). */
 float mml_h_x(void);
 
+/* View zoom (1 = none, > 1 = narrower view), game thread; a scene setting H resets it. */
+void mml_zoom(float z);
+float mml_zoom_get(void);
+
 /* Sleep with sub-millisecond precision (high-resolution waitable timer). */
 void mml_sleep_ms(double ms);
 /* everything mml installs (the DLL's DllMain; the standalone runner after loading the game) */

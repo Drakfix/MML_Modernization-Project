@@ -158,6 +158,9 @@ the Japanese line being spoken.
   whatever is under the optional crosshair, which reacts when an enemy is under it. Mega Man turns to the camera's direction only while firing, so movement
   stays free in every direction.
 - **Analog movement.** A light stick tilt walks, a full tilt runs.
+- **Boat shooting sections.** Where Mega Man rides Roll's boat and only aims and shoots, the
+  modern layout applies too: analog aim on the sticks and the mouse, RT to shoot, LT to zoom in,
+  and a crosshair that shows where the shots go.
 - **Jet Skates on RB.** Hold RB to skate at once from standing or running, with no start-up
   pause. Speed follows the stick, up to 30% faster than the original at full tilt. Jumps work
   on skates and keep their speed. Hard turns and turn-arounds keep the original lean, sound
@@ -385,6 +388,22 @@ game.
 |------------------------|--------|
 | `aim` | `character` (default), `camera` |
 | `crosshair` | `1` (default), `0` |
+
+### Boat shooting sections
+
+On the boat rides Roll steers and Mega Man only turns, aims up and down, and shoots. With modern
+controls on:
+
+| Input | Action |
+|-------|--------|
+| Right stick, left stick, D-pad, mouse or W A S D | Turn and aim up or down (analog) |
+| RT / left click | Shoot |
+| B / Q | Special weapon |
+| LT, LB / right click (hold) | Zoom in (slower aim, using **Aim sensitivity**) |
+
+The crosshair shows where the shots go. It appears while zoomed and with each shot, fades out a
+few seconds after the last one, and follows the `crosshair` setting. Turn speed follows the
+camera speed and invert settings. With modern controls off, the boat uses the original controls.
 
 ### Quick save
 

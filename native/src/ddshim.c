@@ -1540,12 +1540,23 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
             DWORD k;
             if (n >= 2 && raw[1].x != raw[0].x)
                 sc = (((const gfx_vertex *)verts)[1].x - ((const gfx_vertex *)verts)[0].x) / (raw[1].x - raw[0].x);
+            /* a view zoom (mml_zoom) scales the sky about the 3D view's centre like the world
+               (its scroll per turn then grows by the same factor) */
+            float zm = mml_zoom_get();
+            float zcx = 2.0f * (float)GVAR(int32_t, G_GTE_OFX_ADDR) + display_world_shift();
+            float zcy = 2.0f * (float)GVAR(int32_t, G_GTE_OFY_ADDR);
             for (k = 0; k < n; k++) {
                 fixed[k] = ((const gfx_vertex *)verts)[k];
                 fixed[k].x += ox * sc;
                 fixed[k].y += oy;
                 bprev[k].x = fixed[k].x + px * sc;
                 bprev[k].y = fixed[k].y + py;
+                if (zm != 1.0f) {
+                    fixed[k].x = zcx + (fixed[k].x - zcx) * zm;
+                    fixed[k].y = zcy + (fixed[k].y - zcy) * zm;
+                    bprev[k].x = zcx + (bprev[k].x - zcx) * zm;
+                    bprev[k].y = zcy + (bprev[k].y - zcy) * zm;
+                }
                 bprev[k].z = fixed[k].z;
                 bprev[k].valid = bl == 2 ? REC_SCREEN : REC_STILL;
             }

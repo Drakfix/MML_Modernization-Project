@@ -36,6 +36,7 @@
 #include "kbm.h"
 #include "input.h"
 #include "lockon.h"
+#include "mml.h"
 #include "log.h"
 #include "recomp.h"
 #include "toast.h"
@@ -583,6 +584,166 @@ static int cam_collide(const int32_t *t, int dist, int yaw, int p4)
     return dist;
 }
 
+/* ---- rail shooting (the boat rides) ----
+ * G_RAIL_AIM == 1 forces the aim state (14) on while the boat drives: Mega Man only turns, tilts
+ * the aim and shoots (player_try_aim 0x4ACF2E; pre_14 never leaves it then). The camera is
+ * scripted, so the orbit stands aside, and the pad used to reach the game in the stock layout
+ * (X shoots, the stick turns at the stock digital rate, RT does nothing). In modern mode the
+ * sticks and the mouse turn and tilt with analog speed, the modern buttons shoot, and the aim
+ * action zooms the view in (slower aim while zoomed, crosshair shown). The game's own aim button
+ * (R2) would turn Mega Man to the nearest enemy here (FUN_004ABAE7 -> the target branch of
+ * player_state_14), but the targets are mostly beyond its pick range, so it isn't handed over.
+ * Without R2 the state turns by
+ * the turn masks (FUN_004B5429, up to 0x48 per update) and tilts +0x108 by the fwd/back masks
+ * (FUN_004B52F0, up to 0x40 per update, clamp +-0x200); we hand it neither and write facing and
+ * +0x108 ourselves, with their 16-bit fractions so slow tilts stay smooth. */
+#define RAIL_YAW_SPEED    36.0    /* angle units per 1/60 s at full tilt (stock top speed ~0x48 / 2) */
+#define RAIL_PITCH_SPEED  26.0
+#define RAIL_PITCH_LIMIT  0x200   /* the manual aim's own clamp in this mode (FUN_004B52F0) */
+#define RAIL_ZOOM         1.5     /* view zoom while the aim action is held */
+#define RAIL_ZOOM_EASE    0.22    /* fraction of the way to the wanted zoom per 1/60 s */
+static LARGE_INTEGER g_rail_qpc;              /* last player update in rail mode (game thread) */
+static volatile LONG g_rail_mdx, g_rail_mdy;  /* mouse counts not applied yet */
+static volatile LONG g_rail_sx, g_rail_sy;    /* the aiming stick (right, else left / D-pad, else WASD) */
+static volatile LONG g_rail_zoom_want;        /* the aim action is held: zoom in */
+static double rail_zoom = 1.0;                /* current zoom (eased), game thread */
+static double rail_since_fire = 1e9;          /* 1/60 s since the last shot in rail mode (crosshair) */
+static double rail_px, rail_py, rail_pz;      /* where the shots go: first enemy or wall on their path */
+static volatile LONG rail_on_enemy;
+
+static int rail_mode(void)
+{
+    return GVAR(uint8_t, G_RAIL_AIM) == 1 && P8(PL_STATE) == 14 && !(P8(PL_INPUT_FLAGS) & 0x60);
+}
+
+/* modern controls are on and the rail aim ran in the last 0.1 s (menus stop the player updates) */
+static int rail_live(void)
+{
+    LARGE_INTEGER now;
+    if (!g_modern || !st_active || !g_rail_qpc.QuadPart || !qpc_freq.QuadPart)
+        return 0;
+    QueryPerformanceCounter(&now);
+    return (now.QuadPart - g_rail_qpc.QuadPart) * 10 < qpc_freq.QuadPart;
+}
+
+/* pad poll (game thread): the modern buttons as the virtual buttons the game's bindings expect;
+   the sticks are ours (rail_apply), the game gets none */
+static void rail_filter(pad_t *p)
+{
+    unsigned acts = actions_of(p);
+    int sx = 0, sy = 0;
+    WORD out = 0;
+    if (abs(p->sThumbRX) > g_stick_dz || abs(p->sThumbRY) > g_stick_dz)
+        sx = p->sThumbRX, sy = p->sThumbRY;
+    else if (abs(p->sThumbLX) > g_stick_dz || abs(p->sThumbLY) > g_stick_dz)
+        sx = p->sThumbLX, sy = p->sThumbLY;   /* (the D-pad is on the left stick by now) */
+    if (g_kbm && kbm_foreground()) {
+        SHORT kx, ky;
+        int mdx = 0, mdy = 0, mw = 0;
+        kbm_attach_auto();
+        acts |= kbm_actions();
+        kbm_take_mouse(&mdx, &mdy, &mw);
+        InterlockedExchangeAdd(&g_rail_mdx, mdx);
+        InterlockedExchangeAdd(&g_rail_mdy, mdy);
+        if (!sx && !sy && kbm_move(&kx, &ky))
+            sx = kx, sy = ky;
+    }
+    g_rail_sx = sx;
+    g_rail_sy = sy;
+    g_rail_zoom_want = ACT(acts, ACT_AIM) != 0;
+    if (ACT(acts, ACT_JUMP))    out |= BTN_A;
+    if (ACT(acts, ACT_SHOOT))   out |= BTN_X;
+    if (ACT(acts, ACT_SPECIAL)) out |= BTN_B;
+    if (ACT(acts, ACT_TALK))    out |= BTN_Y;
+    if (ACT(acts, ACT_MENU))    out |= BTN_START;
+    if (ACT(acts, ACT_SELECT))  out |= BTN_BACK;
+    p->wButtons = out;
+    p->bLeftTrigger = p->bRightTrigger = 0;
+    p->sThumbLX = p->sThumbLY = p->sThumbRX = p->sThumbRY = 0;
+}
+
+/* back to no zoom (leaving the rail aim, or modern controls off) */
+static void rail_zoom_reset(void)
+{
+    if (rail_zoom != 1.0) {
+        rail_zoom = 1.0;
+        mml_zoom(1.0f);
+    }
+}
+
+/* player update (game thread), in rail mode */
+static void rail_apply(void)
+{
+    double k = frame_step(), yaw, pitch, want, sens;
+    int dx = (int)InterlockedExchange(&g_rail_mdx, 0), dy = (int)InterlockedExchange(&g_rail_mdy, 0);
+    int64_t pv;
+    QueryPerformanceCounter(&g_rail_qpc);
+    if (!g_modern || !st_active) {
+        rail_zoom_reset();
+        return;
+    }
+    /* zoom: eased in and out; the aim slows toward the shoulder-aim sensitivity as it zooms */
+    want = g_rail_zoom_want ? RAIL_ZOOM : 1.0;
+    rail_zoom += (want - rail_zoom) * (1.0 - pow(1.0 - RAIL_ZOOM_EASE, k));
+    if (fabs(rail_zoom - want) < 0.002)
+        rail_zoom = want;
+    mml_zoom((float)rail_zoom);
+    sens = 1.0 + (g_aim_sens / 100.0 - 1.0) * (rail_zoom - 1.0) / (RAIL_ZOOM - 1.0);
+    yaw = sens * (RAIL_YAW_SPEED * (g_yaw_speed / YAW_SPEED) * stick_norm(g_rail_sx) * k +
+                  dx * MOUSE_YAW_PER_COUNT * g_mouse_scale);
+    pitch = sens * (AIM_PITCH_SIGN * RAIL_PITCH_SPEED * (g_pitch_speed / PITCH_SPEED) * stick_norm(g_rail_sy) * k -
+                    dy * MOUSE_PITCH_PER_COUNT * g_mouse_scale * AIM_PITCH_SIGN * (g_mouse_invert_y ? -1 : 1));
+    if (yaw != 0) {   /* facing: 12-bit angle . 16-bit fraction */
+        uint32_t f = (uint32_t)RD32(G_PLAYER_FACING) + (uint32_t)(int32_t)floor(yaw * 65536.0 + 0.5);
+        WR32(G_PLAYER_FACING, f & 0x0FFFFFFFu);
+    }
+    if (pitch != 0) {   /* +0x108 with its fraction at +0x106 */
+        pv = (int64_t)GVAR(int32_t, PL(0x106)) + (int64_t)floor(pitch * 65536.0 + 0.5);
+        if (pv > (int64_t)RAIL_PITCH_LIMIT << 16) pv = (int64_t)RAIL_PITCH_LIMIT << 16;
+        if (pv < -((int64_t)RAIL_PITCH_LIMIT << 16)) pv = -((int64_t)RAIL_PITCH_LIMIT << 16);
+        GVAR(int32_t, PL(0x106)) = (int32_t)pv;
+    }
+}
+
+/* player update (game thread), in rail mode: the crosshair. The shots leave the buster along the
+   facing (travel = facing - 0x800) at the aim angle +0x108 (+ = down, y grows downward; the aim
+   camera hands the spawners 0x77E964 = +0x108 here), so the crosshair sits where that path first
+   meets an enemy or the level, and shows for a while after each shot like the camera-aim one */
+static void rail_crosshair(void)
+{
+    double a = ((((RD32(G_PLAYER_FACING) >> 16) & 0xfff) - 0x800) & 0xfff) * (PI / 2048.0);
+    double p = S16(PL_AIM_PITCH) * (PI / 2048.0);
+    double fx = sin(a) * cos(p), fy = sin(p), fz = cos(a) * cos(p);
+    double ox = S16(0x14), oy = S16(0x16) - AIM_CHEST, oz = S16(0x18), dist = AIM_RAY_MAX, s;
+    int vol[64][3], n, i, on_enemy = 0;
+    rail_since_fire = (P8(PL_FIRE_FLAGS) & 0xC0) ? 0 : rail_since_fire < 1e9 ? rail_since_fire + frame_step() : 1e9;
+    if (rail_since_fire >= 600 && rail_zoom <= 1.0)
+        return;
+    n = lockon_volumes(vol, 64);
+    for (i = 0; i < n; i++) {   /* enemies: the nearest whose volume the path passes through */
+        double rx = vol[i][0] - ox, ry = vol[i][1] - oy, rz = vol[i][2] - oz;
+        double t = rx * fx + ry * fy + rz * fz, d2 = rx * rx + ry * ry + rz * rz - t * t;
+        if (t > AIM_RAY_SKIP && d2 < AIM_ENEMY_R * AIM_ENEMY_R) {
+            t -= sqrt(AIM_ENEMY_R * AIM_ENEMY_R - d2);
+            if (t < dist) {
+                dist = t < AIM_RAY_SKIP ? AIM_RAY_SKIP : t;
+                on_enemy = 1;
+            }
+        }
+    }
+    for (s = AIM_RAY_SKIP; s < dist; s += AIM_RAY_STEP) {   /* the level */
+        if (cam_probe(ox + fx * s, oy + fy * s, oz + fz * s) != 0) {
+            dist = s;
+            on_enemy = 0;
+            break;
+        }
+    }
+    rail_px = ox + fx * dist;
+    rail_py = oy + fy * dist;
+    rail_pz = oz + fz * dist;
+    rail_on_enemy = on_enemy;
+}
+
 static void input_update(void)
 {
     pad_t p;
@@ -596,6 +757,11 @@ static void input_update(void)
         SHORT kx, ky;
         kbm_attach_auto();
         kbm_take_mouse(&mdx, &mdy, &mwheel);
+        if (rail_live()) {   /* the boat rides: the mouse aims there (rail_apply) */
+            InterlockedExchangeAdd(&g_rail_mdx, mdx);
+            InterlockedExchangeAdd(&g_rail_mdy, mdy);
+            mdx = mdy = mwheel = 0;
+        }
         g_kbm_acts = (LONG)kbm_actions();
         if (kbm_move(&kx, &ky)) {   /* keys win over a resting stick */
             p.sThumbLX = kx;
@@ -840,7 +1006,7 @@ static void input_update(void)
     cam_active = st_active && st_allowed;
     cam_suppress = cam_active && aiming && !lock_active && !lock_free && !sh_aim;
     /* the cursor stays put and hidden while the orbit drives gameplay */
-    kbm_capture(g_kbm && g_modern && cam_active);
+    kbm_capture(g_kbm && g_modern && (cam_active || rail_live()));
 }
 
 /* ---- per-frame hook: cam_apply_angles entry ---- */
@@ -1033,6 +1199,12 @@ static void shot_pitch_sync(void)
 
 int controls_aim_point(double *x, double *y, double *z)
 {
+    if (rail_live()) {
+        *x = rail_px;
+        *y = rail_py;
+        *z = rail_pz;
+        return 1;
+    }
     *x = aim_px;
     *y = aim_py;
     *z = aim_pz;
@@ -1519,6 +1691,12 @@ static void on_player_update(regs_t *r)
         P16(PL_MASK_TALK) = talk_saved;
         talk_hidden = 0;
     }
+    if (rail_mode()) {   /* the boat rides: analog aim (the orbit isn't driving here) */
+        rail_apply();
+        rail_crosshair();
+        return;
+    }
+    rail_zoom_reset();
     if (!cam_active) {   /* orbit off: stock controls, but let a roll in flight finish tuned */
         if (roll_ours)
             roll_tune();
@@ -1670,6 +1848,10 @@ void controls_filter(pad_t *p)
     if (ddx || ddy) {
         p->sThumbLX = (SHORT)(ddx * 32767);
         p->sThumbLY = (SHORT)(ddy * 32767);
+    }
+    if (rail_live()) {   /* the boat rides: modern buttons, analog aim */
+        rail_filter(p);
+        return;
     }
     if (!orbit_live()) {
         /* menus and the classic camera keep the game's own keys; the bound Menu and
@@ -1931,13 +2113,15 @@ int controls_in_gameplay(void)
 
 int controls_mute_game_keys(void)
 {
-    return g_kbm && orbit_live() && kbm_foreground();
+    return g_kbm && (orbit_live() || rail_live()) && kbm_foreground();
 }
 
-/* every pad poll (menus too): let the cursor go once the orbit isn't driving */
+/* every pad poll (menus too): let the cursor go once the orbit (or the rail aim) isn't driving */
 void controls_poll_idle(void)
 {
-    if (!orbit_live())
+    if (rail_live())
+        kbm_capture(g_kbm);
+    else if (!orbit_live())
         kbm_capture(0);
 }
 
@@ -2010,7 +2194,7 @@ void controls_aim_sensitivity(int pct)
 
 int controls_aim_on_enemy(void)
 {
-    return aim_on_enemy != 0;
+    return rail_live() ? rail_on_enemy != 0 : aim_on_enemy != 0;
 }
 
 void controls_lockon_camera(int shoulder, int left)
@@ -2044,6 +2228,15 @@ float controls_crosshair(void)
         idle = 0;
     } else if (idle < 1000) {
         idle++;
+    }
+    if (rail_live()) {   /* the boat rides: while zoomed and after shots, where they go (rail_crosshair) */
+        if (!g_crosshair)
+            return 0;
+        if (rail_zoom > 1.0)
+            return 1.0f;
+        if (rail_since_fire >= XH_SHOW + XH_FADE)
+            return 0;
+        return rail_since_fire <= XH_SHOW ? 1.0f : (float)(1.0 - (rail_since_fire - XH_SHOW) / XH_FADE);
     }
     if (!(g_crosshair && cam_active && !cam_suppress && !lock_active && idle < 6 && controls_in_gameplay()))
         return 0;

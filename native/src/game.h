@@ -80,6 +80,8 @@
 #define G_SUPPORT_OBJ           0x5F8A58u   /* second player-like object (input from 0x572D32) */
 #define G_TARGET                GA(0x5505E8u)   /* object*: nearest enemy, picked every frame (target_and_hits_update 0x4E0405) */
 #define G_TARGET_FLAGS          0x559A40u   /* bit 1: targeting allowed (state 14 checks it) */
+#define G_RAIL_AIM              0x77E807u   /* u8: 1 = rail shooting (the boat rides): state 14 forced on, the
+                                             * aim button turns to the nearest enemy; 2 = another scripted mode */
 #define G_FN_PAD_POLL           GA(0x4F8E15u)   /* pad_poll: joystick half, then keyboard half */
 #define G_SITE_JOY_GATE         GA(0x4F8E26u)   /* pad_poll: cmp dword [G_JOY_DEVICE],0 */
 #define G_SITE_PAD_POLL_KB      GA(0x4F8F22u)   /* pad_poll: start of the keyboard half */
