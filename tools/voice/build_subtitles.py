@@ -14,8 +14,9 @@ one line per subtitle:
 
 keyed by the clip the US game plays (mml.dll shows a clip's lines while it plays, timed from its
 start, with the English voices or the Japanese ones). Scenes: A n is clip n of the first cutscene
-track (3700E), B n is clip n + 2 of the second (3701E: the PC's has two more clips at its start
-than the PSP's), C 0-4 are the news reports the game's code plays (NEWS: the US clips; with the
+track (3700E), except A15 (Roll repairs the boat), which is its clip 18 (MOVED: the two tracks
+order clips 15 and 18 differently; found by where the voices are), B n is clip n + 2 of the
+second (3701E: the PC's has two more clips at its start than the PSP's), C 0-4 are the news reports the game's code plays (NEWS: the US clips; with the
 Japanese voices, tools/voice/build_jp_voices.py puts the Japanese reports, Japanese bank 18M06
 clips 46, 18, 19, 20 and 21, in those same clips). The script is Capcom's game text as that project
 transcribed it: it is read from the player's download of the file, never stored in this repository.
@@ -48,6 +49,7 @@ CREDIT = (
 )
 
 TRACKS = ('3700E', '3701E')   # the US cutscene tracks (A, B scenes)
+MOVED = {'A15': ('3700E', 18)}   # scenes whose PC clip isn't the one their number gives
 NEWS = {0: ('1821E', 10), 1: ('1821E', 4), 2: ('1821E', 5), 3: ('1821E', 7), 4: ('1821E', 6)}   # C scenes
 ASCII = {'‘': "'", '’': "'", '“': '"', '”': '"', '…': '...', '–': '-',
          '—': '--', ' ': ' ', 'é': 'e', 'è': 'e', 'à': 'a', '™': ''}
@@ -77,7 +79,9 @@ def main(csv_path, us_dir):
         if row['status'].strip() == 'drop':
             continue
         scene, n = row['scene'].strip(), int(row['scene'].strip()[1:])
-        if scene[0] == 'A':
+        if scene in MOVED:
+            bank, clip = MOVED[scene]
+        elif scene[0] == 'A':
             bank, clip = TRACKS[0], n
         elif scene[0] == 'B':
             bank, clip = TRACKS[1], n + 2

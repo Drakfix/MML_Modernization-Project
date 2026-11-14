@@ -149,7 +149,10 @@ final class Subtitles {
             int n = Integer.parseInt(sc.substring(1));
             String bank;
             int clip;
-            if (sc.charAt(0) == 'A') {
+            if (sc.equals("A15")) {   /* Roll repairs the boat: clip 18 of the PC's track (build_subtitles.py MOVED) */
+                bank = TRACKS[0];
+                clip = 18;
+            } else if (sc.charAt(0) == 'A') {
                 bank = TRACKS[0];
                 clip = n;
             } else if (sc.charAt(0) == 'B') {

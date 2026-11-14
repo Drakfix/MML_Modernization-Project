@@ -76,6 +76,11 @@ static int load(const char *path)
                 continue;
             used += (int)k;
         }
+        /* The PSP script's scene A15 (Roll repairs the boat) is clip 18 of the PC's first track:
+           the two tracks order clips 15 and 18 differently, and clip 15 has no voices. Files
+           built before the builders knew put its lines on clip 15. */
+        if (l.clip == 15 && _stricmp(l.bank, "3700E") == 0)
+            l.clip = 18;
         if (g_nlines == cap) {
             sub_line *n = (sub_line *)realloc(g_lines, sizeof *g_lines * (size_t)(cap = cap ? cap * 2 : 256));
             if (!n)
