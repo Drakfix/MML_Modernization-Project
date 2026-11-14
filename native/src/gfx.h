@@ -46,7 +46,8 @@ typedef struct {
     int window_w, window_h;       /* client size when windowed (0 = 75% of the monitor) */
     int render_scale;             /* 0 = match the window height, N = N x the game's mode */
     int msaa;                     /* 1, 2, 4 or 8 samples */
-    int anisotropy;               /* 0/1 = off, else max anisotropy for linear filtering */
+    int anisotropy;               /* 0/1 = off, else max anisotropy for linear filtering;
+                                     < 0 = nearest: point sampling even where the game asks for linear */
     int vsync;
     int nearest_upscale;          /* present the image with point instead of linear filtering */
     int stretch;                  /* fill the window instead of keeping the game's aspect */

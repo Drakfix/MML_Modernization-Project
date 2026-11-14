@@ -300,6 +300,17 @@ static ID3D11SamplerState *make_sampler(D3D11_FILTER f, D3D11_TEXTURE_ADDRESS_MO
     return out;
 }
 
+/* the sampler for the game's textures where it asks for linear filtering (gfx_options.anisotropy):
+   anisotropic, bilinear, or point when the player picked nearest (the PlayStation look) */
+static ID3D11SamplerState *game_sampler(int aniso)
+{
+    if (aniso < 0)
+        return make_sampler(D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_WRAP, 0);
+    if (aniso > 1)
+        return make_sampler(D3D11_FILTER_ANISOTROPIC, D3D11_TEXTURE_ADDRESS_WRAP, (UINT)aniso);
+    return make_sampler(D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_TEXTURE_ADDRESS_WRAP, 0);
+}
+
 static int d3d_init(void *window, int app_w, int app_h, const gfx_options *opt)
 {
     HWND hwnd = (HWND)window;
@@ -415,9 +426,7 @@ static int d3d_init(void *window, int app_w, int app_h, const gfx_options *opt)
     ID3D11Device_CreateRasterizerState(g.dev, &rd, &g.raster);
 
     g.smp_point = make_sampler(D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_WRAP, 0);
-    g.smp_linear = g.opt.anisotropy > 1
-        ? make_sampler(D3D11_FILTER_ANISOTROPIC, D3D11_TEXTURE_ADDRESS_WRAP, (UINT)g.opt.anisotropy)
-        : make_sampler(D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_TEXTURE_ADDRESS_WRAP, 0);
+    g.smp_linear = game_sampler(g.opt.anisotropy);
     g.smp_blit_linear = make_sampler(D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_TEXTURE_ADDRESS_CLAMP, 0);
     g.smp_blit_point = make_sampler(D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_CLAMP, 0);
 
@@ -884,8 +893,7 @@ static void d3d_set_anisotropy(int n)
     flush_batch();
     g.opt.anisotropy = n;
     REL(g.smp_linear);
-    g.smp_linear = n > 1 ? make_sampler(D3D11_FILTER_ANISOTROPIC, D3D11_TEXTURE_ADDRESS_WRAP, (UINT)n)
-                         : make_sampler(D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_TEXTURE_ADDRESS_WRAP, 0);
+    g.smp_linear = game_sampler(n);
     g.state_dirty = 1;
 }
 

@@ -221,7 +221,8 @@ static void write_ddrawcompat_ini(const char *dir, const char *ini)
         strcpy_s(v[0], sizeof v[0], "display");
     strcpy_s(v[1], sizeof v[1], strcmp(aspect, "4:3") == 0 ? "4:3" : "display");
     strcpy_s(v[2], sizeof v[2], GetPrivateProfileIntA("video", "nearest_upscale", 0, ini) ? "point" : "bilinear");
-    strcpy_s(v[3], sizeof v[3], GetPrivateProfileIntA("video", "anisotropy", 16, ini) > 1 ? "af16x" : "app");
+    strcpy_s(v[3], sizeof v[3], GetPrivateProfileIntA("video", "nearest_textures", 0, ini) ? "point"
+                                : GetPrivateProfileIntA("video", "anisotropy", 16, ini) > 1 ? "af16x" : "app");
     strcpy_s(v[4], sizeof v[4], msaa == 8 ? "msaa8x" : msaa == 4 ? "msaa4x" : "off");
     _snprintf_s(v[5], sizeof v[5], _TRUNCATE, "native, 640x480, 800x600, 1024x768, %dx480", native_width());
     _snprintf_s(base, sizeof base, _TRUNCATE, "%s\\DDrawCompat.ini.16to9", dir);

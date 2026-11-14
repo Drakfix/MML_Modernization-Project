@@ -68,6 +68,8 @@ enum {
     IT_UP_ACTION, IT_UP_VERSION, IT_UP_LATEST,
 };
 
+enum { TEXF_NEAREST, TEXF_BILINEAR, TEXF_ANISO };   /* M.texf (texture filtering), in the order it cycles */
+
 /* an IT_CHOICE's choice: "section.key=value;section.key=value" written when chosen (a choice
    that starts with "=" is the value of the item's own key); the first pair tells which choice
    mml.ini holds */
@@ -112,7 +114,7 @@ static const item g_game_items[] = {
     { 0, IT_VSYNC, "Vsync", "Locks frames to your monitor's refresh so the picture never tears. Adds a little lag." },
     { 0, IT_RES, "Resolution", "Display renders at your monitor's resolution. 1x to 4x are multiples of the game's 480 lines." },
     { 0, IT_MSAA, "Antialiasing", "Smooths jagged polygon edges. ReShade depth effects stop working while it's on." },
-    { 0, IT_TEXFILTER, "Texture filter", "Anisotropic keeps floors and walls sharp when you look along them." },
+    { 0, IT_TEXFILTER, "Texture filter", "Nearest keeps the original pixel-art look. Anisotropic keeps floors and walls sharp when you look along them." },
     { 0, IT_UPSCALE, "Upscaling", "How a lower resolution is stretched to the screen. Nearest keeps the pixels crisp." },
     { 1, IT_SHADER, "Shader", "RetroArch shader presets (CRT looks and more) from the Modernization\\shaders folder." },
     { 1, IT_SHADER_RES, "Shader input", "What the shader works on. CRT presets look right at the game's own resolution." },
@@ -265,8 +267,8 @@ static const item g_start_items[] = {
     { PG_GRAPHICS, IT_MSAA, "Anti-aliasing", "Multisample anti-aliasing (MSAA) smooths jagged polygon edges by "
       "sampling each pixel 4 or 8 times. Costs GPU time and video memory, and turns off depth-based ReShade "
       "effects." },
-    { PG_GRAPHICS, IT_TEXFILTER, "Texture filtering", "How textures are sampled. Bilinear blends neighbouring "
-      "texels. Anisotropic 16x keeps surfaces sharp at steep viewing angles, such as floors and walls into the "
+    { PG_GRAPHICS, IT_TEXFILTER, "Texture filtering", "How textures are sampled. Nearest neighbor keeps every "
+      "texel a sharp square, like the original PlayStation. Bilinear blends neighbouring texels. Anisotropic 16x keeps surfaces sharp at steep viewing angles, such as floors and walls into the "
       "distance, at a small GPU cost." },
     { PG_GRAPHICS, IT_UPSCALE, "Upscaling filter", "How the rendered image is scaled to the screen when Render "
       "resolution is below your display's. Bilinear smooths the pixels; Nearest neighbor keeps them sharp and "
@@ -407,7 +409,7 @@ static struct {
     int pad_ui;                             /* button prompts for the pad (else the keyboard) */
     char ini[MAX_PATH], game_dir[MAX_PATH];
     /* values */
-    int fps60, vsync, res, msaa, shader_game_res, nearest, aniso, fog, lod_full, hdtex;
+    int fps60, vsync, res, msaa, shader_game_res, nearest, texf, fog, lod_full, hdtex;   /* texf: TEXF_* */
     int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens;
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
@@ -715,8 +717,10 @@ static void apply(int kind)
         ini_int("video", "nearest_upscale", M.nearest);
         break;
     case IT_TEXFILTER:
-        gfx_set_anisotropy(M.aniso ? 16 : 0);
-        ini_int("video", "anisotropy", M.aniso ? 16 : 0);
+        gfx_set_anisotropy(M.texf == TEXF_NEAREST ? -1 : M.texf == TEXF_ANISO ? 16 : 0);
+        ini_int("video", "nearest_textures", M.texf == TEXF_NEAREST);
+        if (M.texf != TEXF_NEAREST)
+            ini_int("video", "anisotropy", M.texf == TEXF_ANISO ? 16 : 0);
         break;
     case IT_FOG:
         if (!M.start)
@@ -819,7 +823,7 @@ static void change(int kind, int dir)
         break;
     case IT_SHADER_RES: M.shader_game_res = !M.shader_game_res; break;
     case IT_UPSCALE: M.nearest = !M.nearest; break;
-    case IT_TEXFILTER: M.aniso = !M.aniso; break;
+    case IT_TEXFILTER: M.texf = cycle(M.texf, 3, dir); break;
     case IT_FOG: M.fog = cycle(M.fog, 3, dir); break;
     case IT_LOD: M.lod_full = !M.lod_full; break;
     case IT_HDTEX: M.hdtex = !M.hdtex; break;
@@ -961,7 +965,9 @@ static void value_text(int kind, char *out, size_t n)
     }
     case IT_SHADER_RES: strcpy_s(out, n, M.shader_game_res ? "Native (480p)" : "Output"); break;
     case IT_UPSCALE: strcpy_s(out, n, M.nearest ? "Nearest neighbor" : "Bilinear"); break;
-    case IT_TEXFILTER: strcpy_s(out, n, M.aniso ? "Anisotropic 16x" : "Bilinear"); break;
+    case IT_TEXFILTER:
+        strcpy_s(out, n, M.texf == TEXF_NEAREST ? "Nearest neighbor" : M.texf == TEXF_ANISO ? "Anisotropic 16x" : "Bilinear");
+        break;
     case IT_FOG: strcpy_s(out, n, FOG[M.fog]); break;
     case IT_LOD: strcpy_s(out, n, M.lod_full ? "Maximum" : "Original"); break;
     case IT_HDTEX: strcpy_s(out, n, M.hdtex ? "On" : "Off"); break;
@@ -2408,7 +2414,8 @@ static void load_values(const char *ini, const char *game_dir)
         M.msaa = 1;
     M.shader_game_res = GetPrivateProfileIntA("video", "shader_scale", 1, ini) != 0;
     M.nearest = GetPrivateProfileIntA("video", "nearest_upscale", 0, ini) != 0;
-    M.aniso = GetPrivateProfileIntA("video", "anisotropy", 16, ini) > 1;
+    M.texf = GetPrivateProfileIntA("video", "nearest_textures", 0, ini) ? TEXF_NEAREST
+           : GetPrivateProfileIntA("video", "anisotropy", 16, ini) > 1 ? TEXF_ANISO : TEXF_BILINEAR;
     GetPrivateProfileStringA("video", "fog", "original", s, sizeof s, ini);
     M.fog = _stricmp(s, "off") == 0 ? FOG_OFF : _stricmp(s, "light") == 0 ? FOG_LIGHT : FOG_ORIGINAL;
     GetPrivateProfileStringA("video", "lod", "full", s, sizeof s, ini);

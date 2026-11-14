@@ -636,7 +636,8 @@ void mml_gfx_options(const char *ini, const char *game_dir, gfx_options *o)
     }
     o->nearest_upscale = GetPrivateProfileIntA("video", "nearest_upscale", 0, ini);
     o->msaa = GetPrivateProfileIntA("video", "msaa", 1, ini);
-    o->anisotropy = GetPrivateProfileIntA("video", "anisotropy", 16, ini);
+    o->anisotropy = GetPrivateProfileIntA("video", "nearest_textures", 0, ini)
+                    ? -1 : GetPrivateProfileIntA("video", "anisotropy", 16, ini);
     o->vsync = GetPrivateProfileIntA("video", "vsync", 0, ini);
     o->no_fog = GetPrivateProfileIntA("video", "no_fog", 0, ini);
     o->fog_from_w = GetPrivateProfileIntA("video", "fog_from_w", 0, ini);

@@ -446,6 +446,14 @@ static VkSampler make_sampler(VkFilter f, VkSamplerAddressMode a, float aniso)
     return s;
 }
 
+/* the sampler for the game's textures where it asks for linear filtering (gfx_options.anisotropy):
+   anisotropic, bilinear, or point when the player picked nearest (the PlayStation look) */
+static VkSampler game_sampler(int aniso)
+{
+    return aniso < 0 ? make_sampler(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT, 0)
+                     : make_sampler(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT, (float)aniso);
+}
+
 /* ---------------------------------------------------------------- commands */
 
 static void barrier(VkImage img, VkImageAspectFlags aspect, VkImageLayout from, VkImageLayout to,
@@ -1369,7 +1377,7 @@ static int make_layouts(void)
 static void make_samplers(void)
 {
     v.smp_point = make_sampler(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT, 0);
-    v.smp_linear = make_sampler(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT, (float)v.opt.anisotropy);
+    v.smp_linear = game_sampler(v.opt.anisotropy);
     v.smp_blit_linear = make_sampler(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 0);
     v.smp_blit_point = make_sampler(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 0);
     v.set_point = sampler_set(v.smp_point);
@@ -2176,7 +2184,7 @@ static void vk_set_anisotropy(int n)
     vkDeviceWaitIdle(v.dev);
     v.opt.anisotropy = n;
     vkDestroySampler(v.dev, v.smp_linear, NULL);
-    v.smp_linear = make_sampler(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT, (float)n);
+    v.smp_linear = game_sampler(n);
     memset(&ii, 0, sizeof ii);
     ii.sampler = v.smp_linear;
     memset(&w, 0, sizeof w);

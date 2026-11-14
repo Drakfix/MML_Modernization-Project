@@ -340,6 +340,8 @@ def import_mml_ini(s):
             s["texfilter"] = "af16x"
         elif s["texfilter"] == "af16x":
             s["texfilter"] = "trilinear"
+    if num("video", "nearest_textures"):
+        s["texfilter"] = "point"
     v = num("video", "nearest_upscale")
     if v is not None:
         s["scalefilter"] = "nearest" if v else "bilinear"
@@ -586,6 +588,7 @@ def write_mml_ini(s, width):
             "nearest_upscale": 1 if s["scalefilter"] == "nearest" else 0,
             "msaa": aa,
             "anisotropy": aniso,
+            "nearest_textures": 1 if s["texfilter"] == "point" else 0,
             "fog": s["fog"],
             "lod": s["lod"],
             "interp": 1 if s["fps"] == "60" else 0,
@@ -814,7 +817,8 @@ class App:
         # ---- Graphics ----
         page[0] = self.pages["graphics"]
         option("Texture filter", "texfilter",
-               [("Game default", "app"), ("Trilinear", "trilinear"), ("Anisotropic 16x", "af16x")])
+               [("Nearest", "point"), ("Game default", "app"), ("Trilinear", "trilinear"),
+                ("Anisotropic 16x", "af16x")])
         r = pair()
         option("Upscaling", "scalefilter",
                [("Bilinear", "bilinear"), ("Nearest", "nearest")], row=r, side="left")
