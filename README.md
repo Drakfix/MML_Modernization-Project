@@ -281,6 +281,32 @@ is, and keeps `MML Launcher.exe`. Setup moves conflicting wrapper DLLs from othe
 `Modernization\quarantined-wrappers` instead of deleting them, and keeps the original executable
 as `MEGAMAN.EXE.vanilla-backup` and the original intro as `CAPCOM.AVI.original`.
 
+### Smart App Control (Windows 11)
+
+If Windows says that Smart App Control blocked `MML-Setup.exe`, or that it can't verify the
+publisher, Smart App Control is on. It only runs programs that Microsoft already knows or that
+are signed with a paid code-signing certificate. This project is free and unsigned, so Smart App
+Control blocks Setup and the game.
+
+Windows offers no way to allow a single app. Signing only Setup would not help either: the patched
+game (`MEGAMAN_NATIVE.EXE`) is created on your PC, so it would still be unsigned.
+
+To play, turn Smart App Control off:
+
+1. Open **Windows Security**.
+2. Go to **App & browser control** > **Smart App Control settings**.
+3. Choose **Off**.
+
+Microsoft Defender Antivirus and SmartScreen keep protecting your PC with Smart App Control off.
+On some versions of Windows, Smart App Control can't be turned back on afterwards without
+reinstalling Windows, so read what the setting says on your PC before you decide.
+
+If the app worked at first and is blocked after a restart, Smart App Control was in its
+evaluation mode and has since turned itself on.
+
+This is not the same as the blue **Windows protected your PC** screen (SmartScreen). There, click
+**More info** and then **Run anyway**.
+
 ## Installation on Android
 
 1. Copy your Mega Man Legends folder (the one with `MEGAMAN.EXE`, `DAT`, `BGM` and `SPH`) from
@@ -532,6 +558,8 @@ game and the saves: copy the `DASH_*.MCD` files out of it first if you want to k
 - Linux: tested only on Windows' Linux subsystem so far, not on real hardware or the Steam Deck.
   It needs glibc 2.38 or newer.
 - Running the Windows version through Proton or Wine has not been tested.
+- Windows 11: Smart App Control blocks the app, because it is not signed. See
+  [Smart App Control](#smart-app-control-windows-11).
 
 ## Roadmap
 
