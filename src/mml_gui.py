@@ -23,7 +23,7 @@ import time
 import mml_update
 import patch_manifest as M
 
-VERSION = "0.8.6-beta"
+VERSION = "0.8.7-beta"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)

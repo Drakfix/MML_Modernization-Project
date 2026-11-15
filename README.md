@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.8.6 beta.** The 0.1 releases are kept on the
+**Current version: 0.8.7 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -121,6 +121,12 @@ copy.
 - Fix: with lock-on, special weapons now aim at the height of the locked enemy, like the buster.
 - Fix (modern controls): for a moment after each room change, the original button layout was
   active (the shoot trigger turned Mega Man).
+
+0.8.7 adds:
+
+- Fix (modern controls): with the game's Turn option set to Directional, strafing while firing
+  made Mega Man turn in place without shooting. The modern controls now work the same with
+  either Turn setting; the option still applies to the classic controls.
 
 The separate launcher (`MML Launcher.exe`) is still installed in game folders that an earlier
 Setup patched in place, and updating such a folder keeps it. New installs use the start menu.
