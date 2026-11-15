@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.8.4 beta.** The 0.1 releases are kept on the
+**Current version: 0.8.5 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -97,6 +97,18 @@ copy.
   folder included: the app then plays that copy where it is, with its saves, and copies nothing.
 - Fix (Windows): Setup pointed at a game folder installed the old launcher instead of the start
   menu.
+
+0.8.5 adds:
+
+- **Texture filtering: Nearest neighbor.** The game's textures can now be drawn sharp, without
+  smoothing. Texture filtering offers Nearest neighbor, Bilinear and Anisotropic 16x.
+- Fix (Vulkan): with 60 fps and Model details at Maximum, the big fields (Yass Plateau, Clozer
+  Woods, the boat ride) flickered: some frames lost the near ground, the cliffs and Mega Man.
+- Fix: on high ground (Yass Plateau), dark shapes and flicker appeared at Mega Man's feet as the
+  camera turned, and his shadow was missing.
+- Fix: the balloons in Balloon Fantasy flickered at 60 fps.
+- Fix: on the boat rides, aiming all the way up took the camera under the water.
+- Fix: the subtitles of the boat repair scene now play on that scene.
 
 The separate launcher (`MML Launcher.exe`) is still installed in game folders that an earlier
 Setup patched in place, and updating such a folder keeps it. New installs use the start menu.
