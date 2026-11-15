@@ -27,6 +27,7 @@
 
 #include "controls.h"
 #include "ddshim.h"
+#include "display.h"
 #include "fog.h"
 #include "frame_rec.h"
 #include "gamefiles.h"
@@ -52,6 +53,7 @@
 enum {
     IT_FPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
+    IT_HUD_SCALE,    /* size of the corner HUD: gauges and minimap ([video] hud_scale) */
     IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR, IT_LOCKCAM, IT_AIMSENS,
     IT_TRANSITION,   /* room transition speed ([general] transition_speed) */
     /* the keyboard's keys for the modern controls ([controls] key_*: two each), and putting them back */
@@ -124,6 +126,7 @@ static const item g_game_items[] = {
     { 1, IT_FOG, "Distance fog", "The original fog, a lighter one that lets you see further, or none at all." },
     { 1, IT_LOD, "Model detail", "Full detail keeps faraway models at their best instead of swapping in low-poly ones." },
     { 1, IT_HDTEX, "HD textures", "Replacement textures from the Modernization\\textures folder." },
+    { 1, IT_HUD_SCALE, "HUD size", "Shrinks the life and weapon gauges and the minimap into their corners of the screen." },
     { 2, IT_CAMSPEED, "Camera speed", "How fast the right stick turns the camera." },
     { 2, IT_INVERT_X, "Invert camera X", "Flips left and right on the camera stick." },
     { 2, IT_INVERT_Y, "Invert camera Y", "Flips up and down on the camera stick and the mouse." },
@@ -294,6 +297,9 @@ static const item g_start_items[] = {
       "release did. Maximum keeps the full-detail models at any distance, at a small GPU cost." },
     { PG_GRAPHICS, IT_HDTEX, "Texture replacement", "Loads replacement textures (HD texture packs) from "
       "Modernization\\textures. Off uses the game's original textures." },
+    { PG_GRAPHICS, IT_HUD_SCALE, "HUD size", "The size of the HUD in the screen corners: the life and weapon "
+      "gauges and the minimap. Each one shrinks toward its own corner, so it stays in one piece. Widescreen only; "
+      "dialogue, menus and the boss gauge keep their size." },
 
     /* ---- CONTROLS ---- */
     { PG_CONTROLS, IT_SECTION, "Scheme" },
@@ -386,6 +392,7 @@ static const int SPEEDS[] = { 50, 75, 100, 125, 150, 200 };
 static const int MOUSE[] = { 0, 50, 75, 100, 150, 200 };
 static const int AIMSENS[] = { 40, 60, 80, 100 };
 static const int TRANS[] = { 1, 2, 4, 8 };
+static const int HUD_SCALES[] = { 100, 90, 80, 70, 60 };
 static const struct { const char *name; unsigned rgb; } RETICLES[] = {
     { "Yellow", 0xFFD840 }, { "Orange", 0xFF9A2E }, { "Red", 0xFF4040 }, { "Pink", 0xFF6EC7 },
     { "Purple", 0xB47CFF }, { "Blue", 0x4AA3FF }, { "Cyan", 0x3EE0E0 }, { "Green", 0x5BE36B },
@@ -421,6 +428,7 @@ static struct {
     /* values */
     int fps60, vsync, res, msaa, shader_game_res, nearest, texf, fog, lod_full, hdtex;   /* texf: TEXF_* */
     int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens, trans;
+    int hud_scale;                      /* index into HUD_SCALES */
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
     char **presets;
@@ -803,6 +811,14 @@ static void apply(int kind)
             mml_set_transition_speed(TRANS[M.trans]);
         ini_int("general", "transition_speed", TRANS[M.trans]);
         break;
+    case IT_HUD_SCALE: {
+        char b[16];
+        if (!M.start)
+            display_set_hud_scale((float)HUD_SCALES[M.hud_scale] / 100.0f);
+        _snprintf_s(b, sizeof b, _TRUNCATE, "%.2f", (float)HUD_SCALES[M.hud_scale] / 100.0f);
+        ini_str("video", "hud_scale", b);
+        break;
+    }
     default:
         break;
     }
@@ -851,6 +867,7 @@ static void change(int kind, int dir)
     case IT_LOCKCAM: M.lock_shoulder = !M.lock_shoulder; break;
     case IT_AIMSENS: M.aim_sens = cycle(M.aim_sens, 4, dir); break;
     case IT_TRANSITION: M.trans = cycle(M.trans, 4, dir); break;
+    case IT_HUD_SCALE: M.hud_scale = cycle(M.hud_scale, 5, dir); break;
     case IT_CROSSHAIR: M.crosshair = !M.crosshair; break;
     default: return;
     }
@@ -1000,6 +1017,7 @@ static void value_text(int kind, char *out, size_t n)
     case IT_AIM: strcpy_s(out, n, M.aim_camera ? "Camera" : "Character"); break;
     case IT_LOCKCAM: strcpy_s(out, n, M.lock_shoulder ? "Over the shoulder" : "Classic"); break;
     case IT_AIMSENS: _snprintf_s(out, n, _TRUNCATE, "%d%%", AIMSENS[M.aim_sens]); break;
+    case IT_HUD_SCALE: _snprintf_s(out, n, _TRUNCATE, "%d%%", HUD_SCALES[M.hud_scale]); break;
     case IT_TRANSITION:
         if (TRANS[M.trans] == 1)
             strcpy_s(out, n, "Original");
@@ -1083,6 +1101,7 @@ static int gauge(int kind, int *total)
     case IT_CAMSPEED: *total = 6; return M.cam_speed + 1;
     case IT_MOUSE: *total = 5; return M.mouse;
     case IT_TRANSITION: *total = 3; return M.trans;
+    case IT_HUD_SCALE: *total = 4; return 4 - M.hud_scale;
     case IT_MSAA: *total = 2; return M.msaa == 1 ? 0 : M.msaa == 4 ? 1 : 2;
     case IT_GF_US:
     case IT_GF_JP:
@@ -2443,6 +2462,8 @@ static void load_values(const char *ini, const char *game_dir)
     M.fog = _stricmp(s, "off") == 0 ? FOG_OFF : _stricmp(s, "light") == 0 ? FOG_LIGHT : FOG_ORIGINAL;
     GetPrivateProfileStringA("video", "lod", "full", s, sizeof s, ini);
     M.lod_full = _stricmp(s, "original") != 0;
+    GetPrivateProfileStringA("video", "hud_scale", "1", s, sizeof s, ini);
+    M.hud_scale = nearest_index(HUD_SCALES, 5, (int)(atof(s) * 100.0 + 0.5));
     M.hdtex = GetPrivateProfileIntA("textures", "replace", 1, ini) != 0;
     M.cam_speed = nearest_index(SPEEDS, 6, GetPrivateProfileIntA("controls", "camera_speed_x", 100, ini));
     M.inv_x = GetPrivateProfileIntA("controls", "invert_x", 0, ini) != 0;

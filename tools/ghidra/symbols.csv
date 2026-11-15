@@ -80,8 +80,8 @@ address,kind,type,name,comment
 0x4364F0,func,,hud_emit_sprite,"shared 2D HUD sprite emitter: 0x38 packet, X at +8/+0x10/+0x18/+0x20, bucket ctx+0x78; 20 callers"
 0x435F90,func,,hud_draw_player_status,"HP bar segments = hp>>4"
 0x436081,func,,hud_draw_special_gauge,
-0x436210,func,,hud_draw_boss_bar,"Y=16 top row"
-0x4363B5,func,,hud_draw_gauge_4363b5,"looked like a boss gauge statically but never fires"
+0x436210,func,,hud_draw_boss_bar,"slot: x 0x120 (bar grows left), y 0x10 + script offset; fill via hud_emit_sprite_b"
+0x4363B5,func,,hud_draw_gauge_4363b5,"the second top gauge (Roll on the boat rides): portrait + bar from boss_hp, x 0 y 0x18 + offset"
 0x77E7DE,data,dword,boss_hp,"16.16 (int word at 0x77E7E0)"
 0x77E7E2,data,word,boss_hp_max,
 # ---- text / font ----
@@ -129,6 +129,22 @@ address,kind,type,name,comment
 0x4F7ABC,label,,gfx_walk_follow_link,"walker follows a bit-0 link node (root OT entry = bucket change)"
 0x4365DA,label,,hud_emit_link_site,"hud_emit_sprite: mov eax,[gfx_cur_ctx]; add eax,0x78; call gfx_add_prim (EDX = packet)"
 0x4365ED,func,,hud_emit_sprite_b,"probable sibling of hud_emit_sprite"
+0x436BA0,func,,hud_draw_minimap,"minimap: 11x11 cells of 6 px in a 54x54 window at (map_x+6, map_y-0x3C); calls map_draw_tiles + map_draw_panel"
+0x436DFC,func,,map_draw_fullscreen,"the full-screen map view (D-pad scrolls 0x559A48), shares map_draw_tiles"
+0x436FD0,func,,map_draw_tiles,"(origin, size in cells, scroll, clip RECT* or 0): player arrow op 38 + cell sprites op 2E, HUD bucket"
+0x43765F,func,,map_draw_panel,"(short rect[4]) translucent op 2A panel + E8 blend packet"
+0x43770B,func,,map_draw_backdrop,"full-screen gradient behind the map view"
+0x4358E8,func,,hud_update_draw,"HUD slide in/out (10 steps of 8 px) + draws every gauge slot"
+0x436785,func,,hud_boss_gauge_add,"(owner, x off, y off, type, ...) takes a free boss slot, offsets stack gauges"
+0x4367FD,func,,hud_boss_gauge_remove,"(owner)"
+0x4368BF,func,,hud_gauge2_show,"(x off, y off, ?) slot 0x559A10; the boat script calls it (0,0)"
+0x4368E1,func,,hud_gauge2_clear,
+0x55995C,data,,hud_slots,"6 x 0x24: life, weapon, 3 boss, gauge2; +0 flags (2 = draw), +0xD offset on, +0xE use +0x14 pos (slides only), +0x14/+0x16 pos, +0x18/+0x1A offset"
+0x511D98,data,dword,hud_slide_state,"0/1 = sliding out, 2 = away, 3/4 = sliding in, 5 = shown (gauges at hard-coded spots + offsets)"
+0x511DA0,data,dword,hud_map_x,"minimap X (320 space): 8, slides from -0x48"
+0x511DA4,data,dword,hud_map_y,"minimap Y: 0x60"
+0x511DA8,data,dword,hud_map_pos_held,"nonzero while hud_slide_update owns map_x/map_y"
+0x511DF1,data,word,map_cell_size,"6"
 0x4F7EF3,label,,gfx_mode_width_site,"push 0x280 = SetDisplayMode width (flip-chain path)"
 0x4F81C1,label,,gfx_viewport_width_site,"D3DVIEWPORT2 width immediate"
 0x4F7F8D,label,,gfx_zbuffer_width_site,"mov eax,0x280 before gfx_create_zbuffer"

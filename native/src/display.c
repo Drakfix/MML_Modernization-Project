@@ -13,11 +13,20 @@
  *   - stretch to the full width: background layers (buckets 7 and 6: sky
  *     tiles, menu wallpaper, title art) and anything 2D that spans the whole
  *     old screen (fades). That art was drawn for 4:3.
- *   - anchor to the left/right screen edge: sprites built by the game's HUD
- *     emitter below the top row (life/weapon gauges; side from the emitter's
- *     own X, see packets.c), and our orbit toast. Other 2D in the same
- *     bucket (title text, the boss gauge row) stays centred, so composite
- *     pieces can't be pulled apart.
+ *   - anchor to a screen corner: sprites built by the game's HUD emitter below
+ *     the top row (life/weapon gauges, bottom left/right; side from the
+ *     emitter's own X, see packets.c), the minimap (top left; everything its
+ *     own draw code allocates, see packets.c) and our orbit toast. Other 2D
+ *     in the same bucket (title text, the boss gauge row) stays centred, so
+ *     composite pieces can't be pulled apart.
+ *   - hud_scale shrinks (or grows) each anchored element about its own screen
+ *     corner. One affine map per corner keeps every piece of an element where
+ *     it belongs relative to the others, slide-in animations included.
+ *   - the top-row gauges (boss gauges, Roll's on the boat rides) move up to
+ *     top_gauge_y, clear of the dialogue boxes that open below the top edge.
+ *     Each gauge moves as a whole (by group, see packets.c), stacked boss
+ *     gauges keep their spacing. If the minimap would touch one of them (last
+ *     frame's box), it steps down below it while that gauge is up.
  *
  * Needs DDrawCompat to allow the mode: SupportedResolutions must list WxH. */
 #include <windows.h>
@@ -46,12 +55,26 @@ typedef HRESULT(WINAPI *draw_prim_t)(void *dev, DWORD type, DWORD fvf, void *ver
 typedef HRESULT(WINAPI *draw_indexed_t)(void *dev, DWORD type, DWORD fvf, void *verts, DWORD vcount,
                                          WORD *idx, DWORD icount, DWORD flags);
 
-enum { PLACE_SHIFT, PLACE_STRETCH, PLACE_LEFT, PLACE_RIGHT };
+enum { PLACE_SHIFT, PLACE_STRETCH, PLACE_LEFT, PLACE_RIGHT, PLACE_TOP_LEFT, PLACE_TOAST, PLACE_TOP_GAUGE };
 #define BUCKET_WORLD 4
 
 static int g_width = 640;
 static float g_offset_x;
 static int g_hud_anchor = 1;
+static float g_hud_scale = 1.0f;
+static float g_map_dx, g_map_dy;   /* minimap move from its own place, device px (x2 the game's) */
+#define MAP_GAME_X 14              /* where the game puts the minimap's panel (320x240) */
+#define MAP_GAME_Y 36
+#define MAP_SIZE 54                /* its panel, square */
+#define BOSS_GAME_Y 16             /* the game's tops of the boss gauges and of Roll's (320x240) */
+#define GAUGE2_GAME_Y 24
+#define MAP_GAP 4.0f               /* device px between a top gauge and the minimap stepping aside */
+static int g_map_x = MAP_GAME_X, g_map_y = MAP_GAME_Y;
+static float g_top_dy[HUD_GROUPS];   /* per group: device px the top gauges move down (negative: up) */
+static int g_cur_group = HUD_GROUP_NONE;
+/* box of the top gauges as drawn (device px): this frame's, and last frame's that the map avoids */
+static float g_top_box[4], g_top_prev[4];
+static int g_top_seen, g_top_prev_seen;
 static int g_active;
 static draw_prim_t g_draw_prim;
 static draw_indexed_t g_draw_indexed;
@@ -79,7 +102,7 @@ static int place(const uint8_t *v, DWORD stride, DWORD count)
     DWORD i;
 
     if (g_cur_pkt && toast_owns((const void *)g_cur_pkt))
-        return g_hud_anchor ? PLACE_LEFT : PLACE_SHIFT;
+        return g_hud_anchor ? PLACE_TOAST : PLACE_SHIFT;
     if (bucket == BUCKET_WORLD)
         return PLACE_SHIFT;
     if (bucket >= 6)
@@ -91,6 +114,11 @@ static int place(const uint8_t *v, DWORD stride, DWORD count)
     }
     if (x0 <= 0.0f && x1 >= 640.0f)
         return PLACE_STRETCH;
+    g_cur_group = g_cur_pkt ? hud_group_of((const void *)g_cur_pkt) : HUD_GROUP_NONE;
+    if (g_cur_group == HUD_GROUP_MAP)
+        return g_hud_anchor ? PLACE_TOP_LEFT : PLACE_SHIFT;
+    if (g_cur_group == HUD_GROUP_BOSS || g_cur_group == HUD_GROUP_GAUGE2)
+        return PLACE_TOP_GAUGE;
     if (g_hud_anchor && g_cur_pkt) {
         switch (hud_side_of((const void *)g_cur_pkt)) {
         case HUD_SIDE_LEFT:  return PLACE_LEFT;
@@ -101,26 +129,61 @@ static int place(const uint8_t *v, DWORD stride, DWORD count)
     return PLACE_SHIFT;
 }
 
+/* How far the minimap steps down (device px, before hud_scale) so that it clears
+ * last frame's top gauges, 0 when it doesn't touch them. */
+static float map_step_down(float s)
+{
+    float x0 = 2.0f * (float)g_map_x * s, x1 = 2.0f * (float)(g_map_x + MAP_SIZE) * s;
+    float y0 = 2.0f * (float)g_map_y * s, y1 = 2.0f * (float)(g_map_y + MAP_SIZE) * s;
+    if (!g_top_prev_seen || x1 + MAP_GAP <= g_top_prev[0] || x0 >= g_top_prev[2] + MAP_GAP ||
+        y1 + MAP_GAP <= g_top_prev[1] || y0 >= g_top_prev[3] + MAP_GAP)
+        return 0.0f;
+    return (g_top_prev[3] + MAP_GAP) / s - 2.0f * (float)g_map_y;
+}
+
 /* Copy (the game may draw the same staged vertices twice) and place X. */
 static void *shifted(DWORD fvf, const void *verts, DWORD count)
 {
     DWORD stride = fvf_stride(fvf), i;
     float scale = 1.0f, add = g_offset_x;
+    float s = 1.0f, px = 0.0f, py = 0.0f;   /* hud_scale about the pivot (px, py), after placing */
+    float yadd = 0.0f;
+    int where;
     if (!stride || count > MAX_VERTS || stride * count > sizeof g_vbuf) {
         g_other_fvf++;
         return NULL;
     }
     census_draw((const float *)verts, stride, count);
-    switch (place((const uint8_t *)verts, stride, count)) {
+    where = place((const uint8_t *)verts, stride, count);
+    switch (where) {
     case PLACE_STRETCH: scale = (float)g_width / 640.0f; add = 0.0f; break;
-    case PLACE_LEFT:    add = 0.0f; break;
-    case PLACE_RIGHT:   add = 2.0f * g_offset_x; break;
-    default:            break;
+    case PLACE_TOAST:    add = 0.0f; break;
+    case PLACE_LEFT:     add = 0.0f; s = g_hud_scale; py = 480.0f; break;
+    case PLACE_RIGHT:    add = 2.0f * g_offset_x; s = g_hud_scale; px = (float)g_width; py = 480.0f; break;
+    case PLACE_TOP_LEFT: add = g_map_dx; yadd = g_map_dy + map_step_down(g_hud_scale); s = g_hud_scale; break;
+    case PLACE_TOP_GAUGE: yadd = g_top_dy[g_cur_group]; break;
+    default:             break;
     }
     memcpy(g_vbuf, verts, stride * count);
     for (i = 0; i < count; i++) {
         float *x = (float *)(g_vbuf + i * stride);
         *x = *x * scale + add;
+        x[1] += yadd;
+        if (s != 1.0f) {
+            x[0] = px + (x[0] - px) * s;
+            x[1] = py + (x[1] - py) * s;
+        }
+        if (where == PLACE_TOP_GAUGE) {
+            if (!g_top_seen) {
+                g_top_box[0] = g_top_box[2] = x[0];
+                g_top_box[1] = g_top_box[3] = x[1];
+                g_top_seen = 1;
+            }
+            if (x[0] < g_top_box[0]) g_top_box[0] = x[0];
+            if (x[0] > g_top_box[2]) g_top_box[2] = x[0];
+            if (x[1] < g_top_box[1]) g_top_box[1] = x[1];
+            if (x[1] > g_top_box[3]) g_top_box[3] = x[1];
+        }
     }
     return g_vbuf;
 }
@@ -152,12 +215,31 @@ float display_world_shift(void)
     return g_active ? g_offset_x : 0.0f;
 }
 
+void display_set_top_gauge_y(int y)
+{
+    g_top_dy[HUD_GROUP_BOSS] = y < 0 ? 0.0f : 2.0f * (float)(y - BOSS_GAME_Y);
+    g_top_dy[HUD_GROUP_GAUGE2] = y < 0 ? 0.0f : 2.0f * (float)(y - GAUGE2_GAME_Y);
+}
+
+void display_set_minimap_pos(int x, int y)
+{
+    g_map_x = x;
+    g_map_y = y;
+    g_map_dx = 2.0f * (float)(x - MAP_GAME_X);
+    g_map_dy = 2.0f * (float)(y - MAP_GAME_Y);
+}
+
+void display_set_hud_scale(float s)
+{
+    g_hud_scale = s < 0.5f ? 0.5f : s > 1.5f ? 1.5f : s;
+}
+
 int display_native_width(void)
 {
     return g_active ? g_width : 640;
 }
 
-int display_install(int screen_w, int screen_h, int width, int hud_anchor)
+int display_install(int screen_w, int screen_h, int width, int hud_anchor, float hud_scale)
 {
     static const uint8_t push_640[] = { 0x68, 0x80, 0x02, 0x00, 0x00 };
     static const uint8_t vp_640[] = { 0xC7, 0x84, 0x24, 0xD8, 0x00, 0x00, 0x00, 0x80, 0x02, 0x00, 0x00 };
@@ -184,10 +266,11 @@ int display_install(int screen_w, int screen_h, int width, int hud_anchor)
     mem_write(G_SITE_CLEAR_W + 1, &w, 4);
     g_offset_x = (float)(g_width - 640) / 2.0f;
     g_hud_anchor = hud_anchor;
+    display_set_hud_scale(hud_scale);
     g_active = 1;
     packets_install();
-    log_printf("display: native widescreen %dx480, 2D/3D shifted by %.1f px (DDrawCompat must allow %dx480)",
-               g_width, g_offset_x, g_width);
+    log_printf("display: native widescreen %dx480, 2D/3D shifted by %.1f px (DDrawCompat must allow %dx480), HUD %s, scale %.2f",
+               g_width, g_offset_x, g_width, g_hud_anchor ? "at the edges" : "centred", g_hud_scale);
     return 1;
 }
 
@@ -200,6 +283,9 @@ void display_frame(void)
         return;
     census_frame();
     packets_frame_start();
+    memcpy(g_top_prev, g_top_box, sizeof g_top_prev);
+    g_top_prev_seen = g_top_seen;
+    g_top_seen = 0;
     vt = ddshim_device_vtable();
     if (vt && !g_draw_prim) {
         void *mine1 = (void *)hooked_draw_prim, *mine2 = (void *)hooked_draw_indexed;

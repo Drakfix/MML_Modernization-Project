@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <float.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "game.h"
@@ -11,6 +12,13 @@
 #define G_SITE_WALK_DISPATCH  GA(0x4F7923u)   /* jmp [ecx*4 + 0x4F7624]; packet at [esp+0x64] */
 #define G_SITE_WALK_LINK      GA(0x4F7ABCu)   /* following a link node (bit 0 set) in [esp+0x64] */
 #define G_SITE_HUD_EMIT_LINK  GA(0x4365DAu)   /* hud_emit_sprite, right before it links EDX = packet into ctx+0x78 */
+#define G_SITE_MAP_START      GA(0x436CFDu)   /* minimap (FUN_00436BA0): call to the tile drawer */
+#define G_SITE_MAP_END        GA(0x436D0Bu)   /* minimap exit, after the panel */
+#define G_GFX_ARENA_CURSOR    0x77E6DCu       /* packet bump allocator */
+#define G_SITE_BOSS_START     GA(0x435C73u)   /* HUD draw: body of the boss slot loop */
+#define G_SITE_BOSS_END       GA(0x435CB5u)   /* after it */
+#define G_SITE_GAUGE2_START   GA(0x435CC2u)   /* call setup of hud_draw_gauge_4363b5 (Roll on the boat) */
+#define G_SITE_GAUGE2_END     GA(0x435CCCu)   /* the jump after it */
 #define G_SITE_DEFERRED_DRAW  GA(0x4F7AE8u)   /* call 0x4F44C7 for each deferred packet (EAX), after the walk */
 #define WALK_PKT_SLOT         0x64
 #define RECENT                1024
@@ -109,6 +117,72 @@ static void on_hud_emit_link(regs_t *r)
     t->side = (xl + xr) / 2 < 160 ? HUD_SIDE_LEFT : HUD_SIDE_RIGHT;
 }
 
+/* HUD elements drawn by code of their own, told apart by where their packets
+ * lie: everything a piece of HUD code allocates sits between the packet arena
+ * cursor at its start and at its end, so that range is the element.
+ *   - the minimap (FUN_00436BA0): tiles, arrow and panel, from its call to the
+ *     tile drawer (0x436CFD) to its exit (0x436D0B, also where its early outs
+ *     jump). The full-screen map view shares the tile drawer, not these sites.
+ *   - the boss gauges: the loop over the three boss slots in the HUD draw
+ *     (0x4358E8), from its body (0x435C73, first pass) to after it (0x435CB5).
+ *     Frame, fill (hud_emit_sprite_b) and whatever else a slot draws.
+ *   - the second top gauge, Roll's on the boat rides (hud_draw_gauge_4363b5):
+ *     its call (0x435CC2) to the jump after it (0x435CCC).
+ * Arenas alternate per frame, so the last two ranges of each are kept, each
+ * honoured for the frame it was built in and the next, in the same gfx ctx. */
+typedef struct { uint32_t lo, hi; unsigned frame; uint32_t ctx; } hud_range_t;
+static struct {
+    hud_range_t r[2];
+    unsigned next;
+    uint32_t lo;
+    int open;
+} g_group[HUD_GROUPS];
+
+static void group_start(int g)
+{
+    if (g_group[g].open)   /* the boss loop's body runs once per slot */
+        return;
+    g_group[g].lo = GVAR(uint32_t, G_GFX_ARENA_CURSOR);
+    g_group[g].open = 1;
+}
+
+static void group_end(int g)
+{
+    hud_range_t *m;
+    if (!g_group[g].open)   /* jumped to without passing the start */
+        return;
+    g_group[g].open = 0;
+    m = &g_group[g].r[g_group[g].next++ & 1];
+    m->lo = g_group[g].lo;
+    m->hi = GVAR(uint32_t, G_GFX_ARENA_CURSOR);
+    m->frame = g_frame;
+    m->ctx = GVAR(uint32_t, G_GFX_CUR_CTX);
+}
+
+static void on_map_start(regs_t *r) { (void)r; group_start(HUD_GROUP_MAP); }
+static void on_map_end(regs_t *r) { (void)r; group_end(HUD_GROUP_MAP); }
+static void on_boss_start(regs_t *r) { (void)r; group_start(HUD_GROUP_BOSS); }
+static void on_boss_end(regs_t *r) { (void)r; group_end(HUD_GROUP_BOSS); }
+static void on_gauge2_start(regs_t *r) { (void)r; group_start(HUD_GROUP_GAUGE2); }
+static void on_gauge2_end(regs_t *r) { (void)r; group_end(HUD_GROUP_GAUGE2); }
+
+int hud_group_of(const void *pkt)
+{
+    uint32_t a, ctx;
+    int g, i;
+    if (g_cur_bucket != 2)   /* all of them draw into the HUD bucket */
+        return HUD_GROUP_NONE;
+    a = GADDR(pkt);
+    ctx = GVAR(uint32_t, G_GFX_CUR_CTX);
+    for (g = 0; g < HUD_GROUPS; g++)
+        for (i = 0; i < 2; i++) {
+            const hud_range_t *m = &g_group[g].r[i];
+            if (a >= m->lo && a < m->hi && g_frame - m->frame <= 1 && m->ctx == ctx)
+                return g;
+        }
+    return HUD_GROUP_NONE;
+}
+
 int hud_side_of(const void *pkt)
 {
     static int logged;
@@ -132,8 +206,76 @@ int hud_side_of(const void *pkt)
     return HUD_SIDE_NONE;
 }
 
+/* [debug] hud_probe=1: who links what into OT buckets 2/3 (HUD, dialogue), with the
+ * first X/Y of each packet, summed every 300 frames. Hooks gfx_add_prim, which isn't
+ * a recompiler patch site: run with [debug] recomp=off. */
+#define PROBE_SITES 128
+typedef struct { uint32_t ret; uint8_t op, bucket; unsigned n; int x0, x1, y0, y1; int dumped; } probe_t;
+static probe_t g_probe[PROBE_SITES];
+static int g_probe_on;
+
+static void on_add_prim_probe(regs_t *r)
+{
+    uint32_t ctx = GVAR(uint32_t, G_GFX_CUR_CTX) + 0x70;
+    uint32_t ret = GVAR(uint32_t, site_esp(r));
+    const uint8_t *pkt;
+    int b, i, x, y;
+    if (r->eax < ctx || r->eax >= ctx + 32)
+        return;
+    b = (int)((r->eax - ctx) / 4);
+    if (b != 3 && b != 2)
+        return;
+    pkt = (const uint8_t *)GUEST(r->edx);
+    for (i = 0; i < PROBE_SITES; i++)
+        if (!g_probe[i].ret || (g_probe[i].ret == ret && g_probe[i].op == pkt[7] && g_probe[i].bucket == b))
+            break;
+    if (i == PROBE_SITES)
+        return;
+    if (!g_probe[i].ret) {
+        g_probe[i].ret = ret; g_probe[i].op = pkt[7]; g_probe[i].bucket = (uint8_t)b;
+        g_probe[i].x0 = g_probe[i].y0 = 99999; g_probe[i].x1 = g_probe[i].y1 = -99999;
+    }
+    x = *(const int16_t *)(pkt + 8); y = *(const int16_t *)(pkt + 0xA);
+    if (x < g_probe[i].x0) g_probe[i].x0 = x;
+    if (x > g_probe[i].x1) g_probe[i].x1 = x;
+    if (y < g_probe[i].y0) g_probe[i].y0 = y;
+    if (y > g_probe[i].y1) g_probe[i].y1 = y;
+    g_probe[i].n++;
+    if (g_probe[i].dumped < 2) {
+        char hex[0x30 * 3 + 1];
+        int k;
+        g_probe[i].dumped++;
+        for (k = 0; k < 0x30; k++)
+            sprintf_s(hex + k * 3, 4, "%02X ", pkt[k]);
+        log_printf("probe new b%d ret %08X op %02X pkt %08X: %s", b, ret, pkt[7], r->edx, hex);
+    }
+}
+
+static void probe_frame(void)
+{
+    int i;
+    if (!g_probe_on || g_frame % 300)
+        return;
+    log_printf("probe summary frame %u:", g_frame);
+    for (i = 0; i < PROBE_SITES && g_probe[i].ret; i++) {
+        log_printf("  b%d ret %08X op %02X n %u x %d..%d y %d..%d", g_probe[i].bucket, g_probe[i].ret,
+                   g_probe[i].op, g_probe[i].n, g_probe[i].x0, g_probe[i].x1, g_probe[i].y0, g_probe[i].y1);
+        g_probe[i].n = 0;
+        g_probe[i].x0 = g_probe[i].y0 = 99999; g_probe[i].x1 = g_probe[i].y1 = -99999;
+    }
+}
+
+void packets_probe_enable(void)
+{
+    static const uint8_t add_prim_bytes[] = { 0x51, 0x8B, 0x08, 0x89, 0x0A };
+    if (hook_mid(GA(0x4F87A6u), sizeof add_prim_bytes, add_prim_bytes, on_add_prim_probe))
+        g_probe_on = 1;
+    log_printf("probe: add_prim hook %s", g_probe_on ? "on" : "FAILED");
+}
+
 void packets_frame_start(void)
 {
+    probe_frame();
     if (g_census && g_frame == TRACE_FRAME) {
         int i;
         log_printf("walk trace (frame %u, %d events):", g_frame, g_trace_n);
@@ -157,6 +299,12 @@ int packets_install(void)
     static const uint8_t link_bytes[] = { 0x88, 0xF9, 0x80, 0xE1, 0xFE, 0x88, 0x4C, 0x24, 0x64 };
     static const uint8_t hud_link_bytes[] = { 0xA1, 0x74, 0xEA, 0x77, 0x00, 0x83, 0xC0, 0x78 };
     static const uint8_t deferred_bytes[] = { 0xE8, 0xDA, 0xC9, 0xFF, 0xFF };
+    static const uint8_t map_start_bytes[] = { 0xE8, 0xCE, 0x02, 0x00, 0x00 };   /* call map_draw_tiles */
+    static const uint8_t map_end_bytes[] = { 0x83, 0xC4, 0x24, 0x5E, 0x5A };     /* add esp,0x24; pop esi; pop edx */
+    static const uint8_t boss_start_bytes[] = { 0x8D, 0x4A, 0x02, 0x89, 0xC8 };  /* lea ecx,[edx+2]; mov eax,ecx */
+    static const uint8_t boss_end_bytes[] = { 0xF6, 0x05, 0x10, 0x9A, 0x55, 0x00, 0x02 };   /* test byte [0x559A10],2 */
+    static const uint8_t gauge2_start_bytes[] = { 0xB8, 0x10, 0x9A, 0x55, 0x00 };   /* mov eax,0x559A10 */
+    static const uint8_t gauge2_end_bytes[] = { 0xE9, 0xA9, 0x03, 0x00, 0x00 };     /* jmp to the HUD draw's exit */
     if (!hook_mid(G_SITE_WALK_DISPATCH, sizeof dispatch_bytes, dispatch_bytes, on_dispatch) ||
         !hook_mid(G_SITE_WALK_LINK, sizeof link_bytes, link_bytes, on_link) ||
         !hook_mid(G_SITE_HUD_EMIT_LINK, sizeof hud_link_bytes, hud_link_bytes, on_hud_emit_link) ||
@@ -164,6 +312,14 @@ int packets_install(void)
         log_printf("packets: walker hooks failed");
         return 0;
     }
+    if (!hook_mid(G_SITE_MAP_START, sizeof map_start_bytes, map_start_bytes, on_map_start) ||
+        !hook_mid(G_SITE_MAP_END, sizeof map_end_bytes, map_end_bytes, on_map_end))
+        log_printf("packets: minimap hooks failed, the map stays in the 4:3 picture");
+    if (!hook_mid(G_SITE_BOSS_START, sizeof boss_start_bytes, boss_start_bytes, on_boss_start) ||
+        !hook_mid(G_SITE_BOSS_END, sizeof boss_end_bytes, boss_end_bytes, on_boss_end) ||
+        !hook_mid(G_SITE_GAUGE2_START, sizeof gauge2_start_bytes, gauge2_start_bytes, on_gauge2_start) ||
+        !hook_mid(G_SITE_GAUGE2_END, sizeof gauge2_end_bytes, gauge2_end_bytes, on_gauge2_end))
+        log_printf("packets: top gauge hooks failed, the boss/Roll gauges stay in place");
     log_printf("packets: tracking walker dispatch, buckets and HUD sprites");
     return 1;
 }

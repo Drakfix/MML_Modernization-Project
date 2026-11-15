@@ -760,7 +760,11 @@ void mml_init(void)
         if (_stricmp(mode, "native") == 0)
             g_native_wide = display_install(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
                                             GetPrivateProfileIntA("video", "native_width", 0, g_ini),
-                                            GetPrivateProfileIntA("video", "hud_edges", 1, g_ini));
+                                            GetPrivateProfileIntA("video", "hud_edges", 1, g_ini),
+                                            ini_float("video", "hud_scale", 1.0f));
+        display_set_minimap_pos(GetPrivateProfileIntA("video", "minimap_x", 6, g_ini),
+                                GetPrivateProfileIntA("video", "minimap_y", 12, g_ini));
+        display_set_top_gauge_y(GetPrivateProfileIntA("video", "top_gauge_y", 4, g_ini));
         install_widescreen();
     }
     else
@@ -839,6 +843,8 @@ void mml_init(void)
     g_player_log = GetPrivateProfileIntA("debug", "player_log", 0, g_ini);
     if (GetPrivateProfileIntA("debug", "census", 0, g_ini))
         census_enable();
+    if (GetPrivateProfileIntA("debug", "hud_probe", 0, g_ini))
+        packets_probe_enable();
     {
         char f[16];
         ini_string("video", "fog", "original", f, sizeof f);

@@ -15,7 +15,14 @@ int packets_install(void);
  * below the top row), or HUD_SIDE_NONE for everything else. */
 enum { HUD_SIDE_NONE, HUD_SIDE_LEFT, HUD_SIDE_RIGHT };
 int hud_side_of(const void *pkt);
+
+/* HUD elements drawn by code of their own (see packets.c): the minimap, the boss
+ * gauges and the second top gauge (Roll's on the boat rides); HUD_GROUP_NONE
+ * for everything else. */
+enum { HUD_GROUP_MAP, HUD_GROUP_BOSS, HUD_GROUP_GAUGE2, HUD_GROUPS, HUD_GROUP_NONE = -1 };
+int hud_group_of(const void *pkt);
 void packets_frame_start(void);   /* call right before the walker runs */
+void packets_probe_enable(void);   /* [debug] hud_probe=1 (needs recomp=off) */
 
 /* Census: per bucket+opcode stats of what reaches DrawPrimitive, dumped to
  * mml.log every few seconds. */

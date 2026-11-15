@@ -39,7 +39,11 @@ Output is `native\build\mml.dll` (32-bit, static runtime, no redistributables).
 [video]
 aspect=16:9          ; or 4:3
 mode=native          ; or anamorphic
-hud_edges=1          ; native: push the life/weapon gauges to the screen edges
+hud_edges=1          ; native: push the life/weapon gauges and the minimap to the screen corners
+hud_scale=1          ; native: corner HUD size (0.5 to 1.5), each element shrinks toward its corner
+minimap_x=6          ; native: minimap panel corner in 320x240 (the game's own: 14, 36)
+minimap_y=12
+top_gauge_y=4        ; native: top of the boss / Roll gauges in 320x240 (-1 = the game's 16 / 24)
 closer_factor=0.859375
 
 [controls]
