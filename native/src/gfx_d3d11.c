@@ -774,7 +774,7 @@ static void d3d_clear(const gfx_rect *rect, int color_too, uint32_t color, int d
     }
     if (depth_too) {
         static const float far_[4] = { 1, 1, 1, 1 };
-        ID3D11DeviceContext_ClearDepthStencilView(g.ctx, g.tg[g.cur].dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, depth, 0);
+        ID3D11DeviceContext_ClearDepthStencilView(g.ctx, g.tg[g.cur].dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, gfx_depth_of(depth), 0);
         if (g.tg[g.cur].eff_rtv)
             ID3D11DeviceContext_ClearRenderTargetView(g.ctx, g.tg[g.cur].eff_rtv, far_);
         g_depth_done[g.cur] = 0;

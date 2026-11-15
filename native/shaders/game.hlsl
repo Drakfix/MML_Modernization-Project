@@ -35,18 +35,22 @@ struct PSIn
     nointerpolation float4 flat_color : COLOR1;
     float2 uv : TEXCOORD0;
     float fog : FOG;
+    float lin_z : TEXCOORD1;  // the game's linear z, interpolated with perspective (exact)
 };
 
-// The game's depth is camera z / 16384, so everything past 16384 units has
-// z > 1 and the depth clip would throw it away: with the wider draw distance
-// that is the far side of the big maps (Uptown's horizon). Depth tests only
-// need the order, so z is kept as it is up to DEPTH_KNEE and squeezed into
-// the rest of 0..1 beyond it (monotonic, never reaching 1).
-#define DEPTH_KNEE 0.9
-float depth_range(float z)
+// The game's depth is linear: camera z / 16384. The rasterizer interpolates
+// depth in a straight line across the screen, which is right only for values
+// linear in 1 / z (like rhw). Linear z put the middle of a big triangle that
+// reaches close to the camera too far away, so the ground near the camera
+// lost to the cliff faces under it (issue #10: dark wedges and flicker on
+// high ground). 1 - DEPTH_NEAR / z is linear in 1 / z, keeps the order,
+// and stays below 1 for the far side of the big maps (z > 1 past 16384
+// units). DEPTH_NEAR (4 units) is far inside the game's near plane;
+// gfx_depth_of() in gfx.h is the same mapping for depth clears.
+#define DEPTH_NEAR (1.0 / 4096.0)
+float depth_of(float z)
 {
-    float s = max(z - DEPTH_KNEE, 0.0) / (1.0 - DEPTH_KNEE);
-    return z <= DEPTH_KNEE ? z : DEPTH_KNEE + (1.0 - DEPTH_KNEE) * s / (1.0 + s);
+    return z > DEPTH_NEAR ? 1.0 - DEPTH_NEAR / z : 0.0;
 }
 
 PSIn vs_main(VSIn i)
@@ -61,7 +65,8 @@ PSIn vs_main(VSIn i)
                         1.0 - i.pos.y / app_size.y * 2.0);
     // multiply through by w so texture coordinates and colours interpolate
     // with perspective, exactly like rhw did on the old pipeline
-    o.pos = float4(ndc * w, depth_range(i.pos.z) * w, w);
+    o.pos = float4(ndc * w, depth_of(i.pos.z) * w, w);
+    o.lin_z = i.pos.z;
     o.color = i.diffuse;
     o.flat_color = i.diffuse;
     o.uv = i.uv;
@@ -103,7 +108,7 @@ PSOut ps_main(PSIn i)
     // The game's depth is linear (camera z / 16384). Effects tools expect a
     // perspective depth buffer: store it the way ReShade's default
     // linearisation (far plane 1000) reads back as the same linear value.
-    o.depth = float4(i.pos.z * 1000.0 / (1.0 + i.pos.z * 999.0), 0, 0, c.a);
+    o.depth = float4(i.lin_z * 1000.0 / (1.0 + i.lin_z * 999.0), 0, 0, c.a);
     return o;
 }
 

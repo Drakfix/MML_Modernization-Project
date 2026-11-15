@@ -76,6 +76,18 @@ void gfx_tex_size(const gfx_tex *t, int *w, int *h);
 void gfx_set_texture(gfx_tex *t);           /* NULL = untextured */
 void gfx_set_state(const gfx_state *s);
 void gfx_draw(int prim, const gfx_vertex *v, int count);
+/* The depth buffer holds 1 - GFX_DEPTH_NEAR / z for the game's linear z (camera
+ * z / 16384), the same mapping as the shaders' depth_of(): a value the GPU can
+ * interpolate across the screen exactly (it is linear in 1 / z, like rhw). A
+ * clear at 1 or beyond stays 1, behind everything. */
+#define GFX_DEPTH_NEAR (1.0f / 4096.0f)
+static inline float gfx_depth_of(float z)
+{
+    if (z >= 1.0f)
+        return 1.0f;
+    return z > GFX_DEPTH_NEAR ? 1.0f - GFX_DEPTH_NEAR / z : 0.0f;
+}
+
 /* clear in the game's coordinates; rect NULL = everything */
 void gfx_clear(const gfx_rect *rect, int color_too, uint32_t color, int depth_too, float depth);
 void gfx_present(void);

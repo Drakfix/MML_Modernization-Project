@@ -11,13 +11,12 @@ layout(location = 1) flat out vec4 v_flat;
 layout(location = 2) out vec2 v_uv;
 layout(location = 3) out float v_fog;
 
-// camera z / 16384 goes past 1 beyond 16384 units: kept up to the knee, squeezed below 1
-// after it, so the far side of the big maps isn't clipped (game.hlsl's depth_range)
-const float DEPTH_KNEE = 0.9;
-float depth_range(float z)
+// the game's linear z (camera z / 16384) as a depth the rasterizer interpolates exactly
+// across the screen (linear in 1 / z, like rhw), below 1 for any z: game.hlsl's depth_of
+const float DEPTH_NEAR = 1.0 / 4096.0;
+float depth_of(float z)
 {
-    float s = max(z - DEPTH_KNEE, 0.0) / (1.0 - DEPTH_KNEE);
-    return z <= DEPTH_KNEE ? z : DEPTH_KNEE + (1.0 - DEPTH_KNEE) * s / (1.0 + s);
+    return z > DEPTH_NEAR ? 1.0 - DEPTH_NEAR / z : 0.0;
 }
 
 void main()
@@ -29,7 +28,7 @@ void main()
     // points down, as the game's does
     vec2 ndc = vec2(in_pos.x / pc.app_size.x * 2.0 - 1.0, in_pos.y / pc.app_size.y * 2.0 - 1.0);
     // multiplied through by w so texture coordinates and colours interpolate with perspective
-    gl_Position = vec4(ndc * w, depth_range(in_pos.z) * w, w);
+    gl_Position = vec4(ndc * w, depth_of(in_pos.z) * w, w);
     v_color = in_diffuse.bgra;
     v_flat = in_diffuse.bgra;
     v_uv = in_uv;

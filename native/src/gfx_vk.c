@@ -1810,7 +1810,7 @@ static void vk_clear(const gfx_rect *rect, int color_too, uint32_t color, int de
     }
     if (depth_too) {
         ca[n].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-        ca[n].clearValue.depthStencil.depth = depth;
+        ca[n].clearValue.depthStencil.depth = gfx_depth_of(depth);
         n++;
     }
     memset(&cr, 0, sizeof cr);
