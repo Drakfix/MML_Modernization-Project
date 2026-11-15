@@ -342,6 +342,11 @@ public class MmlActivity extends SDLActivity {
         return Updater.sVersion;
     }
 
+    /* the newest release's text (Markdown); the start menu shows a short version of it */
+    public static String updateNotes() {
+        return Updater.sNotes;
+    }
+
     /* a file bundled in the app (assets: the intro) to dest; false if it isn't there */
     public static boolean extractAsset(String name, String dest) {
         File out = new File(dest), part = new File(dest + ".part");

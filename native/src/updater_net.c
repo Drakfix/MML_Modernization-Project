@@ -11,6 +11,7 @@
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
 #include <windows.h>
 #include <stdint.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -147,6 +148,18 @@ const char *update_current(void)
     const char *sp;
     if (!v[0]) {   /* MML_NATIVE_BUILD "0.8.0-beta" (anything after a space is the build's note) */
         strcpy_s(v, sizeof v, MML_NATIVE_BUILD);
+        /* (testing the updater: MML_UPDATE_AS=0.8.0-beta makes this build look like that version) */
+        {
+            char as[48] = "";
+#ifdef _WIN32
+            GetEnvironmentVariableA("MML_UPDATE_AS", as, sizeof as);
+#else
+            if (getenv("MML_UPDATE_AS"))
+                snprintf(as, sizeof as, "%s", getenv("MML_UPDATE_AS"));
+#endif
+            if (as[0])
+                _snprintf_s(v, sizeof v, _TRUNCATE, "%s", as);
+        }
         if ((sp = strchr(v, ' ')) != NULL)
             v[sp - v] = 0;
     }
@@ -195,6 +208,66 @@ static const char *json_str(const char *from, const char *key, char *out, size_t
     return q + 1;
 }
 
+/* a JSON string value, its escapes decoded (\n, \", \\, \uXXXX as UTF-8), into a new buffer */
+static char *json_str_alloc(const char *from, const char *key)
+{
+    char pat[64], *out;
+    const char *p;
+    size_t o = 0, cap;
+    _snprintf_s(pat, sizeof pat, _TRUNCATE, "\"%s\"", key);
+    p = strstr(from, pat);
+    if (!p)
+        return NULL;
+    p += strlen(pat);
+    while (*p == ' ' || *p == ':' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    if (*p++ != '"')
+        return NULL;
+    cap = strlen(p) + 1;
+    if (!(out = (char *)malloc(cap)))
+        return NULL;
+    while (*p && *p != '"' && o + 4 < cap) {
+        if (*p != '\\') {
+            out[o++] = *p++;
+            continue;
+        }
+        p++;
+        switch (*p) {
+        case 'n': out[o++] = '\n'; p++; break;
+        case 'r': p++; break;
+        case 't': out[o++] = ' '; p++; break;
+        case 'u': {
+            unsigned c = 0;
+            int i;
+            p++;
+            for (i = 0; i < 4 && isxdigit((unsigned char)*p); i++, p++)
+                c = c * 16 + (unsigned)(isdigit((unsigned char)*p) ? *p - '0' : (tolower((unsigned char)*p) - 'a' + 10));
+            if (c < 0x80) {
+                out[o++] = (char)c;
+            } else if (c < 0x800) {
+                out[o++] = (char)(0xC0 | (c >> 6));
+                out[o++] = (char)(0x80 | (c & 0x3F));
+            } else {
+                out[o++] = (char)(0xE0 | (c >> 12));
+                out[o++] = (char)(0x80 | ((c >> 6) & 0x3F));
+                out[o++] = (char)(0x80 | (c & 0x3F));
+            }
+            break;
+        }
+        default: if (*p) out[o++] = *p++; break;   /* \" \\ \/ */
+        }
+    }
+    out[o] = 0;
+    return out;
+}
+
+static char *g_notes;   /* the newest release's text */
+
+const char *update_release_notes(void)
+{
+    return g_notes && g_state != UPD_CHECKING ? g_notes : "";
+}
+
 static DWORD WINAPI check_thread(LPVOID unused)
 {
     char *json = NULL, tag[64], name[128], num[32];
@@ -212,6 +285,13 @@ static DWORD WINAPI check_thread(LPVOID unused)
     }
     json_str(json, "tag_name", tag, sizeof tag);
     strcpy_s(g_ver, sizeof g_ver, tag[0] == 'v' || tag[0] == 'V' ? tag + 1 : tag);
+    {
+        char *notes = json_str_alloc(json, "body");
+        if (notes) {
+            free(g_notes);   /* (a check at a time: nothing reads it while UPD_CHECKING) */
+            g_notes = notes;
+        }
+    }
     if (!tag[0] || version_number(tag) <= version_number(update_current())) {
         _snprintf_s(g_msg, sizeof g_msg, _TRUNCATE, "This is the newest version (%s)", update_current());
         g_state = UPD_UPTODATE;

@@ -16,3 +16,5 @@ void update_install_begin(void);           /* download it (when one is available
 /* its state now; msg: a line for the screen; ver: the newest release's version; progress 0..1
    while downloading */
 int update_poll(char *msg, size_t n, char *ver, size_t vn, float *progress);
+/* the newest release's notes (its GitHub release text, Markdown) once a check found one; "" before */
+const char *update_release_notes(void);

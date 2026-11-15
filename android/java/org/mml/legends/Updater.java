@@ -42,7 +42,7 @@ final class Updater {
 
     static volatile int sState = IDLE;
     static volatile long sDone, sTotal;
-    static volatile String sMessage = "", sVersion = "";
+    static volatile String sMessage = "", sVersion = "", sNotes = "";
     static String sUrl = "", sDigest = "";
     static long sSize;
     static File sApk;
@@ -125,6 +125,7 @@ final class Updater {
                         }
                     }
                     sVersion = tag.replaceFirst("^[vV]", "");
+                    sNotes = rel.optString("body", "");
                     if (!newer(tag, mine)) {
                         sMessage = "You have the newest version (" + mine + ")";
                         sState = UPTODATE;

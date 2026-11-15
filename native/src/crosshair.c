@@ -36,6 +36,7 @@
 #define XH_FEATHER 1.0f     /* window pixels the outer edge fades over */
 #define XH_ALPHA  0.65f     /* at full visibility; it fades out a few seconds after the last shot */
 #define XH_ON_TIGHT 0.15f   /* with an enemy under it: the box closes in by this much and goes opaque */
+#define XH_ASSIST_TIGHT 0.4f   /* ...by this much with aim assist (a tighter, more precise mark) */
 #define XH_ON_EASE  0.2f    /* per drawn frame toward on/off */
 
 /* the polyline P[0..3] offset sideways by d (left normal), mitred at the two inner points; the
@@ -116,7 +117,7 @@ static void draw(void *user, int w, int h)
     (void)user;
     on += ((controls_aim_on_enemy() ? 1.0f : 0.0f) - on) * XH_ON_EASE;
     a = vis * (XH_ALPHA + (1.0f - XH_ALPHA) * on);
-    sc = 1.0f - XH_ON_TIGHT * on;
+    sc = 1.0f - (controls_aim_assist_on() ? XH_ASSIST_TIGHT : XH_ON_TIGHT) * on;
     if (a <= 0.0f || menu_blocks_input())
         return;
     if (controls_aim_point(&px, &py, &pz)) {   /* vertical aim: where the camera looks */

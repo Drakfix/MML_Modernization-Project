@@ -55,6 +55,12 @@ enum {
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
     IT_HUD_SCALE,    /* size of the corner HUD: gauges and minimap ([video] hud_scale) */
     IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR, IT_LOCKCAM, IT_AIMSENS,
+    IT_STYLE,        /* combat style: a preset of the rows below (Classic / Adventure / Shooter), or Custom */
+    IT_AIMBTN,       /* aim button: lock-on / free aim ([controls] aim_button) */
+    IT_MOVESHOOT,    /* move while shooting ([controls] walk_shoot) */
+    IT_BACKPEDAL,    /* backpedal while shooting: walk / jog ([controls] backpedal) */
+    IT_ASSIST,       /* aim assist ([controls] aim_assist) */
+    IT_SHCAM,        /* camera position: behind / over the shoulder ([controls] camera_shoulder) */
     IT_TRANSITION,   /* room transition speed ([general] transition_speed) */
     /* the keyboard's keys for the modern controls ([controls] key_*: two each), and putting them back */
     IT_KEY, IT_KEY_RESET,
@@ -107,9 +113,16 @@ typedef struct {
     int def;
 } item;
 
-static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "GAME" };
+static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "COMBAT", "GAME" };
 #define AIM_HELP "Camera: firing turns Mega Man to where the camera looks. Character: shots go where he faces."
-#define XH_HELP "With camera aim, a marker shows where your shots go."
+#define XH_HELP "Marks where camera-aimed shots go: while aiming, or always."
+#define STYLE_HELP "Sets the aiming options below at once. Classic: as the original. Adventure: lock-on, and you " \
+    "keep moving while shooting. Shooter: a camera over the shoulder, free aim that zooms in, no lock-on."
+#define AIMBTN_HELP "Lock-on: holding aim locks on to the nearest enemy. Free aim: it aims over the shoulder instead."
+#define MOVESHOOT_HELP "On: walking keeps going while you shoot, and aiming you move every way. Off: as the original."
+#define BACKPEDAL_HELP "Moving away from the target while shooting. Walk: a quick walk backward. Jog: faster."
+#define ASSIST_HELP "Over an enemy, the camera turns slower and the crosshair closes in."
+#define SHCAM_HELP "Over the shoulder: the camera stays beside Mega Man, and aiming zooms in."
 #define AIMSENS_HELP "Camera speed while aiming over the shoulder with no target, for finer aim."
 #define TRANS_HELP "Plays room changes (doors, ladders) faster: the wipe, the black screen and the room setup. "     "The game was made to hide loading from the disc there; now the next room is ready long before."
 #define LOCKCAM_HELP "Over the shoulder: aiming looks past Mega Man's shoulder, at the locked enemy or the horizon, and he keeps moving. R3 swaps sides."
@@ -131,23 +144,30 @@ static const item g_game_items[] = {
     { 2, IT_INVERT_X, "Invert camera X", "Flips left and right on the camera stick." },
     { 2, IT_INVERT_Y, "Invert camera Y", "Flips up and down on the camera stick and the mouse." },
     { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off." },
-    { 2, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to, and of the crosshair." },
-    { 2, IT_AIM, "Shots aim", AIM_HELP },
-    { 2, IT_CROSSHAIR, "Crosshair", XH_HELP },
-    { 2, IT_LOCKCAM, "Lock-on camera", LOCKCAM_HELP },
-    { 2, IT_AIMSENS, "Aim sensitivity", AIMSENS_HELP },
-    { 3, IT_TRANSITION, "Room transitions", TRANS_HELP },
+    { 3, IT_STYLE, "Combat style", STYLE_HELP },
+    { 3, IT_SHCAM, "Camera position", SHCAM_HELP },
+    { 3, IT_AIMBTN, "Aim button", AIMBTN_HELP },
+    { 3, IT_LOCKCAM, "Lock-on camera", LOCKCAM_HELP },
+    { 3, IT_AIM, "Shots aim", AIM_HELP },
+    { 3, IT_AIMSENS, "Aim sensitivity", AIMSENS_HELP },
+    { 3, IT_ASSIST, "Aim assist", ASSIST_HELP },
+    { 3, IT_MOVESHOOT, "Move while shooting", MOVESHOOT_HELP },
+    { 3, IT_BACKPEDAL, "Backpedal", BACKPEDAL_HELP },
+    { 3, IT_CROSSHAIR, "Crosshair", XH_HELP },
+    { 3, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to, and of the crosshair." },
+    { 4, IT_TRANSITION, "Room transitions", TRANS_HELP },
 };
 
 /* ---- the start menu's pages: everything the launcher has ----
    Names and descriptions say what each setting technically is and what it costs, as a PC game's
    settings do; the description is also where a newcomer finds out what it means. */
-static const char *const START_PAGES[] = { "GAME", "DISPLAY", "GRAPHICS", "CONTROLS", "BUTTONS" };
+static const char *const START_PAGES[] = { "GAME", "DISPLAY", "GRAPHICS", "CONTROLS", "COMBAT", "BUTTONS" };
 #define PAGE_FILES 0   /* GAME: the versions (imported where there is an importer), language, launch, updates */
 #define PG_DISPLAY 1
 #define PG_GRAPHICS 2
 #define PG_CONTROLS 3
-#define PG_BUTTONS 4
+#define PG_COMBAT 4    /* the combat style and every aiming / shooting option */
+#define PG_BUTTONS 5
 
 static const choice CH_RENDERER[] = { { "Direct3D 11", "video.renderer=mml;video.backend=d3d11" },
                                       { "Vulkan", "video.renderer=mml;video.backend=vulkan" },
@@ -186,8 +206,9 @@ static const choice CH_ACTION[] = { { "Jump", "=jump" }, { "Shoot", "=shoot" }, 
     "mouse button (Esc or B cancels). A second key, such as the arrows for moving, stays as it is."
 #define START_AIM_HELP "Camera: firing turns Mega Man toward where the camera looks, so shots go there, up and down " \
     "included. Character: shots go where Mega Man faces, as in the original."
-#define START_XH_HELP "With Aim mode on Camera, a crosshair marks where your shots go. It appears with the first " \
-    "shot and fades a few seconds after the last."
+#define START_XH_HELP "Marks where your shots go when they follow the camera. While aiming: with camera aim it " \
+    "appears with the first shot and fades a few seconds after the last, and it shows the whole time you aim over " \
+    "the shoulder. Always: shown all the time with camera aim. Off: never."
 #define WL (PL_WIN | PL_LINUX)
 
 static const item g_start_items[] = {
@@ -329,19 +350,44 @@ static const item g_start_items[] = {
       NCH(CH_TILT) },
     { PG_CONTROLS, IT_CHOICE, "Dodge roll speed", "Original is the 1997 cartwheel. Fast and Snappy cover the "
       "distance sooner, with a faster animation.", CH_ROLL, NCH(CH_ROLL), 0, NULL, 1 },
-    { PG_CONTROLS, IT_SECTION, "Aiming" },
-    { PG_CONTROLS, IT_AIM, "Aim mode", START_AIM_HELP },
-    { PG_CONTROLS, IT_CROSSHAIR, "Crosshair", START_XH_HELP },
-    { PG_CONTROLS, IT_LOCKCAM, "Lock-on camera", "Classic: while locked on, the camera swings behind Mega Man, and aiming with no target " 
-      "roots him in place. Over the shoulder: the camera moves in beside him and looks past his shoulder, at " 
-      "the locked enemy or, with no target, the horizon; he keeps moving and shots go to the crosshair. The " "shoulder swap button (R3) switches sides." },
-    { PG_CONTROLS, IT_AIMSENS, "Aim sensitivity", "Camera and mouse speed while aiming over the shoulder with no "
-      "target, relative to the normal camera speed. Lower is finer aim." },
-    { PG_CONTROLS, IT_RETICLE, "Reticle colour", "Colour of the lock-on marker on the targeted enemy, and of the "
-      "crosshair." },
     { PG_CONTROLS, IT_SECTION, "Mouse and keyboard", NULL, NULL, 0, WL },
     { PG_CONTROLS, IT_MOUSE, "Mouse sensitivity", "Mouse look speed for the camera, relative to the default. Off "
       "turns the mouse and keyboard controls off entirely.", NULL, 0, WL },
+
+    /* ---- COMBAT ---- */
+    { PG_COMBAT, IT_SECTION, "Style" },
+    { PG_COMBAT, IT_STYLE, "Combat style", "Sets every aiming option below at once. Classic: lock-on with the "
+      "classic camera and shots where Mega Man faces; the walk stops for each shot, as in the original (running "
+      "still shoots on the move). Adventure: lock-on over the shoulder, and Mega Man walks, strafes and jogs "
+      "backward while shooting. Shooter: the camera stays over the shoulder, the aim button zooms in to aim freely "
+      "with no lock-on, shots go to the crosshair, and aim assist slows the camera over enemies. Changing an "
+      "option below shows Custom." },
+    { PG_COMBAT, IT_SECTION, "Aiming" },
+    { PG_COMBAT, IT_SHCAM, "Camera position", "Behind: the camera follows behind Mega Man, as usual. Over the "
+      "shoulder: it stays beside his shoulder all the time, like a third-person shooter, so the crosshair has the "
+      "middle of the screen to itself; holding the aim button moves it closer and zooms in for precise aim." },
+    { PG_COMBAT, IT_AIMBTN, "Aim button", "Lock-on: holding the aim button locks on to the nearest enemy "
+      "(Z-targeting), and Mega Man keeps facing it. Free aim: holding it always aims over the shoulder at the "
+      "crosshair, with no lock-on, like a third-person shooter." },
+    { PG_COMBAT, IT_LOCKCAM, "Lock-on camera", "Classic: while locked on, the camera swings behind Mega Man, and aiming with no target " 
+      "roots him in place. Over the shoulder: the camera moves in beside him and looks past his shoulder, at " 
+      "the locked enemy or, with no target, the horizon; he keeps moving and shots go to the crosshair. The " "shoulder swap button (R3) switches sides." },
+    { PG_COMBAT, IT_AIM, "Shots aim", START_AIM_HELP },
+    { PG_COMBAT, IT_AIMSENS, "Aim sensitivity", "Camera and mouse speed while aiming over the shoulder with no "
+      "target, relative to the normal camera speed. Lower is finer aim." },
+    { PG_COMBAT, IT_ASSIST, "Aim assist", "While the crosshair is over an enemy, the camera turns slower and "
+      "the crosshair closes in, so it's easier to stay on target." },
+    { PG_COMBAT, IT_SECTION, "Moving while shooting" },
+    { PG_COMBAT, IT_MOVESHOOT, "Move while shooting", "On: walking forward, backward and sideways keeps going "
+      "while you shoot (the shot plays on his arms), and while locked on or aiming Mega Man moves every way around "
+      "the target, backpedaling when you move away from it. Off: the walk stops for each shot, as in the "
+      "original." },
+    { PG_COMBAT, IT_BACKPEDAL, "Backpedal", "How Mega Man moves away from the target while shooting. Walk: a "
+      "quick walk backward. Jog: the run played backward, faster." },
+    { PG_COMBAT, IT_SECTION, "Crosshair and reticle" },
+    { PG_COMBAT, IT_CROSSHAIR, "Crosshair", START_XH_HELP },
+    { PG_COMBAT, IT_RETICLE, "Reticle colour", "Colour of the lock-on marker on the targeted enemy, and of the "
+      "crosshair." },
 
     /* ---- BUTTONS ---- */
     { PG_BUTTONS, IT_SECTION, "Controller" },
@@ -428,6 +474,7 @@ static struct {
     /* values */
     int fps60, vsync, res, msaa, shader_game_res, nearest, texf, fog, lod_full, hdtex;   /* texf: TEXF_* */
     int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens, trans;
+    int aim_free, walk_shoot, backjog, assist, shcam;   /* crosshair: 0 off, 1 while aiming, 2 always */
     int hud_scale;                      /* index into HUD_SCALES */
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
@@ -694,6 +741,41 @@ static int effective_scale(void)
     return M.res;
 }
 
+/* Combat styles: presets of the aiming rows. The row shows the one the rows match, or Custom. */
+static const struct {
+    const char *name;
+    int aim_free, lock_shoulder, aim_camera, walk_shoot, backjog, crosshair, assist, shcam;
+} STYLES[] = {
+    { "Classic",   0, 0, 0, 0, 0, 0, 0, 0 },
+    { "Adventure", 0, 1, 0, 1, 1, 1, 0, 0 },
+    { "Shooter",   1, 1, 1, 1, 1, 2, 1, 1 },
+};
+#define NSTYLES ((int)(sizeof STYLES / sizeof STYLES[0]))
+
+static int style_index(void)
+{
+    int c;
+    for (c = 0; c < NSTYLES; c++)
+        if (STYLES[c].aim_free == M.aim_free && STYLES[c].lock_shoulder == M.lock_shoulder &&
+            STYLES[c].aim_camera == M.aim_camera && STYLES[c].walk_shoot == M.walk_shoot &&
+            STYLES[c].backjog == M.backjog && STYLES[c].crosshair == M.crosshair && STYLES[c].assist == M.assist &&
+            STYLES[c].shcam == M.shcam)
+            return c;
+    return -1;
+}
+
+static void style_set(int c)
+{
+    M.aim_free = STYLES[c].aim_free;
+    M.lock_shoulder = STYLES[c].lock_shoulder;
+    M.aim_camera = STYLES[c].aim_camera;
+    M.walk_shoot = STYLES[c].walk_shoot;
+    M.backjog = STYLES[c].backjog;
+    M.crosshair = STYLES[c].crosshair;
+    M.assist = STYLES[c].assist;
+    M.shcam = STYLES[c].shcam;
+}
+
 static void apply(int kind)
 {
     switch (kind) {
@@ -791,7 +873,41 @@ static void apply(int kind)
         if (!M.start)
             controls_aim(M.aim_camera, M.crosshair);
         ini_str("controls", "aim", M.aim_camera ? "camera" : "character");
-        ini_int("controls", "crosshair", M.crosshair);
+        ini_str("controls", "crosshair", M.crosshair == 2 ? "always" : M.crosshair ? "1" : "0");
+        break;
+    case IT_AIMBTN:
+        if (!M.start)
+            controls_aim_button(M.aim_free);
+        ini_str("controls", "aim_button", M.aim_free ? "free" : "lockon");
+        break;
+    case IT_MOVESHOOT:
+        if (!M.start)
+            controls_walk_shoot(M.walk_shoot);
+        ini_int("controls", "walk_shoot", M.walk_shoot);
+        break;
+    case IT_BACKPEDAL:
+        if (!M.start)
+            controls_backpedal_style(M.backjog);
+        ini_str("controls", "backpedal", M.backjog ? "jog" : "walk");
+        break;
+    case IT_ASSIST:
+        if (!M.start)
+            controls_aim_assist(M.assist);
+        ini_int("controls", "aim_assist", M.assist);
+        break;
+    case IT_SHCAM:
+        if (!M.start)
+            controls_camera_shoulder(M.shcam);
+        ini_int("controls", "camera_shoulder", M.shcam);
+        break;
+    case IT_STYLE:   /* (change() already set the rows' values from the preset) */
+        apply(IT_AIMBTN);
+        apply(IT_LOCKCAM);
+        apply(IT_AIM);
+        apply(IT_MOVESHOOT);
+        apply(IT_BACKPEDAL);
+        apply(IT_ASSIST);
+        apply(IT_SHCAM);
         break;
     case IT_LOCKCAM: {
         char side[16];
@@ -868,7 +984,18 @@ static void change(int kind, int dir)
     case IT_AIMSENS: M.aim_sens = cycle(M.aim_sens, 4, dir); break;
     case IT_TRANSITION: M.trans = cycle(M.trans, 4, dir); break;
     case IT_HUD_SCALE: M.hud_scale = cycle(M.hud_scale, 5, dir); break;
-    case IT_CROSSHAIR: M.crosshair = !M.crosshair; break;
+    case IT_CROSSHAIR: M.crosshair = cycle(M.crosshair, 3, dir); break;
+    case IT_AIMBTN: M.aim_free = !M.aim_free; break;
+    case IT_MOVESHOOT: M.walk_shoot = !M.walk_shoot; break;
+    case IT_BACKPEDAL: M.backjog = !M.backjog; break;
+    case IT_ASSIST: M.assist = !M.assist; break;
+    case IT_SHCAM: M.shcam = !M.shcam; break;
+    case IT_STYLE: {
+        int c = style_index();
+        c = c < 0 ? (dir > 0 ? 0 : NSTYLES - 1) : cycle(c, NSTYLES, dir);
+        style_set(c);
+        break;
+    }
     default: return;
     }
     M.kick_dir = dir;
@@ -1024,7 +1151,17 @@ static void value_text(int kind, char *out, size_t n)
         else
             _snprintf_s(out, n, _TRUNCATE, "%dx faster", TRANS[M.trans]);
         break;
-    case IT_CROSSHAIR: strcpy_s(out, n, M.crosshair ? "On" : "Off"); break;
+    case IT_CROSSHAIR: strcpy_s(out, n, M.crosshair == 2 ? "Always" : M.crosshair ? "While aiming" : "Off"); break;
+    case IT_AIMBTN: strcpy_s(out, n, M.aim_free ? "Free aim" : "Lock-on"); break;
+    case IT_MOVESHOOT: strcpy_s(out, n, M.walk_shoot ? "On" : "Off"); break;
+    case IT_BACKPEDAL: strcpy_s(out, n, M.backjog ? "Jog" : "Walk"); break;
+    case IT_ASSIST: strcpy_s(out, n, M.assist ? "On" : "Off"); break;
+    case IT_SHCAM: strcpy_s(out, n, M.shcam ? "Over the shoulder" : "Behind"); break;
+    case IT_STYLE: {
+        int c = style_index();
+        strcpy_s(out, n, c < 0 ? "Custom" : STYLES[c].name);
+        break;
+    }
     case IT_GF_EDITION: strcpy_s(out, n, M.edition ? "Rockman DASH (JP)" : "Mega Man Legends (US)"); break;
     case IT_KEY_RESET: strcpy_s(out, n, "Reset"); break;
     case IT_GF_US:
@@ -1152,7 +1289,7 @@ static float wrap_text(float x, float y, float maxw, const char *s, uint32_t col
     float lh = gfx_ui_font_line(UI_FONT_BODY, scale) * 1.05f, yy = y;
     while (*s) {
         int n = 0, last_space = -1, last_soft = -1;
-        while (s[n]) {
+        while (s[n] && s[n] != '\n') {   /* (a line break ends the line) */
             buf[n] = s[n];
             buf[n + 1] = 0;
             if (s[n] == ' ')
@@ -1173,10 +1310,101 @@ static float wrap_text(float x, float y, float maxw, const char *s, uint32_t col
             ui_text(x, yy, buf, col, scale);
         yy += lh;
         s += n;
-        while (*s == ' ')
+        if (*s == '\n')
             s++;
+        else
+            while (*s == ' ')
+                s++;
     }
     return yy - y;
+}
+
+/* A release's text (its GitHub notes, Markdown) made short for the update rows: the first line
+ * (the summary), then the items of its "## In short" list, or without one, the bold titles of the
+ * top-level points under "## New" and "## Fixes" (at most 6, one line each). Markdown marks
+ * (**, `, links) are dropped, and characters the menu font lacks (curly quotes, dashes) made plain. */
+static void md_plain(const char *a, const char *b, char *out, size_t n)
+{
+    size_t o = 0;
+    const char *start = a;
+    while (a < b && o + 1 < n) {
+        unsigned char c = (unsigned char)*a;
+        if (c == '*' || c == '`' || c == '[' || c == ']') {
+            a++;
+            continue;
+        }
+        if (c == '(' && a > start && a[-1] == ']') {   /* (a link's address: skipped) */
+            while (a < b && *a != ')')
+                a++;
+            a++;
+            continue;
+        }
+        if (c == 0xE2 && a + 2 < b && (unsigned char)a[1] == 0x80) {   /* U+2010..U+201F, U+2026 */
+            unsigned char d = (unsigned char)a[2];
+            const char *r = d == 0x98 || d == 0x99 ? "'" : d == 0x9C || d == 0x9D ? "\"" : d == 0xA6 ? "..." : "-";
+            while (*r && o + 1 < n)
+                out[o++] = *r++;
+            a += 3;
+            continue;
+        }
+        if (c >= 0x80) {   /* other non-ASCII: dropped */
+            a++;
+            continue;
+        }
+        out[o++] = (char)c;
+        a++;
+    }
+    while (o && out[o - 1] == ' ')
+        o--;
+    out[o] = 0;
+}
+
+static void short_notes(const char *md, char *out, size_t n)
+{
+    const char *p = md, *eol;
+    char line[200];
+    int section = 0, items = 0, in_short = strstr(md, "## In short") != NULL;   /* section: 1 listed */
+    size_t o = 0;
+    out[0] = 0;
+    for (; *p; p = *eol ? eol + 1 : eol) {
+        const char *a = p, *b;
+        eol = strchr(p, '\n');
+        if (!eol)
+            eol = p + strlen(p);
+        b = eol;
+        while (b > a && (b[-1] == '\r' || b[-1] == ' '))
+            b--;
+        if (a == b)
+            continue;
+        if (a[0] == '#') {
+            if (in_short)
+                section = strncmp(a, "## In short", 11) == 0;
+            else
+                section = strncmp(a, "## New", 6) == 0 || strncmp(a, "## Fix", 6) == 0;
+            continue;
+        }
+        if (!out[0] && !o && section == 0 && a[0] != '|' && a[0] != '-' && a[0] != '*') {   /* the summary */
+            md_plain(a, b, line, sizeof line);
+            o = (size_t)_snprintf_s(out, n, _TRUNCATE, "%s", line);
+            continue;
+        }
+        if (!section || items >= 6 || !(a[0] == '-' && a[1] == ' '))
+            continue;   /* (only top-level points: indented ones start with spaces) */
+        a += 2;
+        if (!in_short && a[0] == '*' && a[1] == '*') {   /* the bold title */
+            const char *e = strstr(a + 2, "**");
+            if (e && e < b)
+                b = e;
+        }
+        md_plain(a, b, line, sizeof line);
+        if (line[0]) {
+            size_t len = strlen(line);
+            if (len && line[len - 1] == '.')
+                line[--len] = 0;
+            o += (size_t)_snprintf_s(out + o, n - o, _TRUNCATE, "%s- %s", o ? "\n" : "", line);
+            items++;
+        }
+    }
 }
 
 static float g_help_h = 1e9f;   /* the room the help has (set where it is drawn) */
@@ -1579,7 +1807,15 @@ static void draw_start(int w, int h, float u, double t, float dt)
         }
         /* the description: in what room is left (wrapped() shrinks it to fit) */
         g_help_h = low - y;
-        if (it) {
+        if (it && M.page == PAGE_FILES && it->kind >= IT_UP_ACTION &&
+            (M.up_state == UPD_AVAILABLE || M.up_state == UPD_READY || M.up_state == UPD_DOWNLOADING) &&
+            update_release_notes()[0]) {
+            /* an update waits: what it brings (short), instead of the row's description */
+            char notes[600];
+            short_notes(update_release_notes(), notes, sizeof notes);
+            _snprintf_s(help, sizeof help, _TRUNCATE, "What's new in %s:\n%s", M.up_ver, notes);
+            wrapped(ix, y, iw, help, 0xFFD2DEEA, 0.86f);
+        } else if (it) {
             button_words(it->help ? it->help : "", help, sizeof help);
             wrapped(ix, y, iw, help, 0xFFD2DEEA, 0.86f);
         } else {
@@ -2480,7 +2716,15 @@ static void load_values(const char *ini, const char *game_dir)
     }
     GetPrivateProfileStringA("controls", "aim", "character", s, sizeof s, ini);
     M.aim_camera = _stricmp(s, "camera") == 0;
-    M.crosshair = GetPrivateProfileIntA("controls", "crosshair", 1, ini) != 0;
+    GetPrivateProfileStringA("controls", "crosshair", "1", s, sizeof s, ini);
+    M.crosshair = _stricmp(s, "always") == 0 ? 2 : atoi(s) != 0;
+    GetPrivateProfileStringA("controls", "aim_button", "lockon", s, sizeof s, ini);
+    M.aim_free = _stricmp(s, "free") == 0;
+    M.walk_shoot = GetPrivateProfileIntA("controls", "walk_shoot", 1, ini) != 0;
+    GetPrivateProfileStringA("controls", "backpedal", "walk", s, sizeof s, ini);
+    M.backjog = _stricmp(s, "jog") == 0;
+    M.assist = GetPrivateProfileIntA("controls", "aim_assist", 0, ini) != 0;
+    M.shcam = GetPrivateProfileIntA("controls", "camera_shoulder", 0, ini) != 0;
     GetPrivateProfileStringA("controls", "lockon_camera", "classic", s, sizeof s, ini);
     M.lock_shoulder = _stricmp(s, "shoulder") == 0;
     M.aim_sens = nearest_index(AIMSENS, 4, GetPrivateProfileIntA("controls", "aim_sensitivity", 60, ini));

@@ -799,9 +799,10 @@ void mml_init(void)
                     GetPrivateProfileIntA("controls", "skates_min", -1, g_ini),
                     GetPrivateProfileIntA("controls", "skates_toggle", 0, g_ini));
     {
-        char a[16];
+        char a[16], xh[16];
         ini_string("controls", "aim", "character", a, sizeof a);
-        controls_aim(_stricmp(a, "camera") == 0, GetPrivateProfileIntA("controls", "crosshair", 1, g_ini));
+        ini_string("controls", "crosshair", "1", xh, sizeof xh);
+        controls_aim(_stricmp(a, "camera") == 0, _stricmp(xh, "always") == 0 ? 2 : atoi(xh) != 0);
     }
     {
         char c[16], s[16];
@@ -811,6 +812,13 @@ void mml_init(void)
     }
     controls_aim_sensitivity(GetPrivateProfileIntA("controls", "aim_sensitivity", 60, g_ini));
     controls_walk_shoot(GetPrivateProfileIntA("controls", "walk_shoot", 1, g_ini));
+    {
+        char ab[16];
+        ini_string("controls", "aim_button", "lockon", ab, sizeof ab);
+        controls_aim_button(_stricmp(ab, "free") == 0);
+    }
+    controls_aim_assist(GetPrivateProfileIntA("controls", "aim_assist", 0, g_ini));
+    controls_camera_shoulder(GetPrivateProfileIntA("controls", "camera_shoulder", 0, g_ini));
     {
         char bp[16];
         ini_string("controls", "backpedal", "walk", bp, sizeof bp);

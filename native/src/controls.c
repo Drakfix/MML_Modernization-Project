@@ -73,6 +73,9 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define SH_SIDE          110     /* world units the view point slides beside Mega Man */
 #define SH_LIFT          25      /* ...and up (y grows downward) */
 #define SH_DIST          0.62    /* camera distance, share of the normal one */
+#define SH_DIST_HIP      0.82    /* camera_shoulder (always over the shoulder), not aiming: a little closer */
+#define ADS_ZOOM         1.3     /* camera_shoulder, aiming: the view zooms in this much (like a shooter's ADS) */
+#define ADS_EASE         0.2     /* per 1/60 s, in and out */
 #define SH_EASE          0.14    /* per 1/60 s: easing into / out of the shoulder framing */
 #define SH_SWAP_EASE     0.16    /* per 1/60 s: sliding across on a shoulder swap */
 #define SH_PITCH_EASE    0.08    /* per 1/60 s: tilting toward the enemy's height */
@@ -238,7 +241,13 @@ static int g_lock_test;   /* Z-targeting: locked on, facing toward the target */
 /* face hold: Mega Man keeps facing face_dir and moves freely around it (strafe, backstep); lock-on
    faces the target, camera aim ([controls] aim=camera) faces where the camera looks while firing */
 static volatile LONG face_hold, face_dir, cam_aim, aim_ready;
-static int g_aim_camera, g_crosshair;
+static int g_aim_camera, g_crosshair;   /* crosshair: 0 off, 1 while aiming, 2 always (with camera aim) */
+static int g_aim_free;     /* [controls] aim_button=free: the aim button never locks on, it aims over the shoulder */
+static int g_sh_always;    /* [controls] camera_shoulder: the camera over the shoulder all the time; aiming zooms in */
+static double ads_zoom = 1.0, sh_close;   /* the aiming zoom (camera_shoulder); 0..1 the aiming framing (eased) */
+static int g_aim_assist;   /* [controls] aim_assist: slower camera and a tighter crosshair over an enemy */
+#define AIM_ASSIST_SLOW  0.45    /* camera speed while the crosshair is over an enemy, with aim assist */
+#define AIM_ASSIST_EASE  0.25    /* per 1/60 s toward it and back */
 static double aim_hold;
 static double since_fire = 1e9;   /* 1/60 s since the last shot with camera aim on (crosshair) */
 
@@ -825,7 +834,7 @@ static void input_update(void)
     {
         static int prev_sh;
         int sh = ACT(actions_of(&p) | (unsigned)g_kbm_acts, ACT_SHOULDER) != 0;
-        if (g_modern && g_sh_mode && sh && !prev_sh) {
+        if (g_modern && (g_sh_mode || g_aim_free || g_sh_always) && sh && !prev_sh) {
             g_sh_side = -g_sh_side;
             if (g_ini_path[0])
                 WritePrivateProfileStringA("controls", "shoulder", g_sh_side > 0 ? "right" : "left", g_ini_path);
@@ -900,10 +909,11 @@ static void input_update(void)
         int hold = st_active && st_allowed && aiming, was = lock_active;
         /* a lock starts only where the game allows targeting (combat HUD up);
          * once it happened, the hold stays a lock-on hold until aim is released */
-        lockon_want(hold && (lockon_had() || g_lock_test ||
-                             (GVAR(uint8_t, G_TARGET_FLAGS) & 2)));
-        lock_active = hold && (lockon_locked() || g_lock_test);
-        lock_free = hold && !lock_active && lockon_had();
+        /* (free aim: the aim button never locks on) */
+        lockon_want(!g_aim_free && hold && (lockon_had() || g_lock_test ||
+                                            (GVAR(uint8_t, G_TARGET_FLAGS) & 2)));
+        lock_active = !g_aim_free && hold && (lockon_locked() || g_lock_test);
+        lock_free = !g_aim_free && hold && !lock_active && lockon_had();
         if (lock_active) {
             int tx, ty, tz;
             double want, d;
@@ -942,10 +952,11 @@ static void input_update(void)
         }
         if (lock_active && !was)
             log_printf("lock-on: on");
-        /* shoulder aim: nothing locked (no target, or the lock was lost) with the shoulder camera on */
+        /* shoulder aim: nothing locked (no target, or the lock was lost) with the shoulder camera on;
+           with free aim, every time the aim button is held */
         {
             int was_sh = sh_aim;
-            sh_aim = g_sh_mode && hold && !lock_active;
+            sh_aim = (g_sh_mode || g_aim_free) && hold && !lock_active;
             sh_aim_age = sh_aim && was_sh ? sh_aim_age + ticks : 0;
             if (sh_aim && !was_sh)
                 log_printf("shoulder aim: on");
@@ -983,6 +994,14 @@ static void input_update(void)
     /* mouse look (raw counts), wheel = next lock-on target */
     /* shoulder aim: a slower camera for fine aiming ([controls] aim_sensitivity) */
     aim_scale = sh_aim ? g_aim_sens / 100.0 : 1.0;
+    /* aim assist: while the crosshair is over an enemy (aiming over the shoulder, or shooting where the
+       camera looks), the camera turns slower, eased in and out */
+    {
+        static double assist = 1.0;
+        int on = g_aim_assist && aim_on_enemy && (sh_aim || (g_aim_camera && (cam_aim || g_crosshair == 2)));
+        assist += ((on ? AIM_ASSIST_SLOW : 1.0) - assist) * (1.0 - pow(1.0 - AIM_ASSIST_EASE, ticks));
+        aim_scale *= assist;
+    }
     if (st_active && st_allowed && (mdx || mdy || mwheel)) {
         if (lock_active) {
             if (mwheel)
@@ -1015,7 +1034,8 @@ static void input_update(void)
         n = stick_norm(p.sThumbRY);   /* stick up tilts the view up */
         if (n != 0)
             st_pitch = clampd(st_pitch + g_pitch_speed * n * ticks * aim_scale, PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
-        else if (sh_aim && sh_aim_age < SH_LEVEL_TIME && !mdy)   /* shoulder aim starts level, at the horizon */
+        else if (sh_aim && !g_sh_always && sh_aim_age < SH_LEVEL_TIME && !mdy)   /* shoulder aim starts level, at the horizon
+                                                                                     (not where the camera is already there) */
             st_pitch += (0.0 - st_pitch) * (1.0 - pow(1.0 - 2 * SH_PITCH_EASE, ticks));
     }
 
@@ -1180,7 +1200,8 @@ static void shoulder_apply(regs_t *r)
 {
     static LARGE_INTEGER last;
     LARGE_INTEGER now;
-    double ticks = 0, a, lat, rx, rz, want = (g_sh_mode && (lock_active || sh_aim)) ? 1.0 : 0.0;
+    int aiming_frame = (g_sh_mode && lock_active) || ((g_sh_mode || g_aim_free || g_sh_always) && sh_aim);
+    double ticks = 0, a, lat, rx, rz, want = aiming_frame || g_sh_always ? 1.0 : 0.0, dist, zw;
     const int32_t *t;
     int s, step = 24;
     QueryPerformanceCounter(&now);
@@ -1188,7 +1209,16 @@ static void shoulder_apply(regs_t *r)
         ticks = clampd((double)(now.QuadPart - last.QuadPart) / qpc_freq.QuadPart, 0, 0.1) * 60.0;
     last = now;
     sh_blend += (want - sh_blend) * (1.0 - pow(1.0 - SH_EASE, ticks));
+    sh_close += ((aiming_frame ? 1.0 : 0.0) - sh_close) * (1.0 - pow(1.0 - SH_EASE, ticks));
     sh_side_cur += (g_sh_side - sh_side_cur) * (1.0 - pow(1.0 - SH_SWAP_EASE, ticks));
+    /* camera_shoulder: aiming zooms the view in */
+    zw = g_sh_always && sh_aim ? ADS_ZOOM : 1.0;
+    if (ads_zoom != zw) {
+        ads_zoom += (zw - ads_zoom) * (1.0 - pow(1.0 - ADS_EASE, ticks));
+        if (fabs(ads_zoom - zw) < 0.002)
+            ads_zoom = zw;
+        mml_zoom((float)ads_zoom);
+    }
     if (sh_blend < 0.002) {
         sh_blend = want > 0 ? sh_blend : 0;
         if (!want)
@@ -1214,7 +1244,18 @@ static void shoulder_apply(regs_t *r)
     g_sh_target[2] = iround(t[2] + rz * lat);
     g_sh_target[3] = t[3];
     r->eax = GADDR(g_sh_target);
-    r->edx = (uint32_t)iround((int)r->edx * (1.0 - sh_blend * (1.0 - SH_DIST)));
+    /* closer: always aiming's distance, or with camera_shoulder from the hip distance to it as he aims */
+    dist = g_sh_always ? SH_DIST_HIP + (SH_DIST - SH_DIST_HIP) * sh_close : SH_DIST;
+    r->edx = (uint32_t)iround((int)r->edx * (1.0 - sh_blend * (1.0 - dist)));
+}
+
+/* the aiming zoom off (the orbit camera isn't placing the view: talks, cutscenes, menus) */
+static void ads_zoom_reset(void)
+{
+    if (ads_zoom != 1.0) {
+        ads_zoom = 1.0;
+        mml_zoom(1.0f);
+    }
 }
 
 /* The point the camera looks at (the camera as the game last placed it: the same framing the
@@ -1431,8 +1472,10 @@ static void on_cam_apply(regs_t *r)
     } else if (cam_active && cam_suppress && is_gameplay_cam) {
         /* stock aim (no target): the game's own, closer aim camera; same wall
          * stop and floor-safe look-up as the orbit (classic camera stays vanilla) */
+        ads_zoom_reset();
         place_camera(r, (int)r->ebx & 0xfff, -signed12((int)r->ecx & 0xfff), 1);
     } else {
+        ads_zoom_reset();
         cam_dist_cur = -1;
     }
     aim_point_update();
@@ -2774,9 +2817,32 @@ void controls_lockon_camera(int shoulder, int left)
 void controls_aim(int camera, int crosshair)
 {
     g_aim_camera = camera != 0;
-    g_crosshair = crosshair != 0;
+    g_crosshair = crosshair < 0 ? 0 : crosshair > 2 ? 2 : crosshair;
     log_printf("controls: shots aim %s, crosshair %s", g_aim_camera ? "where the camera looks" : "where Mega Man faces",
-               g_crosshair ? "on" : "off");
+               g_crosshair == 2 ? "always" : g_crosshair ? "while aiming" : "off");
+}
+
+void controls_aim_button(int free_aim)
+{
+    g_aim_free = free_aim != 0;
+    log_printf("controls: aim button %s", g_aim_free ? "free aim over the shoulder (no lock-on)" : "lock-on");
+}
+
+void controls_camera_shoulder(int on)
+{
+    g_sh_always = on != 0;
+    log_printf("controls: camera %s", g_sh_always ? "over the shoulder all the time (aiming zooms in)" : "behind Mega Man");
+}
+
+void controls_aim_assist(int on)
+{
+    g_aim_assist = on != 0;
+    log_printf("controls: aim assist %s", g_aim_assist ? "on" : "off");
+}
+
+int controls_aim_assist_on(void)
+{
+    return g_aim_assist;
 }
 
 /* called once per presented frame: the game's own menus and pauses stop the camera hook, which
@@ -2806,6 +2872,8 @@ float controls_crosshair(void)
     if (!(g_crosshair && cam_active && !cam_suppress && !lock_active && idle < 6 && controls_in_gameplay()))
         return 0;
     if (sh_aim)   /* shoulder aim: shown the whole time you aim */
+        return 1.0f;
+    if (g_crosshair == 2 && g_aim_camera)   /* always (shots go where the camera looks) */
         return 1.0f;
     if (!g_aim_camera || since_fire >= XH_SHOW + XH_FADE)
         return 0;

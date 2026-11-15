@@ -201,7 +201,8 @@ DEFAULTS = {"renderer": "mml", "window": "fullscreen", "engine": "classic",
             "voices": "english", "subtitles": "on",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
             "lod": "full", "fps": "60", "reticle": "FFD840", "aim": "character", "crosshair": "on",
-            "lockon_camera": "classic", "aim_sens": "60",
+            "lockon_camera": "classic", "aim_sens": "60", "aim_button": "lockon", "walk_shoot": "on",
+            "backpedal": "walk", "aim_assist": "off", "camera_shoulder": "off",
             "input": "sdl", "orbit_start": "off", "cam_speed": "100", "invert_x": "off",
             "invert_y": "off", "deadzone": "24", "roll": "fast", "walk": "on", "tab": "display",
             "mouse": "100", "shader": "", "shader_res": "game", "texpack": "on", "texdump": "off"}
@@ -379,9 +380,25 @@ def import_mml_ini(s):
     v = get("controls", "aim")
     if v in ("camera", "character"):
         s["aim"] = v
-    v = num("controls", "crosshair")
+    v = get("controls", "crosshair")
     if v is not None:
-        s["crosshair"] = "on" if v else "off"
+        v = v.strip().lower()
+        s["crosshair"] = "always" if v == "always" else "off" if v == "0" else "on"
+    v = get("controls", "aim_button")
+    if v in ("lockon", "free"):
+        s["aim_button"] = v
+    v = num("controls", "walk_shoot")
+    if v is not None:
+        s["walk_shoot"] = "on" if v else "off"
+    v = get("controls", "backpedal")
+    if v in ("walk", "jog"):
+        s["backpedal"] = v
+    v = num("controls", "aim_assist")
+    if v is not None:
+        s["aim_assist"] = "on" if v else "off"
+    v = num("controls", "camera_shoulder")
+    if v is not None:
+        s["camera_shoulder"] = "on" if v else "off"
     v = get("controls", "lockon_camera")
     if v in ("classic", "shoulder"):
         s["lockon_camera"] = v
@@ -558,7 +575,12 @@ def controls_ini(s):
         "walk_tilt": 55 if s["walk"] == "on" else 0,
         "reticle_color": reticle_hex(s),
         "aim": "camera" if s.get("aim") == "camera" else "character",
-        "crosshair": 0 if s.get("crosshair") == "off" else 1,
+        "crosshair": "always" if s.get("crosshair") == "always" else 0 if s.get("crosshair") == "off" else 1,
+        "aim_button": "free" if s.get("aim_button") == "free" else "lockon",
+        "walk_shoot": 0 if s.get("walk_shoot") == "off" else 1,
+        "backpedal": "jog" if s.get("backpedal") == "jog" else "walk",
+        "aim_assist": 1 if s.get("aim_assist") == "on" else 0,
+        "camera_shoulder": 1 if s.get("camera_shoulder") == "on" else 0,
         "lockon_camera": "shoulder" if s.get("lockon_camera") == "shoulder" else "classic",
         "aim_sensitivity": int(s["aim_sens"]) if str(s.get("aim_sens")) in ("40", "60", "80", "100") else 60,
         "mouse_keyboard": 0 if s["mouse"] == "off" else 1,
@@ -859,7 +881,16 @@ class App:
                "mouse look speed")
         r = pair()
         option("Shots aim", "aim", [("Character", "character"), ("Camera", "camera")], row=r, side="left")
-        option("Crosshair", "crosshair", [("Off", "off"), ("On", "on")], row=r, side="right")
+        option("Crosshair", "crosshair", [("Off", "off"), ("While aiming", "on"), ("Always", "always")],
+               row=r, side="right")
+        r = pair()
+        option("Aim button", "aim_button", [("Lock-on", "lockon"), ("Free aim", "free")], row=r, side="left")
+        option("Aim assist", "aim_assist", [("Off", "off"), ("On", "on")], row=r, side="right")
+        r = pair()
+        option("Move while shooting", "walk_shoot", [("Off", "off"), ("On", "on")], row=r, side="left")
+        option("Backpedal", "backpedal", [("Walk", "walk"), ("Jog", "jog")], row=r, side="right")
+        option("Camera position", "camera_shoulder", [("Behind", "off"), ("Over the shoulder", "on")],
+               "over the shoulder: a shooter's camera; aiming zooms in")
         option("Lock-on camera", "lockon_camera", [("Classic", "classic"), ("Over the shoulder", "shoulder")],
                "over the shoulder: also when aiming with no target, and you keep moving; R3 swaps sides")
         option("Aim sensitivity", "aim_sens", [("40%", "40"), ("60%", "60"), ("80%", "80"), ("100%", "100")],

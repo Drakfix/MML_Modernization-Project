@@ -82,6 +82,19 @@ const char *update_current(void)
     return ver;
 }
 
+const char *update_release_notes(void)
+{
+    static char notes[6000];
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jclass c = env ? activity_class(env) : NULL;
+    notes[0] = 0;
+    if (c) {
+        get_string(env, c, "updateNotes", notes, sizeof notes);
+        (*env)->DeleteLocalRef(env, c);
+    }
+    return notes;
+}
+
 void update_check_begin(void)
 {
     log_printf("update: looking for a new version (this is %s)", update_current());
@@ -132,6 +145,11 @@ int update_can(void)
 }
 
 const char *update_current(void)
+{
+    return "";
+}
+
+const char *update_release_notes(void)
 {
     return "";
 }

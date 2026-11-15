@@ -46,6 +46,13 @@ void controls_aim(int camera, int crosshair);
 void controls_lockon_camera(int shoulder, int left);
 /* % camera speed while aiming over the shoulder; whether the aim's line of sight is on an enemy */
 void controls_aim_sensitivity(int pct);
+/* the aim button: 0 lock-on (Z-targeting), 1 free aim over the shoulder, never locking on */
+void controls_aim_button(int free_aim);
+/* aim assist: the camera turns slower and the crosshair closes in while it is over an enemy */
+void controls_aim_assist(int on);
+/* the camera over Mega Man's shoulder all the time (a shooter's camera); aiming then zooms in */
+void controls_camera_shoulder(int on);
+int controls_aim_assist_on(void);
 int controls_aim_on_enemy(void);
 /* Jet Skates: top speed and lightest-tilt speed in % of the stock top speed; toggle = the button toggles */
 void controls_skates(int max_pct, int min_pct, int toggle);

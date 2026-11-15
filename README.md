@@ -222,6 +222,11 @@ the Japanese line being spoken.
   built-in controls of Android handhelds. The D-pad works as a second movement input, as in
   the PS1 version.
 - **Mouse and keyboard** (Windows and Linux). Mouse look, WASD movement and mouse aiming.
+- **Combat styles.** Classic plays like the original, Adventure adds lock-on over the shoulder
+  and moving while shooting, and Shooter turns it into a third-person shooter: the camera stays
+  over Mega Man's shoulder, the aim button zooms in to aim freely, shots go to an always-on
+  crosshair, and aim assist slows the camera over enemies. Each option can also be set on its
+  own (Settings, Combat).
 - **Remapping.** Every controller button and keyboard key used by the modern controls can be
   rebound.
 - **Vanilla mode.** Leaves the game's controls completely stock.
@@ -475,8 +480,11 @@ game.
 | `mml.ini` `[controls]` | Values |
 |------------------------|--------|
 | `aim` | `character` (default), `camera` |
-| `crosshair` | `1` (default), `0` |
+| `crosshair` | `1` (default, while aiming), `always`, `0` |
 | `walk_shoot` | `1` (default): keep moving while shooting; `0`: stop for each shot, as in the original |
+| `aim_button` | `lockon` (default): Z-targeting; `free`: aim over the shoulder at the crosshair, no lock-on |
+| `camera_shoulder` | `0` (default); `1`: the camera stays over the shoulder, and aiming zooms in |
+| `aim_assist` | `0` (default); `1`: the camera slows and the crosshair closes in over an enemy |
 | `backpedal` | `walk` (default): backpedal while firing; `jog` (experimental): the run played backward, faster |
 
 ### Boat shooting sections
@@ -513,7 +521,8 @@ menu shows each setting's full description and choices beside the list.
 | Game | Version to play, importing each version, English subtitles, voice language, start menu at launch (show / skip), intro video, title screen hints, room transitions, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio, frame rate, V-Sync, executable |
 | Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement |
-| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, aim mode, crosshair, lock-on camera (classic / over the shoulder), aim sensitivity, reticle colour, mouse sensitivity |
+| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |
+| Combat | Combat style (Classic / Adventure / Shooter presets, or Custom), camera position (behind / over the shoulder), aim button (lock-on / free aim), lock-on camera, shots aim, aim sensitivity, aim assist, move while shooting, backpedal (walk / jog), crosshair (off / while aiming / always), reticle colour |
 | Buttons | Controller and keyboard remapping |
 
 Settings that only exist on Windows (Graphics API, display mode, executable, input API, shaders)
