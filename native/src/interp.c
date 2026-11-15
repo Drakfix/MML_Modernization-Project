@@ -17,6 +17,13 @@
  * interpolation. Model vertices (identities: tables of 32K slots, at most 63% full) have their
  * own budget. The screen table holds every vertex: 64K slots, at most half full. */
 #define MAX_VERTS   32768u
+/* copies of one model searched for the nearest (a vertex is reported once per polygon that uses
+ * it: Balloon Fantasy's 20-odd balloons reach ~100) */
+#define COPY_SEARCH_MAX 256u
+#define COPY_VERTEX_WEIGHT 0.1f   /* how much the vertex distance counts next to the origin's */
+#define COPY_MAX_MOVE 1000.0f     /* a vertex never moves this far in a game frame: no previous */
+#define INST_SLACK 50.0f          /* a vertex copy whose model's origin is farther than the nearest
+                                   * model copy's by more than this belongs to another copy */
 #define MAX_DYN     20480u
 #define TABLE_BITS  15
 #define TABLE_SIZE  (1u << TABLE_BITS)
@@ -26,7 +33,10 @@
 typedef struct {
     uint64_t key, base;    /* identity, and the same without the occurrence number */
     interp_vec3 cam;
+    interp_vec3 org;       /* camera-space origin of the model copy (its transform's translation) */
+    uint32_t site;         /* the code that drew it */
     interp_vec3 world;     /* camera space taken back to the world (has_world) */
+    interp_vec3 org_world; /* the same for org */
     int has_world;
     int rematched;         /* debug: took another copy of its model than the same-numbered one */
     int is_static;         /* fixed in the world (the ground): no identity, its previous position
@@ -74,9 +84,16 @@ typedef struct {
     sslot *by_screen;                  /* raw screen position -> record (built at frame end) */
     slot *occurrences;                 /* identity without occurrence -> count so far */
     uint32_t gen;
+    /* model copies drawn this frame: the code that drew each and its camera-space origin */
+    interp_vec3 *inst_org, *inst_world;   /* origins; in the world too when the camera is known */
+    uint32_t *inst_site;
+    unsigned ninst;
 } frame_set;
 
 static vrec g_recs[3][MAX_VERTS];
+#define MAX_INST 4096u
+static interp_vec3 g_inst_org[3][MAX_INST], g_inst_world[3][MAX_INST];
+static uint32_t g_inst_site[3][MAX_INST];
 static slot g_tables[3][2][TABLE_SIZE];
 static sslot g_screen_tables[3][SCREEN_SIZE];
 static frame_set g_sets[3];
@@ -125,6 +142,9 @@ static void setup(void)
         g_sets[i].by_key = g_tables[i][0];
         g_sets[i].by_screen = g_screen_tables[i];
         g_sets[i].occurrences = g_tables[i][1];
+        g_sets[i].inst_org = g_inst_org[i];
+        g_sets[i].inst_world = g_inst_world[i];
+        g_sets[i].inst_site = g_inst_site[i];
         g_sets[i].gen = 1;
     }
     g_build = 0;
@@ -217,7 +237,7 @@ static void index_screen(frame_set *f)
     }
 }
 
-void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], float sx, float sy)
+void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], const float org[3], float sx, float sy)
 {
     frame_set *f;
     slot *occ, *k;
@@ -230,6 +250,16 @@ void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], fl
     if (f->count >= MAX_VERTS || f->ndyn >= MAX_DYN)
         return;
 
+    if (!f->ninst || f->inst_site[f->ninst - 1] != site || f->inst_org[f->ninst - 1].x != org[0] ||
+        f->inst_org[f->ninst - 1].y != org[1] || f->inst_org[f->ninst - 1].z != org[2]) {
+        if (f->ninst < MAX_INST) {   /* a new model copy (vertices of one come in a run) */
+            f->inst_site[f->ninst] = site;
+            f->inst_org[f->ninst].x = org[0];
+            f->inst_org[f->ninst].y = org[1];
+            f->inst_org[f->ninst].z = org[2];
+            f->ninst++;
+        }
+    }
     base = base_key(site, model);
     occ = probe(f->occurrences, f->gen, base);
     if (occ->gen != f->gen) {
@@ -251,6 +281,10 @@ void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], fl
     f->recs[f->count].cam.x = cam[0];
     f->recs[f->count].cam.y = cam[1];
     f->recs[f->count].cam.z = cam[2];
+    f->recs[f->count].org.x = org[0];
+    f->recs[f->count].org.y = org[1];
+    f->recs[f->count].org.z = org[2];
+    f->recs[f->count].site = site;
     f->recs[f->count].sx = sx;
     f->recs[f->count].sy = sy;
     f->recs[f->count].has_prev = 0;
@@ -309,21 +343,76 @@ static void to_world(const camera *c, const interp_vec3 *p, interp_vec3 *w)
     w->z = c->inv[6] * d0 + c->inv[7] * d1 + c->inv[8] * d2;
 }
 
+static float dist2(const interp_vec3 *a, const interp_vec3 *b)
+{
+    float dx = a->x - b->x, dy = a->y - b->y, dz = a->z - b->z;
+    return dx * dx + dy * dy + dz * dz;
+}
+
+static void to_camera(const camera *c, const interp_vec3 *w, interp_vec3 *p)
+{
+    p->x = c->r[0] * w->x + c->r[1] * w->y + c->r[2] * w->z + c->t[0];
+    p->y = c->r[3] * w->x + c->r[4] * w->y + c->r[5] * w->z + c->t[1];
+    p->z = c->r[6] * w->x + c->r[7] * w->y + c->r[8] * w->z + c->t[2];
+}
+
+/* the previous frame's model copy drawn by `site` whose origin was nearest to org (world or
+ * camera space, as `world` says); its origin in that space into *out. Returns the squared
+ * distance, or -1 when that code drew nothing then. Vertices of one copy come in a run, so the
+ * last answer is kept. */
+static float prev_instance(const frame_set *p, uint32_t site, const interp_vec3 *org, int world, interp_vec3 *out)
+{
+    static const frame_set *last_p;
+    static uint32_t last_site, last_gen;
+    static interp_vec3 last_org, last_out;
+    static float last_d;
+    unsigned j;
+    float best = -1;
+    if (last_p == p && last_gen == p->gen && last_site == site && last_org.x == org->x && last_org.y == org->y &&
+        last_org.z == org->z) {
+        *out = last_out;
+        return last_d;
+    }
+    for (j = 0; j < p->ninst; j++) {
+        interp_vec3 o;
+        float d;
+        if (p->inst_site[j] != site)
+            continue;
+        o = world ? p->inst_world[j] : p->inst_org[j];
+        d = dist2(&o, org);
+        if (best < 0 || d < best) {
+            best = d;
+            *out = o;
+        }
+    }
+    last_p = p;
+    last_gen = p->gen;
+    last_site = site;
+    last_org = *org;
+    last_out = *out;
+    last_d = best;
+    return best;
+}
+
 /* give every vertex of the frame about to be drawn its previous position, and
  * put the ones that have one into the grid. Copies of the same model (two
  * trash cans) share a base identity and only differ by the order they were
  * drawn in, which changes when one is culled or they swap; so a vertex takes
- * the copy that was nearest in the world, not the one with the same number. */
+ * the copy whose origin was nearest, not the one with the same number. */
 static void link_previous(void)
 {
     frame_set *c, *p;
     unsigned i;
+    interp_vec3 last_org = { 1e30f, 1e30f, 1e30f }, last_org_world = { 0, 0, 0 };
     for (i = 0; i < GRID_W * GRID_H; i++)
         g_grid[i] = -1;
     if (g_cur < 0)
         return;
     c = &g_sets[g_cur];
     p = g_prev >= 0 ? &g_sets[g_prev] : NULL;
+    if (c->cam.valid)
+        for (i = 0; i < c->ninst; i++)
+            to_world(&c->cam, &c->inst_org[i], &c->inst_world[i]);
     for (i = 0; i < c->count; i++) {
         vrec *r = &c->recs[i];
         const slot *k;
@@ -336,42 +425,90 @@ static void link_previous(void)
             continue;
         r->has_world = c->cam.valid;
         r->rematched = 0;
-        if (r->has_world)
+        if (r->has_world) {
             to_world(&c->cam, &r->cam, &r->world);
+            if (r->org.x != last_org.x || r->org.y != last_org.y || r->org.z != last_org.z) {
+                last_org = r->org;   /* a model's vertices come in a run: one conversion per copy */
+                to_world(&c->cam, &r->org, &last_org_world);
+            }
+            r->org_world = last_org_world;
+        }
         if (!p)
             continue;
-        k = probe(p->by_key, p->gen, r->key);
-        if (k->gen != p->gen)
-            continue;
-        best = (int)k->val;
-        if (r->has_world && p->recs[best].has_world) {
-            const vrec *q0 = &p->recs[best];
-            float ex = q0->world.x - r->world.x, ey = q0->world.y - r->world.y, ez = q0->world.z - r->world.z;
-            float best_d = ex * ex + ey * ey + ez * ez - 1.0f;   /* another copy only if clearly nearer */
-            uint32_t n = best_d <= 3.0f ? 64 : 0;   /* the same-numbered copy is right there: no search */
-            for (; n < 64; n++) {
-                const slot *o = probe(p->by_key, p->gen, occurrence_key(r->base, n));
-                const vrec *q;
-                float dx, dy, dz, d;
-                if (o->gen != p->gen)
-                    break;
-                q = &p->recs[o->val];
-                if (!q->has_world)
-                    continue;
-                dx = q->world.x - r->world.x;
-                dy = q->world.y - r->world.y;
-                dz = q->world.z - r->world.z;
-                d = dx * dx + dy * dy + dz * dz;
-                if (d < best_d) {
-                    best_d = d;
-                    best = (int)o->val;
+        {
+            /* In the world when both frames know their camera (it comes with the ground); in a
+             * room without ground (Balloon Fantasy's studio) in camera space, which is exact
+             * while the camera holds still and close enough while it moves.
+             * The model copy comes first: its previous self is the copy drawn by the same code
+             * whose origin was nearest. A vertex takes the copy of itself that belongs to it
+             * (crowded balloons swapped vertices by position alone). A model animated vertex by
+             * vertex has no fixed vertices: a balloon's vertex in this pose may exist in the last
+             * frame only on another balloon that was in that pose then (every few frames
+             * Balloon Fantasy's balloons were drawn halfway to each other); such a vertex, or
+             * one with no copy at all, moves with its model's origin instead. */
+            int world = c->cam.valid && p->cam.valid, found = 0;
+            const interp_vec3 *ro = world ? &r->org_world : &r->org;
+            interp_vec3 inst = { 0, 0, 0 };   /* the model copy's previous origin, in the same space as ro */
+            float di = -2, dv = 0, dorg = 0;   /* -2: not looked up (the vertex's copy was right there) */
+            k = probe(p->by_key, p->gen, r->key);
+            best = -1;
+            if (k->gen == p->gen) {
+                const vrec *q = &p->recs[k->val];
+                best = (int)k->val;
+                dv = dist2(world ? &r->world : &r->cam, world ? &q->world : &q->cam);
+                dorg = dist2(ro, world ? &q->org_world : &q->org);
+                if (dv > 4.0f) {   /* the same-numbered copy isn't right there: search the copies */
+                    float best_s = dorg + COPY_VERTEX_WEIGHT * dv - 1.0f;
+                    uint32_t n;
+                    for (n = 0; n < COPY_SEARCH_MAX; n++) {
+                        const slot *o = probe(p->by_key, p->gen, occurrence_key(r->base, n));
+                        float sc, d, e;
+                        if (o->gen != p->gen)
+                            break;
+                        q = &p->recs[o->val];
+                        if (world && !q->has_world)
+                            continue;
+                        d = dist2(world ? &r->world : &r->cam, world ? &q->world : &q->cam);
+                        e = dist2(ro, world ? &q->org_world : &q->org);
+                        sc = e + COPY_VERTEX_WEIGHT * d;
+                        if (sc < best_s) {
+                            best_s = sc;
+                            best = (int)o->val;
+                            dv = d;
+                            dorg = e;
+                        }
+                    }
                 }
+                /* its copy belongs to the model copy found (or one as near): take it */
+                if (dv > 4.0f)
+                    di = prev_instance(p, r->site, ro, world, &inst);
+                found = dv <= 4.0f || di < 0 || sqrtf(dorg) <= sqrtf(di) + INST_SLACK;
+            } else {
+                di = prev_instance(p, r->site, ro, world, &inst);
             }
-            if (best != (int)k->val)
+            if (found) {
+                if (dv > COPY_MAX_MOVE * COPY_MAX_MOVE)
+                    continue;   /* no copy anywhere near: new this frame (came into view), drawn where it is */
+                if (best != (int)k->val)
+                    g_rematched++;
+                r->rematched = best != (int)k->val;
+                r->prev = p->recs[best].cam;
+            } else {
+                interp_vec3 w;
+                if (di < 0 || di > COPY_MAX_MOVE * COPY_MAX_MOVE)
+                    continue;
+                /* where the vertex was if its model only moved: the origin's motion */
+                w.x = (world ? r->world.x : r->cam.x) + inst.x - ro->x;
+                w.y = (world ? r->world.y : r->cam.y) + inst.y - ro->y;
+                w.z = (world ? r->world.z : r->cam.z) + inst.z - ro->z;
+                if (world)
+                    to_camera(&p->cam, &w, &r->prev);
+                else
+                    r->prev = w;
                 g_rematched++;
-            r->rematched = best != (int)k->val;
+                r->rematched = 1;
+            }
         }
-        r->prev = p->recs[best].cam;
         r->has_prev = 1;
         cell = grid_cell(r->sx, r->sy);
         if (cell >= 0) {
@@ -543,7 +680,7 @@ void interp_frame_end(void)
     link_previous();
     camera_motion();
     make_motion();
-    g_sets[g_build].count = g_sets[g_build].ndyn = 0;
+    g_sets[g_build].count = g_sets[g_build].ndyn = g_sets[g_build].ninst = 0;
     g_sets[g_build].gen++;
     g_sets[g_build].cam.valid = 0;
     g_recent_gen++;
@@ -553,7 +690,7 @@ void interp_frame_dropped(void)
 {
     if (!g_ready)
         return;
-    g_sets[g_build].count = g_sets[g_build].ndyn = 0;
+    g_sets[g_build].count = g_sets[g_build].ndyn = g_sets[g_build].ninst = 0;
     g_sets[g_build].gen++;
     g_sets[g_build].cam.valid = 0;
     g_recent_gen++;

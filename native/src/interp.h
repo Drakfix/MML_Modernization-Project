@@ -14,8 +14,10 @@ typedef struct {
     float x, y, z;            /* camera space */
 } interp_vec3;
 
-/* capture side: one projected vertex (sx, sy = the projector's raw output) */
-void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], float sx, float sy);
+/* capture side: one projected vertex (sx, sy = the projector's raw output); org = the camera-space
+ * origin of the model copy it belongs to (the transform's translation), which tells copies of the
+ * same model apart */
+void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], const float org[3], float sx, float sy);
 
 /* capture side, for geometry fixed in the world (the ground): only where it
  * is now; draw time derives where it was from the camera motion */

@@ -34,7 +34,7 @@
 #define SITE_RTPT_V2  GA(0x4EFF9Bu)
 
 static LARGE_INTEGER g_build_start, g_qpf;
-static double g_build_ms;
+static double g_build_ms, g_end_ms;
 static unsigned g_frames;
 static int g_census;
 
@@ -65,8 +65,15 @@ static void report(uint32_t ret, uint32_t v, uint32_t sxy)
         interp_vertex_static((const float *)GUEST(G_GTE_CAM), GVAR(float, sxy), GVAR(float, sxy + 4));
         return;
     }
-    interp_vertex(ret, (const int16_t *)GUEST(v), (const float *)GUEST(G_GTE_CAM),
-                  GVAR(float, sxy), GVAR(float, sxy + 4));
+    {
+        const int32_t *t = (const int32_t *)GUEST(G_GTE_TRANS);
+        float org[3];
+        org[0] = (float)t[0];
+        org[1] = (float)t[1];
+        org[2] = (float)t[2];
+        interp_vertex(ret, (const int16_t *)GUEST(v), (const float *)GUEST(G_GTE_CAM), org,
+                      GVAR(float, sxy), GVAR(float, sxy + 4));
+    }
 }
 
 /* r->esp is the game's esp minus 4 (the stub's pushfd) */
@@ -103,17 +110,23 @@ void gte_capture_frame_end(void)
         g_build_ms += (double)(now.QuadPart - g_build_start.QuadPart) * 1000.0 / (double)g_qpf.QuadPart;
         g_build_start.QuadPart = 0;
     }
-    interp_frame_end();
+    {   /* census: what the frame end itself costs (linking every vertex to the last frame) */
+        LARGE_INTEGER a, b;
+        QueryPerformanceCounter(&a);
+        interp_frame_end();
+        QueryPerformanceCounter(&b);
+        g_end_ms += (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)g_qpf.QuadPart;
+    }
     if (!g_census || ++g_frames % 60)
         return;
     interp_get_stats(&st, 1);
     log_printf("interp census: %u vertices projected (last frame), %u screen collisions, "
                "draw lookups %u: found %u (%.1f%%), matched to previous frame %u (%.1f%%), scene build %.2f ms/frame, "
-               "camera up to %.0f units %.1f deg/frame, %u vertices matched to a nearer copy",
+               "camera up to %.0f units %.1f deg/frame, %u vertices matched to a nearer copy, frame end %.3f ms/frame",
                st.projected, st.collisions, st.lookups, st.found,
                st.lookups ? 100.0 * st.found / st.lookups : 0.0, st.matched,
-               st.lookups ? 100.0 * st.matched / st.lookups : 0.0, g_build_ms / 60.0, st.cam_move, st.cam_turn, st.rematched);
-    g_build_ms = 0.0;
+               st.lookups ? 100.0 * st.matched / st.lookups : 0.0, g_build_ms / 60.0, st.cam_move, st.cam_turn, st.rematched, g_end_ms / 60.0);
+    g_build_ms = g_end_ms = 0.0;
     {
         int i;
         for (i = 0; i < SITES && g_site_counts[i].ret; i++) {

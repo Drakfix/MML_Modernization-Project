@@ -101,7 +101,7 @@ static void __cdecl clip_post(int produced)
     const uint8_t *uvs = (const uint8_t *)GUEST(g_a_uvs);
     const clip_rec *out = (const clip_rec *)GUEST(g_a_out);
     const int *order;
-    float near_z = GVAR(float, G_GTE_NEAR), c[5][3];
+    float near_z = GVAR(float, G_GTE_NEAR), c[5][3], org[3];
     int n = (int)g_a_count, i, k = 0;
 
     if ((n != 3 && n != 4) || produced <= 0 || produced > 8)
@@ -109,12 +109,18 @@ static void __cdecl clip_post(int produced)
     order = n == 4 ? quad_order : tri_order;
     for (i = 0; i < n; i++)
         camera_space(verts + 4 * i, c[i]);
+    {
+        const int32_t *t = (const int32_t *)GUEST(G_GTE_TRANS);
+        org[0] = (float)t[0];
+        org[1] = (float)t[1];
+        org[2] = (float)t[2];
+    }
     for (i = 0; i < n; i++) {
         int a = order[i], b = order[i + 1];
         int out_a = c[a][2] < near_z, out_b = c[b][2] < near_z;
         if (!out_a) {
             if (g_report && k < produced)     /* vertex a itself: exact, and tracked for 60 fps */
-                interp_vertex(g_a_site, verts + 4 * a, c[a], out[k].x, out[k].y);
+                interp_vertex(g_a_site, verts + 4 * a, c[a], org, out[k].x, out[k].y);
             k++;
             if (!out_b)
                 continue;
