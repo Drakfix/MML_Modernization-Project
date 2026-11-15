@@ -293,7 +293,10 @@ static uint16_t skate_inj_held, skate_inj_pressed;   /* stock turn / brake butto
 
 /* input state (this was the Python thread) */
 static double st_yaw, st_pitch;
-static int st_allowed = 1, flick_armed = 1;
+static int st_allowed = 1, flick_armed = 1;   /* st_allowed: the player has the plain follow camera's control */
+static int cam_owned = 1;                      /* ...and the orbit drives the camera (after the settle) */
+static volatile LONG cam_follow;               /* modern controls on, the game camera still settling */
+static volatile LONG cam_fresh;                /* the camera updates paused (a room load): take over at once */
 /* launcher Controls tab: camera speed (signed: negative = inverted) and deadzone */
 static double g_yaw_speed = YAW_SPEED, g_pitch_speed = PITCH_SPEED, g_stick_dz = STICK_DZ;
 static double cam_dist_cur = -1;
@@ -816,24 +819,56 @@ static void input_update(void)
     {
         /* coming back, the game camera keeps driving for a moment: right after a
          * load, a scene or a talk it is still blending in, so its angle (and Mega
-         * Man's facing) isn't settled yet; then the orbit takes over from it */
+         * Man's facing) isn't settled yet; then the orbit takes over from it.
+         * The controls don't wait for it: the player has control again, so the
+         * buttons and the movement are the modern ones right away (moving relative
+         * to the game camera, which the orbit follows meanwhile). Before, the raw
+         * pad reached the game in that window (about 0.7 s after every room load):
+         * the shoot trigger turned Mega Man (the original layout's turn button).
+         * Turning the camera, aiming or moving takes it over at once (moving relative
+         * to a camera that still swings walked him in a curve).
+         * After a room load (the camera updates paused, cam_fresh) the game camera
+         * swings in from where the last room's was, while the screen fades in: the
+         * orbit takes over on the first update instead, straight behind Mega Man. A
+         * talk or a script before control returns (a scene on arrival) clears that:
+         * then the game camera framed something on purpose and settles as before. */
         static int settle;
-        int allowed = orbit_allowed();
+        int allowed = orbit_allowed(), own, cam_input;
         if (!allowed)
             settle = 0;
         else if (settle < ORBIT_SETTLE)
             settle++;
-        allowed = allowed && (settle >= ORBIT_SETTLE || st_allowed);
-        if (st_active && allowed && !st_allowed) {
-            st_yaw = game_yaw();
-            st_pitch = clampd(game_pitch(), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+        if (!allowed && ((g_game_cam_age == 0 && (RIG8(1) || RIG8(5) || RIG8(6))) ||
+                         (g_game_cam_age > 4 && g_game_cam_age < 1000)))   /* (another camera: a scene) */
+            cam_fresh = 0;
+        cam_input = stick_norm(p.sThumbRX) != 0 || stick_norm(p.sThumbRY) != 0 || mdx || mdy || mwheel ||
+                    ACT(actions_of(&p) | (unsigned)g_kbm_acts, ACT_AIM) ||
+                    sqrt((double)p.sThumbLX * p.sThumbLX + (double)p.sThumbLY * p.sThumbLY) > g_stick_dz;
+        own = allowed && (settle >= ORBIT_SETTLE || cam_owned || cam_input || cam_fresh);
+        if (st_active && own && !cam_owned) {
+            if (cam_fresh) {   /* after a load: behind him (the follow camera's rest: facing + 0x800) */
+                st_yaw = (double)((((RD32(G_PLAYER_FACING) >> 16) & 0xfff) + 0x800) & 0xfff);
+                st_pitch = clampd(game_pitch(), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+            } else {
+                st_yaw = game_yaw();
+                st_pitch = clampd(game_pitch(), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+            }
             cam_dist_cur = -1;
-            log_printf("orbit: back from the game camera (yaw %d pitch %d)", (int)st_yaw, (int)st_pitch);
+            log_printf("orbit: back from the game camera (yaw %d pitch %d%s)", (int)st_yaw, (int)st_pitch,
+                       cam_fresh ? ", behind him after a load" : "");
         } else if (st_active && !allowed && st_allowed) {
             log_printf("orbit: handing over to the game camera (hold %d mode %d script %d input %02X)",
                        RIG8(1), RIG8(5), RIG8(6), P8(PL_INPUT_FLAGS));
         }
+        if (st_active && allowed && !own) {   /* settling: the movement follows the game camera */
+            st_yaw = game_yaw();
+            st_pitch = clampd(game_pitch(), PITCH_LIMIT_DOWN, PITCH_LIMIT_UP);
+        }
         st_allowed = allowed;
+        cam_owned = own;
+        if (own)
+            cam_fresh = 0;
+        cam_follow = st_active && allowed && !own;
     }
 
     /* aiming with a target = lock-on (Z-targeting): Mega Man faces the target
@@ -901,7 +936,9 @@ static void input_update(void)
      * movement stays all-round. The aim button keeps lock-on / the stock aim. */
     {
         unsigned acts = actions_of(&p) | (unsigned)g_kbm_acts;
-        int ok = g_aim_camera && st_active && st_allowed && !aiming, was = cam_aim;
+        /* (not while the game camera still settles after a load or a talk: it is still swinging
+           around, so shots go where Mega Man faces, as in the original) */
+        int ok = g_aim_camera && st_active && st_allowed && !cam_follow && !aiming, was = cam_aim;
         int pst = P8(PL_STATE), can_shoot = !(P8(PL_INPUT_FLAGS) & 0x60) &&
                   (pst <= 2 || pst == 6 || pst == 7 || pst == 8);
         /* a fire button only counts where Mega Man can shoot: the same buttons advance text
@@ -1254,7 +1291,19 @@ static void on_cam_apply(regs_t *r)
     int gate, ma, is_gameplay_cam, is_rail_cam, lock_stand, ready;
 
     frame_tick = (frame_tick + 1) & 0x3fffffff;
-    QueryPerformanceCounter(&g_last_cam_qpc);
+    {
+        /* the first camera update after a pause in them (a room load, a menu): the aim point
+           (aim_point_update, at the end of each update) is from before, in another room or
+           view; until this update refreshes it, aim the camera's way (Mega Man snapped to a
+           stray facing when firing at once after a load) */
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        if (qpc_freq.QuadPart && (now.QuadPart - g_last_cam_qpc.QuadPart) * 10 > qpc_freq.QuadPart) {
+            aim_face = (((int)r->ebx & 0xfff) + FACE_OFFSET) & 0xfff;
+            cam_fresh = 1;
+        }
+        g_last_cam_qpc = now;
+    }
     {
         /* only the gameplay camera (camera_update's common tail) is "the game's
          * camera"; cam_follow_lookat & co. also come through here every frame
@@ -1338,7 +1387,7 @@ static void on_cam_apply(regs_t *r)
         /* the boat rides (scripted rig, any controls): the camera stays above the water */
         rail_camera(r);
         cam_dist_cur = -1;
-    } else if (cam_active && !cam_suppress) {
+    } else if (cam_active && !cam_suppress && !cam_follow) {
         r->ebx = (uint32_t)cam_yaw;
         true_orbit();
         shoulder_apply(r);
@@ -1856,7 +1905,7 @@ static void on_apply_velocity(regs_t *r)
 
 static void on_cam_set_b(regs_t *r)
 {
-    if (cam_active)
+    if (cam_active && !cam_follow)
         r->edx = (uint32_t)cam_yaw;
 }
 
@@ -2193,6 +2242,7 @@ void controls_camera(int speed_x_pct, int speed_y_pct, int invert_x, int invert_
         /* resyncs to the game camera on the first frame the orbit may drive */
         st_active = 1;
         st_allowed = 0;
+        cam_owned = 0;
     }
     log_printf("controls: camera speed %.0f/%.0f%s%s, deadzone %.0f%%, orbit %s at start",
                g_yaw_speed / YAW_SPEED * 100, g_pitch_speed / PITCH_SPEED * 100,
