@@ -13,6 +13,7 @@
 #include <d3d11_4.h>   /* ID3D11Multithread */
 #include <dxgi1_6.h>
 #include <float.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1161,6 +1162,87 @@ static void ui_draw(void)
     ID3D11DeviceContext_Draw(g.ctx, (UINT)n, 0);
 }
 
+/* Dev aid for one-frame glitches (screen captures miss most frames at 60 fps): with the
+ * environment variable MML_FRAME_DUMP=N set, creating the file frame_dump.go in the game folder
+ * saves the next N presented frames (the game's and the in-between ones, in order) as
+ * frame_dump\NNNN_g|i.bmp at half size, then deletes the file. */
+static void frame_dump(int t)
+{
+    static int limit = -1, left, seq;
+    static ID3D11Texture2D *stage;
+    static UINT sw, sh;
+    D3D11_TEXTURE2D_DESC d;
+    D3D11_MAPPED_SUBRESOURCE m;
+    ID3D11Texture2D *src = g.tg[t].scene_resolved ? g.tg[t].scene_resolved : g.tg[t].scene;
+    if (limit < 0) {
+        const char *e = getenv("MML_FRAME_DUMP");
+        limit = e ? atoi(e) : 0;
+    }
+    if (!limit || !src)
+        return;
+    if (!left) {
+        if (GetFileAttributesA("frame_dump.go") == INVALID_FILE_ATTRIBUTES)
+            return;
+        DeleteFileA("frame_dump.go");
+        CreateDirectoryA("frame_dump", NULL);
+        left = limit;
+        log_printf("frame dump: %d frames", limit);
+    }
+    ID3D11Texture2D_GetDesc(src, &d);
+    if (!stage || sw != d.Width || sh != d.Height) {
+        if (stage)
+            ID3D11Texture2D_Release(stage);
+        d.MipLevels = d.ArraySize = 1;
+        d.SampleDesc.Count = 1;
+        d.SampleDesc.Quality = 0;
+        d.Usage = D3D11_USAGE_STAGING;
+        d.BindFlags = 0;
+        d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        d.MiscFlags = 0;
+        stage = NULL;
+        if (FAILED(ID3D11Device_CreateTexture2D(g.dev, &d, NULL, &stage)))
+            return;
+        sw = d.Width;
+        sh = d.Height;
+    }
+    ID3D11DeviceContext_CopyResource(g.ctx, (ID3D11Resource *)stage, (ID3D11Resource *)src);
+    if (SUCCEEDED(ID3D11DeviceContext_Map(g.ctx, (ID3D11Resource *)stage, 0, D3D11_MAP_READ, 0, &m))) {
+        int w = (int)sw / 2, h = (int)sh / 2, row = (w * 3 + 3) & ~3, y, x;
+        uint8_t *buf = (uint8_t *)malloc((size_t)row * h);
+        char name[64];
+        FILE *f;
+        if (buf) {
+            for (y = 0; y < h; y++) {   /* BGRA, top down -> 24-bit BMP rows, bottom up */
+                const uint8_t *s = (const uint8_t *)m.pData + (size_t)(2 * y) * m.RowPitch;
+                uint8_t *o = buf + (size_t)(h - 1 - y) * row;
+                for (x = 0; x < w; x++) {
+                    o[x * 3] = s[x * 8];
+                    o[x * 3 + 1] = s[x * 8 + 1];
+                    o[x * 3 + 2] = s[x * 8 + 2];
+                }
+            }
+            snprintf(name, sizeof name, "frame_dump\\%04d_%c.bmp", seq++, t ? 'i' : 'g');
+            if (fopen_s(&f, name, "wb") == 0 && f) {
+                uint8_t hd[54] = { 'B', 'M' };
+                uint32_t size = 54u + (uint32_t)row * h;
+                memcpy(hd + 2, &size, 4);
+                hd[10] = 54;
+                hd[14] = 40;
+                memcpy(hd + 18, &w, 4);
+                memcpy(hd + 22, &h, 4);
+                hd[26] = 1;
+                hd[28] = 24;
+                fwrite(hd, 1, 54, f);
+                fwrite(buf, 1, (size_t)row * h, f);
+                fclose(f);
+            }
+            free(buf);
+        }
+        ID3D11DeviceContext_Unmap(g.ctx, (ID3D11Resource *)stage, 0);
+    }
+    left--;
+}
+
 static void d3d_compose_target(int t)
 {
     static const float black[4] = { 0, 0, 0, 1 };
@@ -1179,6 +1261,7 @@ static void d3d_compose_target(int t)
     if (g.tg[t].scene_resolved)
         ID3D11DeviceContext_ResolveSubresource(g.ctx, (ID3D11Resource *)g.tg[t].scene_resolved, 0,
                                                (ID3D11Resource *)g.tg[t].scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
+    frame_dump(t);
     /* follow the window size */
     GetClientRect(g.hwnd, &rc);
     if (rc.right > 0 && rc.bottom > 0 && (rc.right != g.back_w || rc.bottom != g.back_h)) {
