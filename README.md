@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.8.5 beta.** The 0.1 releases are kept on the
+**Current version: 0.8.6 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -109,6 +109,18 @@ copy.
 - Fix: the balloons in Balloon Fantasy flickered at 60 fps.
 - Fix: on the boat rides, aiming all the way up took the camera under the water.
 - Fix: the subtitles of the boat repair scene now play on that scene.
+
+0.8.6 adds:
+
+- **Faster room transitions** (optional). Doors and ladders can play their transition 2, 4 or 8
+  times faster (Game page, Room transitions). Gameplay never runs faster.
+- Fix: in rooms with large floors (City Hall), the floor near a low camera was drawn over Mega
+  Man, counters and other objects standing on it.
+- Fix: at 60 fps, turning the camera in rooms without outdoor ground (the Apple Market) made
+  shop fronts and parts of Mega Man flicker.
+- Fix: with lock-on, special weapons now aim at the height of the locked enemy, like the buster.
+- Fix (modern controls): for a moment after each room change, the original button layout was
+  active (the shoot trigger turned Mega Man).
 
 The separate launcher (`MML Launcher.exe`) is still installed in game folders that an earlier
 Setup patched in place, and updating such a folder keeps it. New installs use the start menu.
@@ -216,6 +228,8 @@ the Japanese line being spoken.
   and the title screen says when one is out.
 - **New intro video,** with an option to skip it entirely.
 - **Timing fix** for the cutscene audio drift on modern PCs.
+- **Faster room transitions** (optional): doors and ladders play their transition 2, 4 or 8 times
+  faster.
 
 ### Subtitles and Japanese voices (optional, US version, experimental)
 
@@ -482,7 +496,7 @@ menu shows each setting's full description and choices beside the list.
 
 | Page | Settings |
 |------|----------|
-| Game | Version to play, importing each version, English subtitles, voice language, start menu at launch (show / skip), intro video, title screen hints, updates |
+| Game | Version to play, importing each version, English subtitles, voice language, start menu at launch (show / skip), intro video, title screen hints, room transitions, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio, frame rate, V-Sync, executable |
 | Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement |
 | Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, aim mode, crosshair, lock-on camera (classic / over the shoulder), aim sensitivity, reticle colour, mouse sensitivity |
