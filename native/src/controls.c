@@ -1033,6 +1033,23 @@ static void true_orbit(void)
     }
 }
 
+/* cam_apply_angles places the camera at target - d * dir(pitch), so to keep the camera where an
+ * orbit of `orbit` puts it while the view looks along the steeper `pitch`, hand it a virtual
+ * target d along that view from there (pitches positive up, 4096 = 360 degrees) */
+static void view_past_orbit(regs_t *r, const int32_t *t, int d, int yaw, double orbit, int pitch)
+{
+    double a = (yaw & 0xfff) * (PI / 2048.0);
+    double bo = -orbit * (PI / 2048.0), bv = -pitch * (PI / 2048.0);
+    double cx = t[0] - d * sin(a) * cos(bo), cy = t[1] - d * sin(bo), cz = t[2] - d * cos(a) * cos(bo);
+    if (!g_view_target)
+        g_view_target = (int32_t *)GUEST(guest_alloc(16));
+    g_view_target[0] = iround(cx + d * sin(a) * cos(bv));
+    g_view_target[1] = iround(cy + d * sin(bv));
+    g_view_target[2] = iround(cz + d * cos(a) * cos(bv));
+    g_view_target[3] = t[3];
+    r->eax = GADDR(g_view_target);
+}
+
 /* Camera collision and floor-safe look-up for the call in progress: r holds
  * cam_apply_angles' target (EAX), distance (EDX), yaw (EBX) and -pitch (ECX).
  * The camera orbits the target only up to LOOK_ORBIT_MAX; looking further up
@@ -1056,20 +1073,27 @@ static void place_camera(regs_t *r, int yaw, int pitch, int mode)
     d = iround(cam_dist_cur);
     r->edx = (uint32_t)d;
     r->ecx = (uint32_t)(-pitch & 0xffff);   /* cam_apply_angles negates ECX */
-    if (pitch > orbit) {
-        /* cam_apply_angles places the camera at target - d * dir(pitch), so hand
-         * it a virtual target d along the steeper view from where the orbit stops */
-        double a = (yaw & 0xfff) * (PI / 2048.0);
-        double bo = -orbit * (PI / 2048.0), bv = -pitch * (PI / 2048.0);
-        double cx = t[0] - d * sin(a) * cos(bo), cy = t[1] - d * sin(bo), cz = t[2] - d * cos(a) * cos(bo);
-        if (!g_view_target)
-            g_view_target = (int32_t *)GUEST(guest_alloc(16));
-        g_view_target[0] = iround(cx + d * sin(a) * cos(bv));
-        g_view_target[1] = iround(cy + d * sin(bv));
-        g_view_target[2] = iround(cz + d * cos(a) * cos(bv));
-        g_view_target[3] = t[3];
-        r->eax = GADDR(g_view_target);
-    }
+    if (pitch > orbit)
+        view_past_orbit(r, t, d, yaw, orbit, pitch);
+}
+
+/* The boat rides: the game's camera swings down behind Mega Man as he aims up, and at the top
+ * of the aim (+0x108 = -0x200, the stock clamp too) it ends up under the water, which then
+ * covers the sky (vanilla does the same). The camera stops RAIL_CAM_LOW below the deck (the
+ * water is ~625 below it: a camera at deck + 623 still sees the sky, at + 639 the water) and
+ * the view keeps tilting from there, so the whole aim range stays. ECX = -pitch. */
+#define RAIL_CAM_LOW  470
+static void rail_camera(regs_t *r)
+{
+    const int32_t *t = (const int32_t *)GUEST(r->eax);
+    int d = (int)r->edx, yaw = (int)r->ebx & 0xfff, pitch = -signed12((int)r->ecx & 0xfff);
+    double low = (double)S16(0x16) + RAIL_CAM_LOW, s;
+    if (d <= 0 || t[1] + d * sin(pitch * (PI / 2048.0)) <= low)
+        return;
+    s = (low - t[1]) / d;   /* the steepest orbit that keeps the camera at or above `low` */
+    if (s < 0)
+        s = 0;
+    view_past_orbit(r, t, d, yaw, asin(s > 1 ? 1 : s) * (2048.0 / PI), pitch);
 }
 
 /* Over-the-shoulder lock-on camera: while locked on, cam_apply_angles gets a view point slid
@@ -1214,7 +1238,7 @@ int controls_aim_point(double *x, double *y, double *z)
 static void on_cam_apply(regs_t *r)
 {
     int32_t px, pz;
-    int gate, ma, is_gameplay_cam, lock_stand, ready;
+    int gate, ma, is_gameplay_cam, is_rail_cam, lock_stand, ready;
 
     frame_tick = (frame_tick + 1) & 0x3fffffff;
     QueryPerformanceCounter(&g_last_cam_qpc);
@@ -1224,6 +1248,7 @@ static void on_cam_apply(regs_t *r)
          * with angles of their own */
         uint32_t ret = GVAR(uint32_t, r->esp + 4);
         is_gameplay_cam = ret == G_RET_CAM_COMMON_BLEND || ret == G_RET_CAM_COMMON;
+        is_rail_cam = ret == G_RET_CAM_SCRIPTED && rail_mode();
         if (is_gameplay_cam) {
             g_game_yaw = (int)r->ebx;
             g_game_pitch_ecx = (int)r->ecx;
@@ -1296,7 +1321,11 @@ static void on_cam_apply(regs_t *r)
         move_start_grace--;
 
 
-    if (cam_active && !cam_suppress) {
+    if (is_rail_cam) {
+        /* the boat rides (scripted rig, any controls): the camera stays above the water */
+        rail_camera(r);
+        cam_dist_cur = -1;
+    } else if (cam_active && !cam_suppress) {
         r->ebx = (uint32_t)cam_yaw;
         true_orbit();
         shoulder_apply(r);

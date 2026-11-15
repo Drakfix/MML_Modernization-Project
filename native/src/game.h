@@ -73,6 +73,7 @@
 #define G_FN_CAM_APPLY          GA(0x42961Bu)   /* cam_apply_angles: EAX pos*, EDX dist, EBX yaw, ECX -pitch */
 #define G_RET_CAM_COMMON_BLEND  GA(0x42A2BBu)   /* return addresses of camera_apply_common's two cam_apply_angles */
 #define G_RET_CAM_COMMON        GA(0x42A2E0u)   /* calls (the gameplay camera; other callers: cam_follow_* etc.) */
+#define G_RET_CAM_SCRIPTED      GA(0x42A41Cu)   /* FUN_0042A302's call: the scripted rig, e.g. the boat rides */
 #define G_FN_CAM_SET_B          GA(0x4298F6u)   /* cam_set_angles_b: yaw in EDX */
 #define G_FN_PLAYER_MOVE        GA(0x4B53D3u)   /* runs each frame while the player has control */
 #define G_FN_PLAYER_UPDATE      GA(0x4A9A31u)   /* player_update(EAX = object): pre + state handlers */
