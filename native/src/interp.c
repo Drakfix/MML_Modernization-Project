@@ -436,9 +436,10 @@ static void link_previous(void)
         if (!p)
             continue;
         {
-            /* In the world when both frames know their camera (it comes with the ground); in a
-             * room without ground (Balloon Fantasy's studio) in camera space, which is exact
-             * while the camera holds still and close enough while it moves.
+            /* In the world when both frames know their camera (the ground's, or the game's own
+             * for rooms without ground: gte_capture.c); otherwise in camera space, which is
+             * exact only while the camera holds still (turning in the Apple Market paired shop
+             * fronts and Mega Man's parts with other copies).
              * The model copy comes first: its previous self is the copy drawn by the same code
              * whose origin was nearest. A vertex takes the copy of itself that belongs to it
              * (crowded balloons swapped vertices by position alone). A model animated vertex by

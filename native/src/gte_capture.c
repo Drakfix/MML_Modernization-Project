@@ -24,6 +24,12 @@
 
 #define G_GTE_ROT   0x77EAF8u  /* float[9] */
 #define G_GTE_TRANS 0x77EB1Cu  /* s32[3] */
+/* The game's world -> camera transform: actors load it (SetRotMatrix / SetTransMatrix) before
+ * projecting their position. The terrain emitters use the same one (identical in every frame
+ * checked in Downtown), but rooms without ground (the Apple Market, shops) only have this.
+ * .bss: the same address in both programs. */
+#define G_CAM_ROT   0x564CB4u  /* float[9] */
+#define G_CAM_TRANS 0x56F174u  /* s32[3] */
 /* terrain emitters live here; their GTE matrix is the plain world -> camera one */
 #define TERRAIN_CODE_LO GA(0x433000u)
 #define TERRAIN_CODE_HI GA(0x436000u)
@@ -109,6 +115,14 @@ void gte_capture_frame_end(void)
         QueryPerformanceCounter(&now);
         g_build_ms += (double)(now.QuadPart - g_build_start.QuadPart) * 1000.0 / (double)g_qpf.QuadPart;
         g_build_start.QuadPart = 0;
+    }
+    {   /* the frame's camera, unless its ground already gave it (the first one wins) */
+        const int32_t *t = (const int32_t *)GUEST(G_CAM_TRANS);
+        float tf[3];
+        tf[0] = (float)t[0];
+        tf[1] = (float)t[1];
+        tf[2] = (float)t[2];
+        interp_camera((const float *)GUEST(G_CAM_ROT), tf);
     }
     {   /* census: what the frame end itself costs (linking every vertex to the last frame) */
         LARGE_INTEGER a, b;
