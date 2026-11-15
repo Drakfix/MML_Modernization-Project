@@ -2039,6 +2039,38 @@ void controls_filter(pad_t *p)
     }
 }
 
+/* The game's button configuration (its Turn option, Rotational or Directional, saved with the game; one
+ * of two preset tables in the player's action masks +0x124...) decides which PS1 button does what. The
+ * modern layer speaks the default one (Rotational): D-pad Up/Down = forward/back, Left/Right = run (strafe) left/
+ * right, Cross jump, Square buster, Triangle special, Circle talk, R2 stock aim. With another
+ * configuration the same buttons mean something else: with Directional, Left/Right turn (L1/R1 strafe):
+ * every strafe while firing became a turn in place (state 4), which dropped the camera aim's face
+ * hold, which sent a forward run, which the strafe dropped again: a loop in place with no shots
+ * (issue #11). So each default button is handed to the game as the button its own mask names. */
+unsigned short controls_remap_bits(unsigned short bits)
+{
+    static const struct { uint16_t off, def; int dir; } map[] = {
+        { PL_MASK_FWD, 0x0010, 1 }, { PL_MASK_BACK, 0x0040, 1 }, { PL_MASK_RUN_L, 0x0080, 1 },
+        { PL_MASK_RUN_R, 0x0020, 1 }, { PL_MASK_JUMP, 0x4000, 0 }, { PL_MASK_BUSTER, 0x8000, 0 },
+        { PL_MASK_SPECIAL, 0x1000, 0 }, { PL_MASK_TALK, 0x2000, 0 }, { PL_MASK_AIM, 0x0200, 0 },
+    };
+    uint16_t moved = 0, to = 0;
+    int i;
+    if (!orbit_live() || rail_live())   /* menus, the classic camera, the boat rides: the game's own layout */
+        return bits;
+    for (i = 0; i < (int)(sizeof map / sizeof map[0]); i++) {
+        uint16_t m;
+        if (!(bits & map[i].def) || (map[i].dir && cam_suppress))   /* (the stock aim turns with the D-pad as is) */
+            continue;
+        m = map[i].off == PL_MASK_TALK && talk_hidden ? talk_saved : P16(map[i].off);
+        if (m && m != map[i].def) {
+            moved |= map[i].def;
+            to |= m;
+        }
+    }
+    return (unsigned short)((bits & ~moved) | to);
+}
+
 static DWORD WINAPI hooked_xgs(DWORD idx, xstate_t *s)
 {
     DWORD r = debug_pad_apply(idx, s, g_xgs_real(idx, s));

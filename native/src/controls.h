@@ -17,6 +17,9 @@ void controls_debug_lock_test(void);
  * left stick, RT shoot, LT aim, dodge injection, aim stick swap, forward
  * injection). Runs once per pad poll, whichever backend read the pad. */
 void controls_filter(pad_t *p);
+/* the PS1 buttons controls_filter's pad turned into (default button configuration) -> the buttons
+   the game's own button configuration uses for the same actions, while the modern controls drive */
+unsigned short controls_remap_bits(unsigned short bits);
 
 /* Apply the debug remote pad (if active) over a physical read. Returns 1 if
  * the result counts as a connected pad. */

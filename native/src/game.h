@@ -56,6 +56,11 @@
 #define PL_MASK_TURN_L          0x128       /* u16 turn left mask (player_turn: facing -) */
 #define PL_MASK_TURN_R          0x12A       /* u16 turn right mask (facing +) */
 #define PL_MASK_JUMP            0x138       /* u16 jump mask */
+#define PL_MASK_RUN_L           0x12C       /* u16 run/strafe left mask (default config: D-pad Left) */
+#define PL_MASK_RUN_R           0x12E       /* u16 run/strafe right mask (default config: D-pad Right) */
+#define PL_MASK_BUSTER          0x13A       /* u16 buster mask (default config: Square) */
+#define PL_MASK_SPECIAL         0x13C       /* u16 special weapon mask (default config: Triangle) */
+#define PL_MASK_AIM             0x140       /* u16 stock aim mask (default config: R2) */
 #define PL_ANIM_PREV            0xAD        /* u8 last update's anim id (a change starts the new one) */
 #define PL_ITEMS                0x16B       /* u8: 1 Jump Springs, 2 Jet Skates */
 #define PL_SKATE_COUNT          0x54A       /* u8: walk button held count (> 8 starts the skates), > 0x10 skating */

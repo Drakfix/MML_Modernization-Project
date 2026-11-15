@@ -341,7 +341,7 @@ static void on_poll_entry(regs_t *r)
         memset(&p, 0, sizeof p);
         conn = 1;
     }
-    g_bits = conn ? (controls_filter(&p), ps1_bits(&p)) : 0;
+    g_bits = conn ? (controls_filter(&p), controls_remap_bits(ps1_bits(&p))) : 0;
 }
 
 /* pad_poll, right before the keyboard half */
