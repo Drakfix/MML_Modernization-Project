@@ -248,6 +248,7 @@ static volatile uint8_t *g_shot_flag;
 static volatile int32_t *g_shot_pitch;
 static double aim_px, aim_py, aim_pz;   /* where the camera looks (world), refreshed per camera update */
 static volatile LONG aim_face;          /* the facing that sends shots to that point */
+static volatile LONG lock_tx, lock_ty, lock_tz;   /* the locked target (world), for the shots' pitch */
 static volatile LONG aim_on_enemy;      /* the view ray stopped at an enemy (crosshair feedback) */
 static int g_aim_sens = 60;             /* % camera speed while shoulder-aiming ([controls] aim_sensitivity) */
 static LONG aim_since;   /* frame_tick when camera aim started (the shot waits for the turn) */
@@ -859,6 +860,7 @@ static void input_update(void)
                 lockon_pos(&tx, &ty, &tz);
             }
             lock_face = face_toward(tx, tz);
+            lock_tx = tx, lock_ty = ty, lock_tz = tz;
             want = (double)((lock_face - FACE_OFFSET) & 0xfff);
             if (g_sh_mode) {
                 /* over the shoulder: look from the shoulder point to the enemy (the view point
@@ -1203,17 +1205,28 @@ static void aim_point_update(void)
         aim_face = (cam_yaw + FACE_OFFSET) & 0xfff;
 }
 
-/* what FUN_0042A85C returns now: the game's own value, or the camera-aimed pitch */
+/* the shots' pitch from Mega Man's chest to a world point */
+static int pitch_to(double x, double y, double z)
+{
+    double dx = x - S16(0x14), dz = z - S16(0x18), dy = y - (S16(0x16) - AIM_CHEST);
+    int pitch = iround(SHOT_PITCH_SIGN * atan2(dy, sqrt(dx * dx + dz * dz)) * (2048.0 / PI));
+    if (pitch > AIM_PITCH_MAX) pitch = AIM_PITCH_MAX;
+    if (pitch < -AIM_PITCH_MAX) pitch = -AIM_PITCH_MAX;
+    return pitch;
+}
+
+/* what FUN_0042A85C returns now: the game's own value, the camera-aimed pitch, or (locked on) the
+   pitch to the target. The buster finds a locked enemy by itself (the game's own targeting, which
+   lock-on feeds), but the special weapons only take this pitch: level, without it (issue #13). */
 static void shot_pitch_sync(void)
 {
     if (!g_shot_flag)
         return;
-    if ((cam_aim || sh_aim) && face_hold && !lock_active) {
-        double dx = aim_px - S16(0x14), dz = aim_pz - S16(0x18), dy = aim_py - (S16(0x16) - AIM_CHEST);
-        int pitch = iround(SHOT_PITCH_SIGN * atan2(dy, sqrt(dx * dx + dz * dz)) * (2048.0 / PI));
-        if (pitch > AIM_PITCH_MAX) pitch = AIM_PITCH_MAX;
-        if (pitch < -AIM_PITCH_MAX) pitch = -AIM_PITCH_MAX;
-        *g_shot_pitch = pitch;
+    if (lock_active) {
+        *g_shot_pitch = pitch_to(lock_tx, lock_ty, lock_tz);
+        *g_shot_flag = 1;
+    } else if ((cam_aim || sh_aim) && face_hold) {
+        *g_shot_pitch = pitch_to(aim_px, aim_py, aim_pz);
         *g_shot_flag = 1;
     } else {
         *g_shot_pitch = GVAR(int32_t, G_AIMCAM_PITCH);
