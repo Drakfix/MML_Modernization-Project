@@ -675,7 +675,8 @@ static HRESULT WINAPI s_blt(void **i, LPRECT dr, void **srci, LPRECT sr, DWORD f
          * last one without clearing it, so it must reach the screen. No
          * in-between frame: its target doesn't hold the picture being dimmed */
         ensure_gfx(s->dd);
-        rec_present(1);
+        if (mml_transition_blt_present())   /* (a fast transition shows every n-th dimming step) */
+            rec_present(1);
         return DD_OK;
     }
     if (src)
@@ -702,6 +703,7 @@ static HRESULT WINAPI s_flip(void **i, void **target, DWORD flags)
     surface *s = FROM(surface, vt4, i);
     (void)target; (void)flags;
     ensure_gfx(s->dd);
+    mml_transition_flip_present();
     /* with interpolation: in-between frame(s) first, the game's frame half a tick later */
     rec_present(GVAR(uint8_t, G_FRAME_STEP_ADDR));
     return DD_OK;

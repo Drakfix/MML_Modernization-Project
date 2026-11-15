@@ -385,18 +385,84 @@ static void frame_drop_check(void)
     walks_seen = g_frames;
 }
 
+/* ---- fast transitions ([general] transition_speed) ----
+ * Going through a door or up a ladder runs the game's loader job (coroutine slot 1, the transition
+ * object at 0x6E23CC set to 2): a wipe or a fade to black, the next room's setup, then a wait for a
+ * fixed number of frames (the ladder's: 60 frames, 0x6E23D0 counting down) before the room fades
+ * in. On the PlayStation that time hid the disc; here the room is ready long before. While the
+ * loader runs, the game's clock runs transition_speed times faster: GetTickCount is all the game
+ * paces itself with (the frame limiter, and the fades, which scale their steps by the time
+ * passed), so the whole transition plays faster as it is, wipe and fade included. Only every n-th
+ * of those frames is drawn (the others take the frame loop's own late skip), so drawing and
+ * presenting don't hold the speed back. Gameplay never runs fast: the loader is done before the
+ * player has control again, and the fade-in after it runs at normal speed. */
+#define G_TRANSITION_OBJ   0x6E23CCu       /* u8: the transition job's handler, 2 = the loader */
+#define G_CO_SLOT1_ACTIVE  GA(0x551404u)   /* u16: coroutine slot 1 (the transition job) in use */
+static int g_trans_speed = 1;
+static double g_vclock;      /* ms the game's clock is ahead of the real one */
+static double g_trans_start; /* (real ms) when the current fast transition began, 0 = none */
+
+void mml_set_transition_speed(int speed)
+{
+    g_trans_speed = speed < 1 ? 1 : speed > 16 ? 16 : speed;
+}
+
+static int transition_fast(void)
+{
+    return g_trans_speed > 1 && GVAR(uint8_t, G_TRANSITION_OBJ) == 2 && GVAR(uint16_t, G_CO_SLOT1_ACTIVE) != 0;
+}
+
+/* Fades to black don't clear the screen: each step draws a dimming layer over the last picture
+ * and presents it with Blt (ddshim). Skipping those steps' drawing lost their dimming (at 4x the
+ * screen got only half way dark before the cut to black), so while the last present was a Blt,
+ * every step draws, and only every n-th of them is presented. */
+static int g_last_blt;
+
+int mml_transition_blt_present(void)
+{
+    static unsigned n;
+    g_last_blt = 1;
+    if (!transition_fast()) {
+        n = 0;
+        return 1;
+    }
+    return ++n % (unsigned)g_trans_speed == 0;
+}
+
+void mml_transition_flip_present(void)
+{
+    g_last_blt = 0;
+}
+
 static DWORD WINAPI rebased_gettickcount(void)
 {
     LARGE_INTEGER now;
-    double ms;
+    double ms, real;
     if (!g_qpc_freq.QuadPart)
         return g_real_gettickcount() - g_tick_base;
     QueryPerformanceCounter(&now);
-    ms = (double)(now.QuadPart - g_qpc_base.QuadPart) * 1000.0 / (double)g_qpc_freq.QuadPart;
+    real = (double)(now.QuadPart - g_qpc_base.QuadPart) * 1000.0 / (double)g_qpc_freq.QuadPart;
+    ms = real + g_vclock;
     if (recomp_return_address((uintptr_t)_ReturnAddress()) == G_DRAW_RET) {
         static int skipped;
+        static unsigned fast_n;
         perf_iteration(ms);
         double deadline = GVAR(float, G_FRAME_LIMITER_TH);
+        if (transition_fast()) {
+            if (g_trans_start == 0.0)
+                g_trans_start = real;
+            if (!g_last_blt && ++fast_n % (unsigned)g_trans_speed != 0) {
+                /* past the deadline: the frame loop's late skip, no drawing this step */
+                skipped = 0;
+                return (DWORD)ceil(deadline);
+            }
+        } else {
+            fast_n = 0;
+            if (g_trans_start != 0.0) {
+                log_printf("transition: %.0f ms at %dx speed", real - g_trans_start, g_trans_speed);
+                g_trans_start = 0.0;
+            }
+        }
         if (g_max_skipped < 0)
             g_max_skipped = (int)GetPrivateProfileIntA("debug", "max_skipped_draws", 2, g_ini);
         if (ms < deadline)
@@ -415,6 +481,13 @@ static DWORD WINAPI rebased_gettickcount(void)
             g_perf_first_wait = ms;
         frame_drop_check();
         left = GVAR(float, G_FRAME_LIMITER_TH) - ms;
+        if (left > 0.0 && left < 200.0 && transition_fast()) {
+            /* fast transition: the clock jumps ahead, only a 1/speed share of the wait is real */
+            double skip = left * (g_trans_speed - 1) / g_trans_speed;
+            g_vclock += skip;
+            ms += skip;
+            left -= skip;
+        }
         if (left > 1.5 && left < 200.0) {
             double before = ms;
             mml_sleep_ms(left - 1.0);
@@ -559,6 +632,9 @@ static void install_timing(void)
     }
     if (hook_mid(G_SITE_WALKER_CALL, sizeof walker_call, walker_call, on_frame))
         log_printf("timing: frame-limiter drift fix ON");
+    mml_set_transition_speed((int)GetPrivateProfileIntA("general", "transition_speed", 1, g_ini));
+    if (g_trans_speed > 1)
+        log_printf("timing: room transitions at %dx speed", g_trans_speed);
 }
 
 /* ---- intro ---- */

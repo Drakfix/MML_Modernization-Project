@@ -32,6 +32,7 @@
 #include "gamefiles.h"
 #include "gfx.h"
 #include "gfx_ui.h"
+#include "mml.h"
 #include "input.h"
 #include "kbm.h"
 #include "lockon.h"
@@ -52,6 +53,7 @@ enum {
     IT_FPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
     IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR, IT_LOCKCAM, IT_AIMSENS,
+    IT_TRANSITION,   /* room transition speed ([general] transition_speed) */
     /* the keyboard's keys for the modern controls ([controls] key_*: two each), and putting them back */
     IT_KEY, IT_KEY_RESET,
     IT_SECTION,  /* a heading over the rows after it (the start menu's): not selectable
@@ -103,10 +105,11 @@ typedef struct {
     int def;
 } item;
 
-static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS" };
+static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "GAME" };
 #define AIM_HELP "Camera: firing turns Mega Man to where the camera looks. Character: shots go where he faces."
 #define XH_HELP "With camera aim, a marker shows where your shots go."
 #define AIMSENS_HELP "Camera speed while aiming over the shoulder with no target, for finer aim."
+#define TRANS_HELP "Plays room changes (doors, ladders) faster: the wipe, the black screen and the room setup. "     "The game was made to hide loading from the disc there; now the next room is ready long before."
 #define LOCKCAM_HELP "Over the shoulder: aiming looks past Mega Man's shoulder, at the locked enemy or the horizon, and he keeps moving. R3 swaps sides."
 
 static const item g_game_items[] = {
@@ -130,6 +133,7 @@ static const item g_game_items[] = {
     { 2, IT_CROSSHAIR, "Crosshair", XH_HELP },
     { 2, IT_LOCKCAM, "Lock-on camera", LOCKCAM_HELP },
     { 2, IT_AIMSENS, "Aim sensitivity", AIMSENS_HELP },
+    { 3, IT_TRANSITION, "Room transitions", TRANS_HELP },
 };
 
 /* ---- the start menu's pages: everything the launcher has ----
@@ -216,6 +220,11 @@ static const item g_start_items[] = {
       "it while it plays.", CH_INTRO, NCH(CH_INTRO) },
     { PAGE_FILES, IT_CHOICE, "Title screen hints", "A card on the title screen listing the shortcuts: the settings "
       "menu, quick save, the modern controls switch, and the way back to this menu.", CH_HINTS, NCH(CH_HINTS) },
+    { PAGE_FILES, IT_SECTION, "Gameplay" },
+    { PAGE_FILES, IT_TRANSITION, "Room transitions", "How fast room changes play: going through a door, up a "
+      "ladder, into a building. Original keeps the 1997 timing, made to hide loading from the disc. 2x to 8x play "
+      "the wipe, the black screen and the room setup that many times faster; the game itself never runs faster "
+      "than normal." },
     { PAGE_FILES, IT_SECTION, "Updates", NULL, NULL, 0, PL_ANDROID | PL_WIN | PL_LINUX },
     { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer release on GitHub, downloads its APK and hands it to "
       "Android's installer. Android may ask once to allow installs from this app, and to confirm.",
@@ -367,7 +376,7 @@ static const item g_start_items[] = {
 static const item *g_items = g_game_items;
 static int NITEMS = (int)(sizeof g_game_items / sizeof g_game_items[0]);
 static const char *const *PAGES = GAME_PAGES;
-static int NPAGES = 3;
+static int NPAGES = (int)(sizeof GAME_PAGES / sizeof GAME_PAGES[0]);
 #define MAX_ITEMS 128
 /* (the per-item state below is MAX_ITEMS long: a table that outgrows it stops the build) */
 typedef char start_items_fit[sizeof g_start_items / sizeof g_start_items[0] <= MAX_ITEMS ? 1 : -1];
@@ -376,6 +385,7 @@ typedef char game_items_fit[sizeof g_game_items / sizeof g_game_items[0] <= MAX_
 static const int SPEEDS[] = { 50, 75, 100, 125, 150, 200 };
 static const int MOUSE[] = { 0, 50, 75, 100, 150, 200 };
 static const int AIMSENS[] = { 40, 60, 80, 100 };
+static const int TRANS[] = { 1, 2, 4, 8 };
 static const struct { const char *name; unsigned rgb; } RETICLES[] = {
     { "Yellow", 0xFFD840 }, { "Orange", 0xFF9A2E }, { "Red", 0xFF4040 }, { "Pink", 0xFF6EC7 },
     { "Purple", 0xB47CFF }, { "Blue", 0x4AA3FF }, { "Cyan", 0x3EE0E0 }, { "Green", 0x5BE36B },
@@ -410,7 +420,7 @@ static struct {
     char ini[MAX_PATH], game_dir[MAX_PATH];
     /* values */
     int fps60, vsync, res, msaa, shader_game_res, nearest, texf, fog, lod_full, hdtex;   /* texf: TEXF_* */
-    int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens;
+    int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens, trans;
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
     char **presets;
@@ -788,6 +798,11 @@ static void apply(int kind)
             controls_aim_sensitivity(AIMSENS[M.aim_sens]);
         ini_int("controls", "aim_sensitivity", AIMSENS[M.aim_sens]);
         break;
+    case IT_TRANSITION:
+        if (!M.start)
+            mml_set_transition_speed(TRANS[M.trans]);
+        ini_int("general", "transition_speed", TRANS[M.trans]);
+        break;
     default:
         break;
     }
@@ -835,6 +850,7 @@ static void change(int kind, int dir)
     case IT_AIM: M.aim_camera = !M.aim_camera; break;
     case IT_LOCKCAM: M.lock_shoulder = !M.lock_shoulder; break;
     case IT_AIMSENS: M.aim_sens = cycle(M.aim_sens, 4, dir); break;
+    case IT_TRANSITION: M.trans = cycle(M.trans, 4, dir); break;
     case IT_CROSSHAIR: M.crosshair = !M.crosshair; break;
     default: return;
     }
@@ -984,6 +1000,12 @@ static void value_text(int kind, char *out, size_t n)
     case IT_AIM: strcpy_s(out, n, M.aim_camera ? "Camera" : "Character"); break;
     case IT_LOCKCAM: strcpy_s(out, n, M.lock_shoulder ? "Over the shoulder" : "Classic"); break;
     case IT_AIMSENS: _snprintf_s(out, n, _TRUNCATE, "%d%%", AIMSENS[M.aim_sens]); break;
+    case IT_TRANSITION:
+        if (TRANS[M.trans] == 1)
+            strcpy_s(out, n, "Original");
+        else
+            _snprintf_s(out, n, _TRUNCATE, "%dx faster", TRANS[M.trans]);
+        break;
     case IT_CROSSHAIR: strcpy_s(out, n, M.crosshair ? "On" : "Off"); break;
     case IT_GF_EDITION: strcpy_s(out, n, M.edition ? "Rockman DASH (JP)" : "Mega Man Legends (US)"); break;
     case IT_KEY_RESET: strcpy_s(out, n, "Reset"); break;
@@ -1060,6 +1082,7 @@ static int gauge(int kind, int *total)
     switch (kind) {
     case IT_CAMSPEED: *total = 6; return M.cam_speed + 1;
     case IT_MOUSE: *total = 5; return M.mouse;
+    case IT_TRANSITION: *total = 3; return M.trans;
     case IT_MSAA: *total = 2; return M.msaa == 1 ? 0 : M.msaa == 4 ? 1 : 2;
     case IT_GF_US:
     case IT_GF_JP:
@@ -2440,6 +2463,7 @@ static void load_values(const char *ini, const char *game_dir)
     GetPrivateProfileStringA("controls", "lockon_camera", "classic", s, sizeof s, ini);
     M.lock_shoulder = _stricmp(s, "shoulder") == 0;
     M.aim_sens = nearest_index(AIMSENS, 4, GetPrivateProfileIntA("controls", "aim_sensitivity", 60, ini));
+    M.trans = nearest_index(TRANS, 4, GetPrivateProfileIntA("general", "transition_speed", 1, ini));
     /* presets */
     if (!M.presets && (M.presets = (char **)calloc(MAX_PRESETS, sizeof *M.presets)) != NULL) {   /* (once) */
         _snprintf_s(dir, sizeof dir, _TRUNCATE, "%s\\Modernization\\shaders", game_dir);
@@ -2583,7 +2607,7 @@ int menu_start(const char *ini, const char *game_dir)
     g_items = g_game_items;
     NITEMS = (int)(sizeof g_game_items / sizeof g_game_items[0]);
     PAGES = GAME_PAGES;
-    NPAGES = 3;
+    NPAGES = (int)(sizeof GAME_PAGES / sizeof GAME_PAGES[0]);
     log_printf("menu: play");
     return 1;
 }
