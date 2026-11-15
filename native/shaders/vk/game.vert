@@ -28,7 +28,7 @@ void main()
     // points down, as the game's does
     vec2 ndc = vec2(in_pos.x / pc.app_size.x * 2.0 - 1.0, in_pos.y / pc.app_size.y * 2.0 - 1.0);
     // multiplied through by w so texture coordinates and colours interpolate with perspective
-    gl_Position = vec4(ndc * w, depth_of(in_pos.z) * w, w);
+    gl_Position = vec4(ndc * w, depth_of(in_pos.z * (pc.z_scale > 0.0 ? pc.z_scale : 1.0)) * w, w);
     v_color = in_diffuse.bgra;
     v_flat = in_diffuse.bgra;
     v_uv = in_uv;

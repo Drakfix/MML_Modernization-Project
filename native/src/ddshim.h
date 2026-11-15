@@ -10,6 +10,7 @@ extern int g_fog_debug;
 void ddshim_frame(void);
 extern float g_probe_x, g_probe_y;
 extern int g_drop_clamped;
+extern int g_ground_depth_test;   /* [debug] ground_depth_test: depth-test the game's ALWAYS world draws */
 
 /* Bring the renderer up early for our intro player (see intro_video.c). */
 int ddshim_video_begin(HWND w);

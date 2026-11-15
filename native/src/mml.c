@@ -877,6 +877,7 @@ void mml_init(void)
             mml_gfx_options(g_ini, g_home, &o);
             g_fog_debug = GetPrivateProfileIntA("debug", "fog_debug", 0, g_ini);
             g_drop_clamped = GetPrivateProfileIntA("video", "drop_clamped", 1, g_ini);
+            g_ground_depth_test = GetPrivateProfileIntA("debug", "ground_depth_test", 1, g_ini);
             {
                 char pr[32];
                 ini_string("debug", "probe", "", pr, sizeof pr);

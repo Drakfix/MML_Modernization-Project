@@ -43,7 +43,7 @@ typedef struct {
     float textured, flat;
     float fog_color[4];
     float fog_start, fog_end, fog_on, fog_from_w;
-    float alpha_test, alpha_func, alpha_ref, pad;
+    float alpha_test, alpha_func, alpha_ref, z_scale;
 } draw_cb;
 
 #define VB_BYTES (4 << 20)
@@ -676,6 +676,7 @@ static void apply_state(void)
         c->alpha_test = g.st.alpha_test ? 1.0f : 0.0f;
         c->alpha_func = (float)g.st.alpha_func;
         c->alpha_ref = g.st.alpha_ref / 255.0f;
+        c->z_scale = g.st.z_bias ? GFX_Z_BIAS_SCALE : 1.0f;
         if (SUCCEEDED(ID3D11DeviceContext_Map(g.ctx, (ID3D11Resource *)g.cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) {
             memcpy(m.pData, c, sizeof *c);
             ID3D11DeviceContext_Unmap(g.ctx, (ID3D11Resource *)g.cb, 0);

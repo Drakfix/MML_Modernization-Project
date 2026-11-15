@@ -12,5 +12,5 @@ layout(push_constant) uniform Draw
     float alpha_test;
     float alpha_func;   // D3DCMPFUNC
     float alpha_ref;    // 0..1
-    float pad;
+    float z_scale;      // depth tested at z * this (gfx.h GFX_Z_BIAS_SCALE; 0 = 1)
 } pc;

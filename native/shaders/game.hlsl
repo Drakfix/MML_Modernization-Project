@@ -14,7 +14,7 @@ cbuffer Draw : register(b0)
     float alpha_test;
     float alpha_func;     // D3DCMPFUNC
     float alpha_ref;      // 0..1
-    float pad;
+    float z_scale;        // depth tested at z * this (gfx.h GFX_Z_BIAS_SCALE; 0 = 1)
 };
 
 Texture2D tex : register(t0);
@@ -65,7 +65,7 @@ PSIn vs_main(VSIn i)
                         1.0 - i.pos.y / app_size.y * 2.0);
     // multiply through by w so texture coordinates and colours interpolate
     // with perspective, exactly like rhw did on the old pipeline
-    o.pos = float4(ndc * w, depth_of(i.pos.z) * w, w);
+    o.pos = float4(ndc * w, depth_of(i.pos.z * (z_scale > 0.0 ? z_scale : 1.0)) * w, w);
     o.lin_z = i.pos.z;
     o.color = i.diffuse;
     o.flat_color = i.diffuse;

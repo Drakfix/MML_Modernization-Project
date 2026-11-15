@@ -114,7 +114,7 @@ typedef struct {   /* game.hlsl's cbuffer Draw / draw.glsl's push constants (64 
     float textured, flat;
     float fog_color[4];
     float fog_start, fog_end, fog_on, fog_from_w;
-    float alpha_test, alpha_func, alpha_ref, pad;
+    float alpha_test, alpha_func, alpha_ref, z_scale;
 } draw_pc;
 
 typedef struct {   /* a buffer mapped for the CPU */
@@ -1711,6 +1711,7 @@ static void apply_state(void)
         d->alpha_test = v.st.alpha_test ? 1.0f : 0.0f;
         d->alpha_func = (float)v.st.alpha_func;
         d->alpha_ref = v.st.alpha_ref / 255.0f;
+        d->z_scale = v.st.z_bias ? GFX_Z_BIAS_SCALE : 1.0f;
         vkCmdPushConstants(c, v.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof *d, d);
         vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, v.layout, 1, 1, &t->set, 0, NULL);
         v.cb_dirty = 0;

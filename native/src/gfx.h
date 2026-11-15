@@ -26,6 +26,10 @@ typedef struct {
 
 enum { GFX_TRILIST = 4, GFX_TRISTRIP = 5, GFX_TRIFAN = 6 };   /* D3DPRIMITIVETYPE values */
 
+/* z_bias draws are depth tested at z * this: 1/256 of their distance nearer (2 units at 512).
+   Scaling z keeps the depth exactly linear in 1 / z (see gfx_depth_of). */
+#define GFX_Z_BIAS_SCALE (1.0f - 1.0f / 256.0f)
+
 typedef struct {
     uint8_t blend;                /* alpha blending on */
     uint8_t src_blend, dst_blend; /* D3DBLEND values */
@@ -36,6 +40,9 @@ typedef struct {
     uint8_t linear;               /* bilinear texture filtering (else point) */
     uint8_t fog;                  /* table fog on */
     uint8_t scene_depth;          /* 3D world geometry: its depth counts for effects (ReShade) */
+    uint8_t z_bias;               /* depth tested as if a little nearer (GFX_Z_BIAS_SCALE): the
+                                     ground's depth test (ddshim.c) wins against the surfaces it
+                                     lies on, as when it had none */
     uint32_t fog_color;           /* 0x00RRGGBB */
     float fog_start, fog_end;
 } gfx_state;

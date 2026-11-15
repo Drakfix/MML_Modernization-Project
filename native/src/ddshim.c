@@ -227,7 +227,7 @@ static unsigned g_frame_no = 1, g_midframe_uploads;
 int g_interp_census;
 int g_smooth_bg;   /* [video] smooth_sky: bglayer.c is installed */
 int g_blend_census;   /* [debug] blend_census: what the 3D world draws semi-transparent */
-static struct { uint8_t op, blend, src, dst; unsigned draws, verts; float z0, z1; } g_bc[32];
+static struct { uint8_t op, blend, src, dst, zw, zf; unsigned draws, verts; float z0, z1; } g_bc[32];
 #define G_FRAME_STEP_ADDR 0x77EAC1u   /* byte: 60 Hz ticks per game frame (2 = 30 fps) */
 #define G_GTE_NEAR_ADDR  0x77EBC0u
 #define G_GTE_H_ADDR     0x77EBDCu
@@ -1146,8 +1146,8 @@ void ddshim_frame(void)
         log_printf("blend census: camera mode %d scripted %d distance %d pitch %d (60 frames)",
                    GVAR(uint8_t, 0x77E955u), GVAR(uint8_t, 0x77E956u), GVAR(int32_t, 0x77E95Cu), GVAR(int32_t, 0x77E964u));
         for (k = 0; k < 32 && g_bc[k].draws; k++)
-            log_printf("   world op %02X blend %d (%d,%d): %u draws %u verts z %.4f..%.4f", g_bc[k].op, g_bc[k].blend,
-                       g_bc[k].src, g_bc[k].dst, g_bc[k].draws, g_bc[k].verts, g_bc[k].z0, g_bc[k].z1);
+            log_printf("   world op %02X blend %d (%d,%d) zwrite %d zfunc %d: %u draws %u verts z %.4f..%.4f", g_bc[k].op, g_bc[k].blend,
+                       g_bc[k].src, g_bc[k].dst, g_bc[k].zw, g_bc[k].zf, g_bc[k].draws, g_bc[k].verts, g_bc[k].z0, g_bc[k].z1);
         memset(g_bc, 0, sizeof g_bc);
     }
     if (rec_enabled())
@@ -1202,28 +1202,46 @@ static int clamped(const gfx_vertex *v)
     return v->z == 1.0f && v->rhw >= 0.09999f && v->rhw <= 0.10001f;
 }
 
-/* Translucent world polygons (water, glass) are drawn with ZFUNC ALWAYS and
- * no depth write: the game relies on the ordering table to put them after
- * what is behind them. That order breaks past the original draw distance:
- * flagged terrain cells (Lake Jyun's water) go into a fixed bucket at depth
- * 16000 (0x4346C6 / 0x434D25: big OT + 8000 bytes), which was "behind
- * everything" when nothing was drawn past ~14336, but now the far wall at
- * 18000+ is drawn before it and the water painted over the wall. A draw that
- * lies wholly beyond the original range (vanilla depth cap 0xE00 * 4 = 14336,
- * z = 0.875) gets a real depth test (still no write); nearer draws keep the
- * game's ALWAYS untouched. World vertices have rhw = 0.1 / z exactly, which
- * keeps 2D overlays out. */
-static int beyond_original_range(const gfx_vertex *v, DWORD n)
+/* The ground (terrain, room floors), translucent world polygons (water, glass) and some overlays
+ * (the camera-facing card of a tree, drawn over its other card) are drawn with ZFUNC ALWAYS and no
+ * depth write: the game relies on the ordering table to put them before what stands on them and
+ * after what they should cover. That order breaks in two ways:
+ * - Past the original draw distance: flagged terrain cells (Lake Jyun's water) go into a fixed
+ *   bucket at depth 16000 (0x4346C6 / 0x434D25: big OT + 8000 bytes), which was "behind
+ *   everything" when nothing was drawn past ~14336, but the far wall at 18000+ is drawn before it.
+ *   A draw wholly beyond the original range (vanilla depth cap 0xE00 * 4 = 14336, z = 0.875)
+ *   gets a real depth test (still no write).
+ * - Near a low camera: a polygon that reaches far in depth (a floor running under the camera) is
+ *   sorted by one key for all of it, which can come after the models standing on it, and it
+ *   paints over their lower half (City Hall's floor over Mega Man's legs and the counter). A draw
+ *   that spans more than GROUND_SPAN in depth gets the depth test too, tested a little nearer
+ *   (z_bias) so it still covers the surfaces it lies on (the plaque on Downtown's wall speckled
+ *   without). Overlays and cards span little and keep the game's order: tested, a tree's
+ *   camera-facing card was cut where it crosses its other card.
+ * [debug] ground_depth_test=0 keeps only the first rule. World vertices have rhw = 0.1 / z
+ * exactly, which keeps 2D overlays out. */
+int g_ground_depth_test = 1;
+#define GROUND_SPAN (64.0f / 16384.0f)   /* 64 units */
+
+/* 0 = leave the draw to the game's order, 1 = beyond the original range, 2 = reaches far in depth */
+static int ground_depth_rule(const gfx_vertex *v, DWORD n)
 {
     DWORD k;
+    float z0 = 1e30f, z1 = -1e30f;
     if (!n)
         return 0;
     for (k = 0; k < n; k++) {
         float r = v[k].rhw * v[k].z;
-        if (!(v[k].z > 0.875f) || r < 0.0999f || r > 0.1001f)
+        if (!(v[k].z > 0.0f) || r < 0.0999f || r > 0.1001f)
             return 0;
+        if (v[k].z < z0)
+            z0 = v[k].z;
+        if (v[k].z > z1)
+            z1 = v[k].z;
     }
-    return 1;
+    if (z0 > 0.875f)
+        return 1;
+    return g_ground_depth_test && z1 - z0 > GROUND_SPAN ? 2 : 0;
 }
 
 /* returns the number of vertices written to out (a triangle list) */
@@ -1555,9 +1573,13 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
         const gfx_vertex *v0 = (const gfx_vertex *)(g_display_raw_verts ? g_display_raw_verts : verts);
         s.scene_depth = !(v0->z == 0.1f && v0->rhw == 1.0f) && v0->z < 0.98f;
     }
-    if (g_cur_bucket == 4 && s.z_enable && s.z_func == D3DCMP_ALWAYS && beyond_original_range(
-            (const gfx_vertex *)(g_display_raw_verts ? g_display_raw_verts : verts), n))
-        s.z_func = D3DCMP_LESSEQUAL;
+    if (g_cur_bucket == 4 && s.z_enable && s.z_func == D3DCMP_ALWAYS) {
+        int rule = ground_depth_rule((const gfx_vertex *)(g_display_raw_verts ? g_display_raw_verts : verts), n);
+        if (rule) {
+            s.z_func = D3DCMP_LESSEQUAL;
+            s.z_bias = rule == 2;
+        }
+    }
     rec_state(&s);
     if (g_fog_debug)
         fog_debug(&s, (const gfx_vertex *)verts, n);
@@ -1603,12 +1625,14 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
         uint8_t op = g_cur_pkt ? (uint8_t)(g_cur_pkt[7] & 0xFC) : 0;
         int k;
         for (k = 0; k < 32 && g_bc[k].draws &&
-                    !(g_bc[k].op == op && g_bc[k].blend == s.blend && g_bc[k].src == s.src_blend && g_bc[k].dst == s.dst_blend); k++)
+                    !(g_bc[k].op == op && g_bc[k].blend == s.blend && g_bc[k].src == s.src_blend && g_bc[k].dst == s.dst_blend &&
+                      g_bc[k].zw == s.z_write && g_bc[k].zf == s.z_func); k++)
             ;
         if (k < 32) {
             DWORD q;
             if (!g_bc[k].draws) {
                 g_bc[k].op = op; g_bc[k].blend = s.blend; g_bc[k].src = s.src_blend; g_bc[k].dst = s.dst_blend;
+                g_bc[k].zw = (uint8_t)s.z_write; g_bc[k].zf = s.z_func;
                 g_bc[k].z0 = 1e9f; g_bc[k].z1 = -1e9f;
             }
             g_bc[k].draws++;
