@@ -90,7 +90,9 @@ VK_DEVICE(VK_DECL)
 
 #define FRAMES 3   /* in flight: with 2, the game thread waited on Android until the system handed a
                       swapchain image back (a third of its time in City Hall) */
-#define VB_BYTES (4u << 20)        /* per frame: the game's vertices, then the UI's */
+#define VB_BYTES (4u << 20)        /* per frame to start with: the game's vertices, then the UI's
+                                      (grows: vb_room) */
+#define VB_MAX_BYTES (256u << 20)
 #define STAGING_BYTES (8u << 20)   /* per frame: texture uploads (bigger ones get their own buffer) */
 #define MAX_SWAP 8
 #define MAX_PIPES 128
@@ -1715,6 +1717,33 @@ static void apply_state(void)
     }
 }
 
+/* Room for `bytes` more in this frame's vertex buffer, at `align`; its offset in *at. A frame holds
+ * the game's frame and its 60 fps in-between frames, all its vertices again each: with full-detail
+ * models and ground in the big fields that passed 4 MB, and the in-between frame's last draws (the
+ * near ground, the cliffs, Mega Man) were dropped, so the far scenery and the water under the ground
+ * showed instead (issue #10, Vulkan only). A full buffer is replaced by one twice the size, kept for
+ * later frames; the old one goes once the GPU is done with this frame. */
+static int vb_room(VkDeviceSize bytes, VkDeviceSize align, VkDeviceSize *at)
+{
+    frame *f = &v.fr[v.fi];
+    VkDeviceSize pos = (f->vb.pos + align - 1) & ~(align - 1), size = f->vb.size;
+    host_buf nb;
+    if (pos + bytes <= f->vb.size) {
+        *at = pos;
+        return 1;
+    }
+    while (size < bytes || size < 2 * f->vb.size)
+        size *= 2;
+    if (size > VB_MAX_BYTES || !host_buf_make(&nb, size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT))
+        return 0;
+    dead_add(DEAD_BUFFER, (uint64_t)f->vb.buf);
+    dead_add(DEAD_MEMORY, (uint64_t)f->vb.mem);
+    f->vb = nb;
+    log_printf("gfx: a frame's vertex buffer grew to %u MB", (unsigned)(size >> 20));
+    *at = 0;
+    return 1;
+}
+
 /* Batching as in gfx_d3d11.c: consecutive draws with the same state and texture go out as one
    triangle list when anything changes. */
 #define BATCH_MAX (3 * 16384)
@@ -1730,9 +1759,8 @@ static void flush_batch(void)
         return;
     g_nbatch = 0;
     bytes = (VkDeviceSize)n * sizeof(gfx_vertex);
-    at = f->vb.pos;
-    if (at + bytes > f->vb.size)
-        return;   /* (4 MB of the game's vertices in one frame: never) */
+    if (!vb_room(bytes, 1, &at))
+        return;
     memcpy(f->vb.map + at, g_batch, (size_t)bytes);
     f->vb.pos = at + bytes;
     vkCmdBindVertexBuffers(f->cmd, 0, 1, &f->vb.buf, &at);
@@ -1913,8 +1941,7 @@ static void ui_draw(VkCommandBuffer c)
     if (g_ui_n <= 0 || !v.ui_atlas)
         return;
     bytes = (VkDeviceSize)g_ui_n * sizeof(gfx_ui_vert);
-    at = (f->vb.pos + 15) & ~(VkDeviceSize)15;
-    if (at + bytes > f->vb.size)
+    if (!vb_room(bytes, 16, &at))
         return;
     memcpy(f->vb.map + at, g_ui_verts, (size_t)bytes);
     f->vb.pos = at + bytes;
