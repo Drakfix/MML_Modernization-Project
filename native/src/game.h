@@ -45,7 +45,10 @@
 #define PL_INPUT_FLAGS          0xBD        /* 0x40 input locked, 0x20 scripted input */
 #define PL_RUN_DIR              0x112       /* u8 run direction vs facing: 0 fwd, 1 left, 2 back, 3 right */
 #define PL_RUN_DIR_PREV         0x113
-#define PL_FIRE_FLAGS           0x174       /* u8: 0x80 buster / 0x40 special firing (set per shot) */
+#define PL_FIRE_FLAGS           0x174       /* u8: 0x80 buster / 0x40 special firing (set per shot); 0x04 the shot
+                                             * animation plays on the arms only (upper-body channel +0x104) */
+#define PL_FIRE_BUFFER          0x176       /* u8: a shot pressed while the back run can't fire (1 special, 2 buster) */
+#define PL_FIRE_PENDING         0x177       /* u8: a follow-up shot queued by the weapon (1 buster, 2 special) */
 #define PL_MOVE_ANGLE           0x116       /* s16 travel offset from facing */
 #define PL_HELD                 0x11C       /* u16 held buttons (PS1 bits) */
 #define PL_MASK_WALK            0x134       /* u16 walk-modifier button mask (0x2000) */
@@ -58,6 +61,8 @@
 #define PL_MASK_JUMP            0x138       /* u16 jump mask */
 #define PL_MASK_RUN_L           0x12C       /* u16 run/strafe left mask (default config: D-pad Left) */
 #define PL_MASK_RUN_R           0x12E       /* u16 run/strafe right mask (default config: D-pad Right) */
+#define PL_MASK_STEP_L          0x130       /* u16 walk-mode sidestep left mask (with the walk modifier) */
+#define PL_MASK_STEP_R          0x132       /* u16 walk-mode sidestep right mask */
 #define PL_MASK_BUSTER          0x13A       /* u16 buster mask (default config: Square) */
 #define PL_MASK_SPECIAL         0x13C       /* u16 special weapon mask (default config: Triangle) */
 #define PL_MASK_AIM             0x140       /* u16 stock aim mask (default config: R2) */

@@ -810,6 +810,12 @@ void mml_init(void)
         controls_lockon_camera(_stricmp(c, "shoulder") == 0, _stricmp(s, "left") == 0);
     }
     controls_aim_sensitivity(GetPrivateProfileIntA("controls", "aim_sensitivity", 60, g_ini));
+    controls_walk_shoot(GetPrivateProfileIntA("controls", "walk_shoot", 1, g_ini));
+    {
+        char bp[16];
+        ini_string("controls", "backpedal", "walk", bp, sizeof bp);
+        controls_backpedal_style(_stricmp(bp, "jog") == 0);
+    }
     if (GetPrivateProfileIntA("debug", "remote_pad", 0, g_ini))
         controls_debug_pad();
     if (GetPrivateProfileIntA("debug", "lock_test", 0, g_ini))

@@ -80,6 +80,19 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define SH_LEVEL_TIME    24      /* 1/60 s: shoulder aim levels the view toward the horizon at first */
 #define LOCK_STEP_PCT    200     /* walk / backstep speed while locked on, % of stock */
 #define LOCK_SIDESTEP_PCT 500    /* sidestep while locked on (stock 0x20 is 1/16 of a run) */
+#define WS_SIDE_SIGN     1       /* side axis of player_apply_velocity: rel > 0 (right of the facing) = this * -side */
+#define BACKPEDAL_PCT    225     /* the backpedal at full tilt, % of the stock walk 0x50 (LOCK_STEP_PCT at the walk's
+                                    edge): 225 = 35% of a run; its legs then step ~1.3x as fast as the run's
+                                    (640 = the run's speed needed 3.7x: a frantic shuffle) */
+#define ANIM_RATE_MAX    8       /* at most this many poses per update when an animation is sped up */
+#define MOVE_EASE        0.4     /* face-hold movement: share of the way to the stick's velocity per update (30/s):
+                                    ~0.1 s to settle on a change of direction or speed */
+#define BACKJOG_PCT      55      /* backpedal=jog: its speed at full tilt, % of a run */
+#define G_ANIM_SCRIPTS   0x765764u   /* player body animations 0x00-0x3F: script per id (anim_start) */
+#define RUN_BACK_EASE    683     /* in a burst the strafe run slows from this angle off the facing (60 deg)... */
+#define RUN_BACK_EDGE    1138    /* ...to the backpedal's speed where the backpedal takes over (100 deg: past it
+                                    the strafe run's body would turn away from the target) */
+#define BACK_HYST        57      /* +-5 deg around RUN_BACK_EDGE, so the stick near it doesn't flip states */
 #define LOCK_TURN_STEP   0x100   /* max facing turn per update toward the target */
 #define AIM_HOLD         36      /* camera aim: 1/60 s it stays on after the fire button is let go */
 #define AIM_TURN_STEP    0x400   /* camera aim: max facing turn per update (180 deg in 2 updates) */
@@ -212,6 +225,13 @@ int controls_kbm_active(void)
 /* shared between the frame hook and the pad wrapper */
 static volatile LONG cam_active, cam_suppress;
 static volatile LONG move_active, move_fwd, move_walk, inject_fwd;
+static volatile LONG backpedal;   /* in a face hold, the stick back: walk back facing the target, any tilt */
+static int fire_btn;   /* a fire button held where Mega Man can shoot (any aim mode) */
+static volatile LONG combat;   /* a face hold during a burst with walk_shoot: moving every way while shooting */
+static int ws_in_state;        /* the state handler is running (its player_apply_velocity, not the weapon's) */
+static unsigned ws_update;     /* player updates counted (before the pre-handler) */
+static int g_backjog;          /* [controls] backpedal=jog: the backpedal past a light tilt is the run played backward */
+static int g_walk_shoot = 1, ws_hooked;   /* walking while shooting ([controls] walk_shoot; its hooks in) */
 static volatile LONG dodge_req;
 static volatile LONG lock_active, lock_free, lock_face;   /* lock_free: aim still held after the lock was lost */
 static int g_lock_test;   /* Z-targeting: locked on, facing toward the target */
@@ -944,6 +964,8 @@ static void input_update(void)
         /* a fire button only counts where Mega Man can shoot: the same buttons advance text
            and answer prompts (Circle is the special weapon by default) */
         firing = ok && can_shoot && (ACT(acts, ACT_SHOOT) || ACT(acts, ACT_SPECIAL));
+        /* (any mode, also locked on: the backpedal's burst below) */
+        fire_btn = st_active && st_allowed && can_shoot && (ACT(acts, ACT_SHOOT) || ACT(acts, ACT_SPECIAL));
         /* the crosshair follows real shots: the game's weapon-firing flags (+0x174 & 0xC0, set
            by the shot code), not presses */
         since_fire = ok && (P8(PL_FIRE_FLAGS) & 0xC0) ? 0 : since_fire < 1e9 ? since_fire + ticks : since_fire;
@@ -1012,12 +1034,24 @@ static void input_update(void)
     move_fwd = fwd;
     move_walk = moving && fwd < (int)(g_walk_frac * 32767);
     move_active = moving;
-    /* camera aim, moving toward the camera: the game has no way to shoot while moving backward
-     * (the backward run turns his body around and never shoots, the walk-back stops for every
-     * shot), so there he turns to run toward the camera and shoots where he runs. */
+    /* Moving away from where he faces in a face hold during a burst (the fire button held or a
+     * shot still out): the backward run turns his body around and never shoots, so he
+     * backpedals instead (the walk back, at any tilt), which shoots on the move with
+     * walk_shoot (on_pre_handler). Outside a burst nothing changes: locked on, a light tilt
+     * steps back and a full one runs back; with camera aim, moving toward the camera turns him
+     * to run that way. Without walk_shoot the walk back stops for every shot: camera aim then
+     * turns him to run toward the camera and shoot where he runs. */
     {
         static int fled;   /* the last shots went out running toward the camera */
-        int back = cam_aim && !lock_active && moving && abs(((facing - face_dir + 2048) & 0xfff) - 2048) > 1536;
+        static int was_back;
+        int pedal = g_walk_shoot && ws_hooked;
+        int burst = fire_btn || (P8(PL_FIRE_FLAGS) & 0xC0);
+        /* in a burst the backpedal takes over from RUN_BACK_EDGE (100 deg), otherwise the back
+           sector starts at 135 deg (the backward run) */
+        int edge = pedal && burst ? RUN_BACK_EDGE + (was_back ? -BACK_HYST : BACK_HYST) : 1536;
+        int rel_back = moving && abs(((facing - face_dir + 2048) & 0xfff) - 2048) > edge;
+        was_back = rel_back;
+        int back = cam_aim && !lock_active && rel_back && !(pedal && burst);
         if (firing)
             fled = back;
         else if (fled || back) {   /* ...then they don't turn him around afterwards */
@@ -1029,6 +1063,8 @@ static void input_update(void)
            camera turning, the hold turned Mega Man in the middle of a conversation) */
         int st = P8(PL_STATE), aim_state = st <= 2 || st == 6 || st == 7 || st == 8;
         face_hold = (lock_active && st != 3) || (cam_aim && !back && aim_state) || (sh_aim && aim_state);
+        backpedal = pedal && burst && face_hold && rel_back && st != 7 && st != 8;
+        combat = pedal && burst && face_hold;
     }
     /* Jet Skates button: held, or a press toggles them ([controls] skates_toggle=1) */
     {
@@ -1520,9 +1556,42 @@ static void roll_tune(void)
  * full speed, past it the run goes from RUN_MIN_PCT to full speed. The
  * animation is slowed by the same factor so the feet keep up with the ground
  * (an extra hold tick now and then, the game's own per-tick blend does the rest). */
+/* While shooting in a face hold: the speed by direction, % of the full speed, from the angle off the
+ * facing: full up to RUN_BACK_EASE, a smoothstep down to the backpedal's speed at RUN_BACK_EDGE,
+ * that speed beyond (the backpedal, and the drift of jumps that way). */
+static double back_curve(int rel)
+{
+    double bp = g_backjog ? BACKJOG_PCT : 0x50 * BACKPEDAL_PCT / 100.0 / 0x200 * 100, e;
+    rel = abs(rel);
+    if (rel <= RUN_BACK_EASE)
+        return 100;
+    e = clampd((double)(rel - RUN_BACK_EASE) / (RUN_BACK_EDGE - RUN_BACK_EASE), 0, 1);
+    return 100 + (bp - 100) * e * e * (3 - 2 * e);
+}
+
+/* One pose of the body animation forward, as anim_tick does when a hold runs out (+0x98 the entry,
+ * +0x94 the script; an entry's flags byte & 0x80 = jump to entry & 0x7F, 0xFF = the end, which
+ * holds). A footstep (event & 0x80) on the skipped pose is kept on the new one. 0 at the end. */
+static int anim_skip_pose(void)
+{
+    uint32_t cur = GVAR(uint32_t, PL(0x98)), next;
+    uint8_t flags, ev;
+    if (!cur)
+        return 0;
+    flags = GVAR(uint8_t, cur + 3);
+    if (flags == 0xFF)
+        return 0;
+    next = (flags & 0x80) ? GVAR(uint32_t, PL(0x94)) + (flags & 0x7Fu) * 8 : cur + 8;
+    ev = P8(0xA6) & 0x80;
+    GVAR(uint32_t, PL(0x98)) = next;
+    GVAR(uint32_t, PL(0xA4)) = GVAR(uint32_t, next);
+    P8(0xA6) |= ev;
+    return 1;
+}
+
 static void locomotion_tune(void)
 {
-    int st = P8(PL_STATE), id = P8(PL_ANIM_ID), pct;
+    int st = P8(PL_STATE), id = P8(PL_ANIM_ID), pct, rate = -1;   /* rate: % step rate (default = speed) */
     double n = move_fwd / 32767.0, w = g_walk_frac, t;
     loco_pct = 100;
     if ((st == 1 && P8(PL_SUBSTATE) >= 1 && (P8(PL_VARIANT) == 0 || face_hold)) ||
@@ -1534,6 +1603,9 @@ static void locomotion_tune(void)
          * the target / the camera's way; stock they crawl (the sidestep at 1/16 of a run) */
         if (face_hold)
             pct = pct * (st == 6 ? LOCK_SIDESTEP_PCT : LOCK_STEP_PCT) / 100;
+        if (backpedal && st == 1 && n > w && w < 1)   /* past the walk range: up to the backpedal's top speed */
+            pct += (int)(((g_backjog ? BACKJOG_PCT * 0x200 / 0x50 : BACKPEDAL_PCT) - LOCK_STEP_PCT) *
+                         clampd((n - w) / (1 - w), 0, 1));
         loco_pct = pct;
         if (id < 0x0C || id > 0x0F)
             return;
@@ -1542,25 +1614,38 @@ static void locomotion_tune(void)
         if (t < 0) t = 0;
         if (t > 1) t = 1;
         pct = g_run_min + (int)((100 - g_run_min) * t);
+        if (combat && face_hold)   /* moving backward while shooting: slower toward the back */
+            pct = (int)(pct * back_curve(signed12((move_face - face_dir) & 0xfff)) / 100);
         loco_pct = pct;
+        /* slowed while shooting, the run's long strides at a slow step rate looked like low gravity:
+           its steps slow only by the square root of its speed (feet slide a little instead) */
+        if (combat && face_hold && pct < 100)
+            rate = (int)(100 * sqrt(pct / 100.0));
         if (id != 0x01 && id != 0x04)
             return;
     } else {
         loco_anim_acc = 0;
         return;
     }
-    /* animation rate follows the speed: slower = extra hold ticks, faster =
-     * shaved ones (never to 0, anim_tick steps on its own) */
-    loco_anim_acc += 100 - pct;
+    /* animation rate follows the speed: slower = extra hold ticks, faster = shaved ones, and
+     * where a pose already lasts a single update (all of the walk, step and run poses) whole
+     * poses skipped, so the legs keep up with the ground (anim_tick steps once more on its own); for
+     * now only the backpedal skips (the lock-on steps would shuffle at up to 5x) */
+    loco_anim_acc += 100 - (rate >= 0 ? rate : pct);
     while (loco_anim_acc >= 100) {
         loco_anim_acc -= 100;
         if (P8(PL_ANIM_HOLD) < 0x7F)
             P8(PL_ANIM_HOLD)++;
     }
-    while (loco_anim_acc <= -100) {
-        loco_anim_acc += 100;
-        if (P8(PL_ANIM_HOLD) > 1)
-            P8(PL_ANIM_HOLD)--;
+    {
+        int skips = 0;
+        while (loco_anim_acc <= -100) {
+            loco_anim_acc += 100;
+            if (P8(PL_ANIM_HOLD) > 1)
+                P8(PL_ANIM_HOLD)--;
+            else if (backpedal && st == 1 && skips < ANIM_RATE_MAX - 1 && anim_skip_pose())   /* (the backpedal only) */
+                skips++;
+        }
     }
 }
 
@@ -1760,6 +1845,305 @@ static void skate_velocity(regs_t *r, int st)
     }
 }
 
+/* ---- walking while shooting ----
+ * The game shoots on the move only while running. The run's shot (player_try_shoot mode 1) sets
+ * +0x174 & 4: the shot animation plays on the second animation channel (+0x104: arms and torso)
+ * while the body channel keeps the run. The walk (state 1, forward and back) and the sidestep
+ * (6) shoot standing instead (mode 0: a whole-body shot animation, then idle), and while a shot
+ * is out the walk stands still (state_01) and drops to idle (pre_01). So in those states the
+ * shot is started here the run's way, right before the state's input handler, and the walk's
+ * two handlers don't see it (+0x174's firing bits, the pending and buffered shots, the fire
+ * buttons): he keeps walking and the shot plays on his arms. A weapon that can't fire on the
+ * move stops him (state 0) as when running, and the idle state fires it the stock way. */
+#define G_FN_TRY_SHOOT      GA(0x4ACF9Du)   /* player_try_shoot(EAX p, EDX mode): 0 standing, 1 on the move */
+#define G_SITE_PRE_CALL     GA(0x4A9B3Bu)   /* player_update: xor edx,edx; mov dl,[ebp+9]; call pre[dl] */
+#define G_SITE_STATE_CALL   GA(0x4A9B49u)   /* the same before call state[dl] */
+#define G_SITE_AFTER_STATE  GA(0x4A9B59u)   /* call player_apply_local_velocity */
+static int ws_hidden;
+static uint8_t ws_fire, ws_pending, ws_buffer;
+static uint16_t ws_held, ws_pressed;
+
+#ifndef MML_RUNNER
+static uint32_t g_fn_try_shoot;   /* G_FN_TRY_SHOOT in the running program (controls_install) */
+typedef uint32_t(__cdecl *try_shoot_fn)(uint32_t p, uint32_t mode);
+static __declspec(naked) void try_shoot_thunk(void)   /* called as try_shoot_fn */
+{
+    __asm {
+        push ebx
+        push esi
+        push edi
+        push ebp
+        mov eax, [esp + 20]
+        mov edx, [esp + 24]
+        mov esi, g_fn_try_shoot
+        call esi
+        pop ebp
+        pop edi
+        pop esi
+        pop ebx
+        ret
+    }
+}
+#endif
+
+static void try_shoot(int mode)
+{
+    if (recomp_in_shim()) {
+        uint32_t regs[4];
+        regs[0] = G_PLAYER, regs[1] = (uint32_t)mode, regs[2] = regs[3] = 0;
+        recomp_call_watcall(G_FN_TRY_SHOOT, regs, 0, NULL);
+        return;
+    }
+#ifndef MML_RUNNER
+    ((try_shoot_fn)(void *)try_shoot_thunk)(G_PLAYER, (uint32_t)mode);
+#endif
+}
+
+static int ws_firing(void)
+{
+    return (P8(PL_FIRE_FLAGS) & 0xC0) || P8(PL_FIRE_PENDING);
+}
+
+static void ws_show(void)
+{
+    if (!ws_hidden)
+        return;
+    ws_hidden = 0;
+    P8(PL_FIRE_FLAGS) |= ws_fire;
+    P8(PL_FIRE_PENDING) = ws_pending;
+    P8(PL_FIRE_BUFFER) = ws_buffer;
+    P16(PL_HELD) |= ws_held;
+    P16(PL_PRESSED) |= ws_pressed;
+}
+
+/* before the pre-handler call (EBP = the object) */
+static void ws_hide(void)
+{
+    uint16_t fire = P16(PL_MASK_BUSTER) | P16(PL_MASK_SPECIAL);
+    ws_hidden = 1;
+    ws_fire = P8(PL_FIRE_FLAGS) & 0xC0;
+    P8(PL_FIRE_FLAGS) &= (uint8_t)~0xC0;
+    ws_pending = P8(PL_FIRE_PENDING);
+    P8(PL_FIRE_PENDING) = 0;
+    ws_buffer = P8(PL_FIRE_BUFFER);
+    P8(PL_FIRE_BUFFER) = 0;
+    ws_held = P16(PL_HELD) & fire;
+    P16(PL_HELD) &= (uint16_t)~fire;
+    ws_pressed = P16(PL_PRESSED) & fire;
+    P16(PL_PRESSED) &= (uint16_t)~fire;
+}
+
+/* Standing with a shot out, the idle (pre_00) won't walk or sidestep until the shot is over and
+ * only runs once its animation passed the weapon's cooldown frame (FUN_004ad2ca), so a move
+ * pressed mid-shot waited for it. With a move held, the idle's handler doesn't see the shot
+ * either. A run's start (state 2 sub 0) clears the shot (player_save_anim: +0x174, +0x177, the
+ * arm channel to the body's animation), which never happens mid-shot in the original: so the
+ * shot's state is kept from before and put back after the new state's handler, on the arms. */
+static int ws_from_idle;
+static uint8_t ws_s174, ws_s177, ws_s104, ws_s105;
+static uint32_t ws_s100, ws_sf8, ws_sfc;
+
+static int ws_move_held(void)
+{
+    return (P16(PL_HELD) & (P16(PL_MASK_FWD) | P16(PL_MASK_BACK) | P16(PL_MASK_RUN_L) | P16(PL_MASK_RUN_R) |
+                            P16(PL_MASK_STEP_L) | P16(PL_MASK_STEP_R))) != 0;
+}
+
+/* Straight into the run's stride (state 2 sub 4) in direction dir, as its sub 0 and sub 2 would leave it
+ * (speed, the arms flag, +0x54D, +0x175 bit 0 that the buster needs) but without the start-up
+ * animation; from the forward walk the run keeps the walk's leg phase (player_set_anim's mapping). */
+static void ws_enter_run(int dir)
+{
+    int entry = 0;
+    if (P8(PL_ANIM_ID) == 0x0C) {
+        entry = P8(PL_ANIM_ENTRY) - 4;
+        if (entry < 0)
+            entry += 0x20;
+        entry >>= 1;
+    }
+    P8(PL_STATE) = 2;
+    P8(PL_SUBSTATE) = 4;
+    P8(PL_VARIANT) = 0;
+    P8(PL_RUN_DIR_PREV) = 0;
+    P8(PL_RUN_DIR) = (uint8_t)dir;
+    S16(PL_MOVE_ANGLE) = (int16_t)(dir == 1 ? 0x400 : dir == 3 ? -0x400 : 0);   /* (re-aimed at apply time) */
+    S16(PL_VEL_FWD) = 0x200;
+    P8(PL_FIRE_FLAGS) |= 4;
+    P8(0x54D) = 1;
+    P8(0x175) |= 1;
+    P8(PL_ANIM_ID) = 1;
+    P8(PL_ANIM_ENTRY) = (uint8_t)entry;
+}
+
+/* The walk-mode states don't lead into each other: the walk's pre_01 knows no sidestep and the
+ * sidestep's pre_06 no run, so each change went through the idle for an update (with a shot out,
+ * in its planted shot pose), and a run from them through the run's start-up animation. In a face
+ * hold (and with a shot out in any mode) the state the held buttons ask for is set right away, in
+ * pre_00's order: walk + forward = walk, walk + strafe = sidestep, walk + back = walk back; in a
+ * face hold, a direction without walk from a walk-mode state = the run in full stride. */
+static void ws_director(void)
+{
+    int st = P8(PL_STATE), want, var = 0, hold = cam_active && face_hold;
+    uint16_t held = P16(PL_HELD);
+    if (st != 1 && st != 6)
+        return;
+    if (!hold && !ws_firing())
+        return;
+    if (held & P16(PL_MASK_WALK)) {
+        if (held & P16(PL_MASK_FWD))
+            want = 1;
+        else if (held & (P16(PL_MASK_STEP_L) | P16(PL_MASK_STEP_R)))
+            want = 6;
+        else if (held & P16(PL_MASK_BACK))
+            want = 1, var = 1;
+        else
+            return;
+        if (want == st && (st == 6 || var == P8(PL_VARIANT)))
+            return;
+        P8(PL_STATE) = (uint8_t)want;
+        P8(PL_SUBSTATE) = 0;
+        P8(PL_VARIANT) = (uint8_t)var;
+        S16(PL_MOVE_ANGLE) = 0;
+        return;
+    }
+    if (!hold)
+        return;
+    if (held & P16(PL_MASK_FWD))
+        ws_enter_run(0);
+    else if (held & P16(PL_MASK_RUN_L))
+        ws_enter_run(1);
+    else if (held & P16(PL_MASK_RUN_R))
+        ws_enter_run(3);
+}
+
+/* before the pre-handler call (EBP = the object) */
+static void on_pre_handler(regs_t *r)
+{
+    int st;
+    ws_from_idle = 0;
+    if (r->ebp == G_PLAYER)
+        ws_update++;
+    if (r->ebp != G_PLAYER || !g_walk_shoot || !ws_hooked || (P8(PL_INPUT_FLAGS) & 0x60))
+        return;
+    ws_director();
+    st = P8(PL_STATE);
+    if (st == 0) {
+        if (!ws_move_held())
+            return;
+        if (!(P8(PL_FIRE_FLAGS) & 0xC0))
+            try_shoot(1);   /* moving off while firing: the shot on the arms from the start */
+        if (P8(PL_STATE) != 0 || !ws_firing())
+            return;   /* (a weapon that can't fire on the move: the idle fires it standing) */
+        ws_s174 = P8(PL_FIRE_FLAGS), ws_s177 = P8(PL_FIRE_PENDING);
+        ws_s104 = P8(0x104), ws_s105 = P8(0x105);
+        ws_s100 = GVAR(uint32_t, PL(0x100)), ws_sf8 = GVAR(uint32_t, PL(0xF8)), ws_sfc = GVAR(uint32_t, PL(0xFC));
+        ws_from_idle = 1;
+        ws_hide();
+        return;
+    }
+    if (st != 1 && st != 6)
+        return;
+    /* +0x175 bit 0 = may fire (try_shoot): the idle sets it when no shot is out (state_00 sub 0),
+       a run's start, a stop and a jump clear it until they're done. The walk-mode states never set
+       it: stock they are only entered from the idle. Entered here from a run's start or a jump's
+       landing, he backpedaled with no shots until he stood still. */
+    if (!ws_firing())
+        P8(0x175) |= 1;
+    if (!(P8(PL_FIRE_FLAGS) & 0xC0))
+        try_shoot(1);   /* (does nothing without a shot to fire; fires a queued follow-up shot) */
+    if (P8(PL_STATE) != 1 || !ws_firing())
+        return;   /* the sidestep keeps going by itself; a weapon that can't fire walking stopped him */
+    ws_hide();
+}
+
+/* between the two calls: the walk's state handler is the only one that must not see the shot */
+static void on_state_handler(regs_t *r)
+{
+    (void)r;
+    ws_in_state = 1;
+    if (ws_hidden && P8(PL_STATE) != 1)
+        ws_show();
+}
+
+/* backpedal=jog: past a light tilt the backpedal plays the run (anim 1, a 16-pose loop) backward,
+ * a backward jog with the run's long stride instead of the walk back's short one. The walk state
+ * picks its own animation every update (0x0D), so after its handler the body is put on the run at
+ * our pose: the entry (+0x98, +0xA4) set directly with a long hold (+0xA5) so anim_tick doesn't step
+ * it; on the update it switches, anim_start begins the run at that pose (+0xA4 = entry index). The
+ * steps go at the square root of the speed ratio, like the slowed run. */
+static int jog_on;
+static double jog_phase;
+
+static void jog_drive(void)
+{
+    uint32_t tbl;
+    int idx;
+    if (!(g_backjog && backpedal && face_hold && !move_walk && P8(PL_STATE) == 1 && P8(PL_VARIANT) == 1 &&
+          !(P8(PL_INPUT_FLAGS) & 0x60))) {
+        if (jog_on) {
+            jog_on = 0;
+            if (P8(PL_ANIM_ID) == 1)
+                P8(PL_ANIM_HOLD) = 1;   /* (the run goes on from this pose, forward) */
+        }
+        return;
+    }
+    tbl = GVAR(uint32_t, G_ANIM_SCRIPTS + 1 * 4);
+    if (!tbl)
+        return;
+    if (!jog_on) {
+        jog_on = 1;
+        jog_phase = 0;
+    }
+    jog_phase -= sqrt(clampd(loco_pct * 0x50 / 100.0 / 0x200, 0.05, 1.0));
+    while (jog_phase < 0)
+        jog_phase += 16;
+    idx = (int)jog_phase & 15;
+    P8(PL_ANIM_ID) = 1;
+    if (P8(PL_ANIM_PREV) != 1) {
+        P8(PL_ANIM_ENTRY) = (uint8_t)idx;
+    } else {
+        GVAR(uint32_t, PL(0x98)) = tbl + (uint32_t)idx * 8;
+        GVAR(uint32_t, PL(0xA4)) = GVAR(uint32_t, tbl + (uint32_t)idx * 8);
+        P8(PL_ANIM_HOLD) = 0x7F;
+    }
+}
+
+void controls_backpedal_style(int jog)
+{
+    g_backjog = jog != 0;
+    log_printf("controls: backpedal while shooting: %s", g_backjog ? "backward jog (experimental)" : "walk back");
+}
+
+static void on_after_state(regs_t *r)
+{
+    int st;
+    (void)r;
+    ws_in_state = 0;
+    ws_show();
+    jog_drive();
+    /* a jump in a face hold drifts by its turned speed (on_apply_velocity), so the body turn the game
+       gives a jump's takeoff (+0x116 = 0x800 backward) would only flip his body for a frame */
+    if (face_hold && ws_hooked && (P8(PL_STATE) == 7 || P8(PL_STATE) == 8))
+        S16(PL_MOVE_ANGLE) = 0;
+    if (!ws_from_idle)
+        return;
+    ws_from_idle = 0;
+    st = P8(PL_STATE);
+    if (st != 1 && st != 2 && st != 6)
+        return;
+    /* moved off mid-shot: the shot goes on, on the arms (the new state's animation on the body) */
+    P8(PL_FIRE_FLAGS) = (uint8_t)(ws_s174 | 4);
+    P8(PL_FIRE_PENDING) = ws_s177;
+    P8(0x104) = ws_s104, P8(0x105) = ws_s105;
+    GVAR(uint32_t, PL(0x100)) = ws_s100, GVAR(uint32_t, PL(0xF8)) = ws_sf8, GVAR(uint32_t, PL(0xFC)) = ws_sfc;
+}
+
+void controls_walk_shoot(int on)
+{
+    g_walk_shoot = on != 0;
+    log_printf("controls: walking while shooting %s", g_walk_shoot ? "on" : "off");
+}
+
 static void on_player_update(regs_t *r)
 {
     if (r->eax != G_PLAYER)
@@ -1829,6 +2213,17 @@ static void on_player_update(regs_t *r)
      * switched in place: the run animation is the same for all four (anim 1; +0x116, set at apply
      * time, turns the body), +0x112 only picks the rules (which runs may shoot). Leaving the face
      * hold mid-run goes back to the forward run, travel unchanged. */
+    /* backpedal: a run (or its start) becomes the walk back, facing as held (the run's body
+     * turn +0x116 and direction back to straight) */
+    if (cam_active && backpedal && move_active && inject_fwd && !roll_ours && !(P8(PL_INPUT_FLAGS) & 0x60) &&
+        P8(PL_STATE) == 2) {
+        P8(PL_STATE) = 1;
+        P8(PL_SUBSTATE) = 0;
+        P8(PL_VARIANT) = 1;   /* (player_try_walk_back: sub 0, variant 1) */
+        P8(PL_RUN_DIR_PREV) = P8(PL_RUN_DIR);
+        P8(PL_RUN_DIR) = 0;
+        S16(PL_MOVE_ANGLE) = 0;
+    }
     if (cam_active && move_active && inject_fwd && !roll_ours && !(P8(PL_INPUT_FLAGS) & 0x60) &&
         P8(PL_STATE) == 2 && (P8(PL_SUBSTATE) == 3 || P8(PL_SUBSTATE) == 4)) {
         int want = 0;
@@ -1857,8 +2252,9 @@ static void on_player_update(regs_t *r)
     if (skate_update())
         return;
     /* in a face hold, a light tilt walks too (sidestep / backstep facing the target or the
-     * camera's way), but only from standing or walking: walk + strafe while running turns in place */
-    if (move_walk && move_active && inject_fwd && !roll_ours && !(P8(PL_INPUT_FLAGS) & 0x60) &&
+     * camera's way), but only from standing or walking: walk + strafe while running turns in place.
+     * The backpedal walks at any tilt. */
+    if ((move_walk || backpedal) && move_active && inject_fwd && !roll_ours && !(P8(PL_INPUT_FLAGS) & 0x60) &&
         (!face_hold || P8(PL_STATE) == 0 || P8(PL_STATE) == 1 || P8(PL_STATE) == 6))
         inject_walk();
 }
@@ -1889,18 +2285,61 @@ static void on_apply_velocity(regs_t *r)
         if (!face_hold) {
             air_travel = (f - S16(PL_MOVE_ANGLE)) & 0xfff;
         } else {
+            /* the drift goes along the stick (or keeps its heading when the stick is let go), the
+               body stays on the facing: the speed itself is turned (as for the steps), not the body
+               (+0x116, which turned his back to the target when jumping backward); while shooting
+               the drift is slower toward the back, like moving on the ground */
+            double fwd = (int16_t)r->edx, side = (int16_t)r->ecx, sp = sqrt(fwd * fwd + side * side), a;
             if (move_active)
                 air_travel = move_face & 0xfff;
-            S16(PL_MOVE_ANGLE) = (int16_t)(((f - air_travel + 2048) & 0xfff) - 2048);
+            if (sp > 0 && ws_in_state) {
+                if (combat)
+                    sp = sp * back_curve(signed12((air_travel - face_dir) & 0xfff)) / 100;
+                a = signed12((air_travel - f) & 0xfff) * (PI / 2048.0);
+                r->edx = (uint32_t)(int32_t)iround(sp * cos(a));
+                r->ecx = (uint32_t)(int32_t)iround(-sp * sin(a) * WS_SIDE_SIGN);
+                S16(PL_MOVE_ANGLE) = 0;
+            } else {
+                S16(PL_MOVE_ANGLE) = (int16_t)(((f - air_travel + 2048) & 0xfff) - 2048);
+            }
             air_steered = 1;
         }
     }
-    if (loco_pct == 100)
-        return;
-    if (st == 1 || st == 2)
-        r->edx = (uint32_t)(int32_t)((int16_t)r->edx * loco_pct / 100);
-    else if (st == 6)   /* sidestep moves on the side axis */
-        r->ecx = (uint32_t)(int32_t)((int16_t)r->ecx * loco_pct / 100);
+    if (loco_pct != 100) {
+        if (st == 1 || st == 2)
+            r->edx = (uint32_t)(int32_t)((int16_t)r->edx * loco_pct / 100);
+        else if (st == 6)   /* sidestep moves on the side axis */
+            r->ecx = (uint32_t)(int32_t)((int16_t)r->ecx * loco_pct / 100);
+    }
+    /* Face-hold movement (the walk-mode steps and the run): the steps only go straight forward,
+     * back or sideways, so their speed goes along the exact stick heading instead, the body still
+     * facing the target / the camera's way (+0x116 = 0); the run turns its body with +0x116 toward
+     * where it goes. And with momentum: the velocity eases toward the stick's (MOVE_EASE per
+     * update) instead of jumping, across changes of direction, speed and state. Only the state
+     * handler's own step (the weapon's recoil push is left alone). */
+    if (face_hold && move_active && ws_in_state && (st == 1 || st == 6 || st == 2)) {
+        static double vx, vz;            /* the eased velocity, world angle frame (x = sin, z = cos) */
+        static unsigned last_update;
+        double fwd = (int16_t)r->edx, side = (int16_t)r->ecx, sp = sqrt(fwd * fwd + side * side), a, va, vs;
+        int f = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
+        if (ws_update - last_update > 2)
+            vx = vz = 0;                 /* (starting off: from standing) */
+        last_update = ws_update;
+        a = (move_face & 0xfff) * (PI / 2048.0);
+        vx += (sp * sin(a) - vx) * MOVE_EASE;
+        vz += (sp * cos(a) - vz) * MOVE_EASE;
+        vs = sqrt(vx * vx + vz * vz);
+        va = atan2(vx, vz);
+        if (st == 2) {                   /* the run: speed forward, the body turned toward the travel */
+            r->edx = (uint32_t)(int32_t)iround(vs);
+            S16(PL_MOVE_ANGLE) = (int16_t)signed12((f - iround(va * (2048.0 / PI))) & 0xfff);
+        } else {
+            double rel = va - f * (PI / 2048.0);
+            r->edx = (uint32_t)(int32_t)iround(vs * cos(rel));
+            r->ecx = (uint32_t)(int32_t)iround(-vs * sin(rel) * WS_SIDE_SIGN);
+            S16(PL_MOVE_ANGLE) = 0;
+        }
+    }
 }
 
 static void on_cam_set_b(regs_t *r)
@@ -2014,7 +2453,9 @@ void controls_filter(pad_t *p)
         p->sThumbLX = p->sThumbLY = 0;
         if (fresh && move_active && inject_fwd) {
             int rel = ((move_face - face_dir + 2048) & 0xfff) - 2048;
-            if (rel >= -512 && rel <= 512)
+            if (backpedal)   /* (from 100 degrees in a burst; its heading is set at apply time) */
+                p->sThumbLY = -32767;
+            else if (rel >= -512 && rel <= 512)
                 p->sThumbLY = 32767;
             else if (rel > 512 && rel <= 1536)
                 p->sThumbLX = 32767;
@@ -2406,6 +2847,20 @@ void controls_install(int modern, int intro_pad_skip)
         log_printf("controls: %s (F5 / L3 toggles modern controls)", modern ? "modern" : "vanilla");
     else
         log_printf("controls: game hooks failed");
+    {
+        static const uint8_t handler_call[] = { 0x31, 0xD2, 0x8A, 0x55, 0x09 };   /* xor edx,edx; mov dl,[ebp+9] */
+        static const uint8_t apply_local_call[] = { 0xE8, 0xF8, 0x42, 0xF8, 0xFF };   /* call player_apply_local_velocity */
+#ifndef MML_RUNNER
+        g_fn_try_shoot = G_FN_TRY_SHOOT;
+#endif
+        if (!hook_mid(G_SITE_PRE_CALL, sizeof handler_call, handler_call, on_pre_handler) ||
+            !hook_mid(G_SITE_STATE_CALL, sizeof handler_call, handler_call, on_state_handler) ||
+            !hook_mid(G_SITE_AFTER_STATE, sizeof apply_local_call, apply_local_call, on_after_state)) {
+            log_printf("controls: walk shooting hooks failed");
+        } else {
+            ws_hooked = 1;
+        }
+    }
 
     /* vertical aim: FUN_0042A85C reads our flag and pitch instead of the aim camera's */
     {

@@ -49,6 +49,10 @@ void controls_aim_sensitivity(int pct);
 int controls_aim_on_enemy(void);
 /* Jet Skates: top speed and lightest-tilt speed in % of the stock top speed; toggle = the button toggles */
 void controls_skates(int max_pct, int min_pct, int toggle);
+/* walking (forward, back, sidestep) keeps going while shooting: the shot plays on the arms */
+void controls_walk_shoot(int on);
+/* the backpedal while shooting past a light tilt: 0 the walk back, 1 the run played backward (a jog) */
+void controls_backpedal_style(int jog);
 float controls_crosshair(void);
 /* the world point camera-aimed shots go toward (the camera's view, a fixed distance out);
    0 = no vertical aim (shots stay level) */

@@ -204,6 +204,12 @@ the Japanese line being spoken.
 - **Camera aim** (optional). Shots go where the camera looks, up and down included, and meet at
   whatever is under the optional crosshair, which reacts when an enemy is under it. Mega Man turns to the camera's direction only while firing, so movement
   stays free in every direction.
+- **Move while shooting.** Walking forward, backward and sideways no longer stops Mega Man for
+  each shot: his legs keep walking and the shot plays on his arms. While firing locked on, over
+  the shoulder or with camera aim, he moves every way around the target: he runs forward and
+  sideways, and backpedals facing it (an optional backward jog, `backpedal=jog`, is faster).
+  Changes of direction ease in, and jumps keep him facing the target. `walk_shoot=0` restores
+  the original stop for each shot.
 - **Analog movement.** A light stick tilt walks, a full tilt runs.
 - **Boat shooting sections.** Where Mega Man rides Roll's boat and only aims and shoots, the
   modern layout applies too: analog aim on the sticks and the mouse, RT to shoot, LT to zoom in,
@@ -452,10 +458,10 @@ while modern controls are on:
 | Situation | What happens |
 |-----------|--------------|
 | Fire (shoot or special weapon) | Mega Man turns to where the camera looks, and the shot goes there, up and down included |
-| Move while firing | He keeps facing the camera's direction and runs or strafes around it, firing continuously |
-| Move toward the camera while firing | He turns and runs toward the camera, shooting where he runs (the game has no way to shoot while backing away) |
+| Move while firing | He keeps facing the camera's direction and runs or strafes around it, firing continuously; moving sideways and backward is slower than forward |
+| Move toward the camera while firing | He backpedals (or jogs backward), still facing and shooting the camera's way; once you stop firing he turns and runs toward the camera |
 | Stop firing | He keeps facing that way for a moment, then moves freely again |
-| Fire while jumping | He turns to shoot where the camera looks; the jump keeps drifting where the stick points |
+| Fire while jumping | He keeps facing where the camera looks; the jump drifts where the stick points, less far backward |
 | Talk, check or kick | Camera aim does not apply: he faces what he is interacting with |
 | Aim / lock-on held | Lock-on works as usual; camera aim does not apply |
 
@@ -470,6 +476,8 @@ game.
 |------------------------|--------|
 | `aim` | `character` (default), `camera` |
 | `crosshair` | `1` (default), `0` |
+| `walk_shoot` | `1` (default): keep moving while shooting; `0`: stop for each shot, as in the original |
+| `backpedal` | `walk` (default): backpedal while firing; `jog` (experimental): the run played backward, faster |
 
 ### Boat shooting sections
 
