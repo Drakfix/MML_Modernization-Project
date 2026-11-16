@@ -52,6 +52,11 @@ void controls_aim_button(int free_aim);
 void controls_aim_assist(int on);
 /* the camera over Mega Man's shoulder all the time (a shooter's camera); aiming then zooms in */
 void controls_camera_shoulder(int on);
+/* Mega Man fades out as the camera comes close to him; his alpha now, 0..255 (the renderer) */
+void controls_camera_fade(int on);
+/* no combat style chosen yet ([controls] combat_style_seen): a notice when play starts */
+void controls_style_notice(int show);
+int controls_player_alpha(void);
 int controls_aim_assist_on(void);
 int controls_aim_on_enemy(void);
 /* Jet Skates: top speed and lightest-tilt speed in % of the stock top speed; toggle = the button toggles */

@@ -21,6 +21,8 @@ int hud_side_of(const void *pkt);
  * for everything else. */
 enum { HUD_GROUP_MAP, HUD_GROUP_BOSS, HUD_GROUP_GAUGE2, HUD_GROUPS, HUD_GROUP_NONE = -1 };
 int hud_group_of(const void *pkt);
+/* 1 when the packet is one of Mega Man's own polygons (his model) */
+int packets_is_player(const void *pkt);
 void packets_frame_start(void);   /* call right before the walker runs */
 void packets_probe_enable(void);   /* [debug] hud_probe=1 (needs recomp=off) */
 

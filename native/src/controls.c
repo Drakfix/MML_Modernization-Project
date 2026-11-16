@@ -76,6 +76,11 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define SH_DIST_HIP      0.82    /* camera_shoulder (always over the shoulder), not aiming: a little closer */
 #define ADS_ZOOM         1.3     /* camera_shoulder, aiming: the view zooms in this much (like a shooter's ADS) */
 #define ADS_EASE         0.2     /* per 1/60 s, in and out */
+#define TIGHT_ROOM       0.75    /* less free room behind the shoulder view than this share of its distance: tight */
+#define TIGHT_CENTER     0.7     /* ...then the view slides back toward the middle by up to this share */
+#define TIGHT_LIFT       70      /* ...and up over his head by up to this much (y grows downward) */
+#define COAST_FRAMES     8       /* 1/60 s: in a burst, a run goes on through a stick gap this short */
+#define BODY_EASE        0.35    /* per update: the strafe run's body turn eases toward its travel */
 #define SH_EASE          0.14    /* per 1/60 s: easing into / out of the shoulder framing */
 #define SH_SWAP_EASE     0.16    /* per 1/60 s: sliding across on a shoulder swap */
 #define SH_PITCH_EASE    0.08    /* per 1/60 s: tilting toward the enemy's height */
@@ -93,8 +98,10 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define BACKJOG_PCT      55      /* backpedal=jog: its speed at full tilt, % of a run */
 #define G_ANIM_SCRIPTS   0x765764u   /* player body animations 0x00-0x3F: script per id (anim_start) */
 #define RUN_BACK_EASE    683     /* in a burst the strafe run slows from this angle off the facing (60 deg)... */
-#define RUN_BACK_EDGE    1138    /* ...to the backpedal's speed where the backpedal takes over (100 deg: past it
-                                    the strafe run's body would turn away from the target) */
+#define RUN_BACK_EDGE    1229    /* ...to the backpedal's speed where the backpedal takes over (108 deg: past it
+                                    the strafe run's body would turn away from the target; a pure sideways
+                                    strafe sits at 90-103 deg with the shoulder camera's aim, so the edge stays
+                                    clear of it, or strafing flickered between the run and the backpedal) */
 #define BACK_HYST        57      /* +-5 deg around RUN_BACK_EDGE, so the stick near it doesn't flip states */
 #define LOCK_TURN_STEP   0x100   /* max facing turn per update toward the target */
 #define AIM_HOLD         36      /* camera aim: 1/60 s it stays on after the fire button is let go */
@@ -245,6 +252,15 @@ static int g_aim_camera, g_crosshair;   /* crosshair: 0 off, 1 while aiming, 2 a
 static int g_aim_free;     /* [controls] aim_button=free: the aim button never locks on, it aims over the shoulder */
 static int g_sh_always;    /* [controls] camera_shoulder: the camera over the shoulder all the time; aiming zooms in */
 static double ads_zoom = 1.0, sh_close;   /* the aiming zoom (camera_shoulder); 0..1 the aiming framing (eased) */
+static double sh_tight;    /* 0..1: how cramped the room behind the shoulder view is (eased) */
+#define FADE_NEAR        240     /* camera to his chest: at this distance or closer Mega Man is FADE_MIN opaque (a
+                                    wall right behind him: ~160-240; the shoulder camera in the open ~650,
+                                    aiming ~490)... */
+#define FADE_FAR         380     /* ...and fully opaque from here */
+#define FADE_MIN         0.25
+#define FADE_EASE        0.2     /* per 1/60 s */
+static int g_fade_on = 1, g_fade_log;   /* [controls] camera_fade; (testing: MML_FADE_LOG=1) */
+static volatile LONG g_player_alpha = 255;
 static int g_aim_assist;   /* [controls] aim_assist: slower camera and a tighter crosshair over an enemy */
 #define AIM_ASSIST_SLOW  0.45    /* camera speed while the crosshair is over an enemy, with aim assist */
 #define AIM_ASSIST_EASE  0.25    /* per 1/60 s toward it and back */
@@ -1050,6 +1066,20 @@ static void input_update(void)
             moving = 1;
         }
     }
+    /* In a burst, a run goes on through a stick gap of a few frames (a left-right flick passes the
+       centre): stopping and starting again played the run's stop and start-up animations, side-on
+       and without the shot's twist toward the target. */
+    {
+        static int last_face, last_fwd, gap = COAST_FRAMES;
+        if (moving) {
+            last_face = facing, last_fwd = fwd, gap = 0;
+        } else if (combat && face_hold && P8(PL_STATE) == 2 && gap < COAST_FRAMES && last_fwd > 0) {
+            gap++;
+            facing = last_face, fwd = last_fwd, moving = 1;
+        } else {
+            gap = COAST_FRAMES;
+        }
+    }
     move_face = facing;
     move_fwd = fwd;
     move_walk = moving && fwd < (int)(g_walk_frac * 32767);
@@ -1237,16 +1267,33 @@ static void shoulder_apply(regs_t *r)
             break;
         }
     }
+    /* closer: always aiming's distance, or with camera_shoulder from the hip distance to it as he aims */
+    dist = g_sh_always ? SH_DIST_HIP + (SH_DIST - SH_DIST_HIP) * sh_close : SH_DIST;
+    dist = (int)r->edx * (1.0 - sh_blend * (1.0 - dist));
+    /* Tight spaces (his back to a wall, a hallway): the camera line from the shoulder view runs into
+       the wall at once, and the camera ended up in his shoulder. With little room behind the view, it
+       eases back toward the middle and up over his head, so the camera looks past him. */
+    {
+        int32_t probe[4];
+        int pitch = iround(st_pitch) > LOOK_ORBIT_MAX ? LOOK_ORBIT_MAX : iround(st_pitch), room;
+        double tw;
+        probe[0] = iround(t[0] + rx * lat);
+        probe[1] = iround(t[1] - SH_LIFT * sh_blend);
+        probe[2] = iround(t[2] + rz * lat);
+        probe[3] = t[3];
+        room = cam_collide(probe, iround(dist), cam_yaw, -pitch);
+        tw = dist > 0 ? clampd(1.0 - room / (dist * TIGHT_ROOM), 0, 1) : 0;
+        sh_tight += (tw - sh_tight) * (1.0 - pow(1.0 - SH_EASE, ticks));
+        lat *= 1.0 - TIGHT_CENTER * sh_tight * sh_blend;
+    }
     if (!g_sh_target)
         g_sh_target = (int32_t *)GUEST(guest_alloc(16));
     g_sh_target[0] = iround(t[0] + rx * lat);
-    g_sh_target[1] = iround(t[1] - SH_LIFT * sh_blend);
+    g_sh_target[1] = iround(t[1] - (SH_LIFT + TIGHT_LIFT * sh_tight) * sh_blend);
     g_sh_target[2] = iround(t[2] + rz * lat);
     g_sh_target[3] = t[3];
     r->eax = GADDR(g_sh_target);
-    /* closer: always aiming's distance, or with camera_shoulder from the hip distance to it as he aims */
-    dist = g_sh_always ? SH_DIST_HIP + (SH_DIST - SH_DIST_HIP) * sh_close : SH_DIST;
-    r->edx = (uint32_t)iround((int)r->edx * (1.0 - sh_blend * (1.0 - dist)));
+    r->edx = (uint32_t)iround(dist);
 }
 
 /* the aiming zoom off (the orbit camera isn't placing the view: talks, cutscenes, menus) */
@@ -1264,6 +1311,40 @@ static void ads_zoom_reset(void)
  * walls, and the floor from below), else AIM_DIST out. Shots and the facing aim at it, so they
  * converge on whatever is under the crosshair at any range, also with the camera beside him
  * (over the shoulder). Cast only while some aiming is on. */
+/* Mega Man fades out as the camera comes close to him (a wall at his back, a narrow hall), so he
+ * doesn't fill the view; drawn see-through by ddshim.c (packets_drawing_player). Only while the
+ * orbit places the camera. */
+static void player_fade_update(void)
+{
+    static double cur = 1.0;
+    static int n;
+    double cx = RD32(G_CAM_PLACED), cy = RD32(G_CAM_PLACED + 4), cz = RD32(G_CAM_PLACED + 8);
+    double dx = cx - S16(0x14), dy = cy - (S16(0x16) - AIM_CHEST), dz = cz - S16(0x18);
+    double d = sqrt(dx * dx + dy * dy + dz * dz), want = 1.0;
+    if (g_fade_on && cam_active && !rail_live())   /* (whoever placed the camera: also while it settles) */
+        want = FADE_MIN + (1.0 - FADE_MIN) * clampd((d - FADE_NEAR) / (FADE_FAR - FADE_NEAR), 0, 1);
+    cur += (want - cur) * FADE_EASE;
+    if (fabs(cur - want) < 0.004)
+        cur = want;
+    InterlockedExchange(&g_player_alpha, (LONG)iround(cur * 255));
+    if (g_fade_log && ++n % 10 == 0)
+        log_printf("fade: camera %.0f from his chest, alpha %.2f", d, cur);
+}
+
+int controls_player_alpha(void)
+{
+    return (int)g_player_alpha;
+}
+
+void controls_camera_fade(int on)
+{
+    char v[8] = "";
+    g_fade_on = on != 0;
+    GetEnvironmentVariableA("MML_FADE_LOG", v, sizeof v);
+    g_fade_log = v[0] == '1';
+    log_printf("controls: Mega Man fades when the camera is close: %s", g_fade_on ? "on" : "off");
+}
+
 static void aim_point_update(void)
 {
     double yaw = (RD16(G_CAM_YAW_NOW) & 0xfff) * (PI / 2048.0);
@@ -1480,6 +1561,7 @@ static void on_cam_apply(regs_t *r)
     }
     aim_point_update();
     shot_pitch_sync();
+    player_fade_update();
 }
 
 /* ---- player_update hook: roll + analog walk ----
@@ -2134,8 +2216,13 @@ static void jog_drive(void)
     if (!tbl)
         return;
     if (!jog_on) {
+        /* from the run (anim 1 last update, the strafe run or its stride): on from its pose, so the
+           legs just turn round; from the walk back, from the start */
+        uint32_t cur = GVAR(uint32_t, PL(0x98));
         jog_on = 1;
         jog_phase = 0;
+        if (P8(PL_ANIM_PREV) == 1 && cur >= tbl && cur < tbl + 16 * 8)
+            jog_phase = (cur - tbl) / 8 + 0.5;
     }
     jog_phase -= sqrt(clampd(loco_pct * 0x50 / 100.0 / 0x200, 0.05, 1.0));
     while (jog_phase < 0)
@@ -2148,6 +2235,56 @@ static void jog_drive(void)
         GVAR(uint32_t, PL(0x98)) = tbl + (uint32_t)idx * 8;
         GVAR(uint32_t, PL(0xA4)) = GVAR(uint32_t, tbl + (uint32_t)idx * 8);
         P8(PL_ANIM_HOLD) = 0x7F;
+    }
+}
+
+/* A shot on the run plays an arm animation made for the run's direction (FUN_004b5741 / 57b5 by
+ * +0x112: 0x61/0x41 forward, 0x63/0x43 the left strafe, 0x62/0x42 the right), each twisting the torso
+ * back toward the target by that much. It is picked when a shot starts, while the body turn (+0x116)
+ * now eases: after a left-right reversal the body had swung across while the arms still twisted for
+ * the old side, and the twists added up instead of cancelling: he faced the camera for a moment. So
+ * the arm animation follows the body's actual turn (beyond +-45 degrees, with some hysteresis: the
+ * strafe's; else the forward one), swapped at the same pose so the shot keeps its timing (the three
+ * have the same length; a weapon without them is left alone). The blend smooths each swap. */
+static uint32_t arms_table(int id)
+{
+    uint32_t base;
+    if ((id & 0xF0) == 0x60)
+        base = P8(0x171) ? 0x70DAACu : 0x70D62Cu;   /* (as FUN_004de8ee picks them) */
+    else
+        base = P8(0x170) ? 0x7500ACu : 0x75052Cu;
+    return GVAR(uint32_t, base + (uint32_t)id * 4);
+}
+
+static void arms_follow_body(void)
+{
+    int id = P8(0x104), fam = id & 0xF0, side, body = S16(PL_MOVE_ANGLE), want;
+    uint32_t tbl, old, idx, i;
+    if (P8(PL_STATE) != 2 || (P8(PL_FIRE_FLAGS) & 0x04) == 0 || (P8(PL_FIRE_FLAGS) & 0xC0) == 0 ||
+        (fam != 0x60 && fam != 0x40) || (id & 0x0F) < 1 || (id & 0x0F) > 3)
+        return;
+    side = (id & 0x0F) == 3 ? 1 : (id & 0x0F) == 2 ? -1 : 0;   /* +1: turned +0x400 (dir 1) */
+    if (side == 0 || body * side < 448)
+        side = body > 576 ? 1 : body < -576 ? -1 : 0;
+    want = fam | (side > 0 ? 3 : side < 0 ? 2 : 1);
+    if (want == id || !(tbl = arms_table(want)))
+        return;
+    if (P8(0x105) != (uint8_t)id) {   /* the channel restarts this update (a new shot): with the new one */
+        P8(0x104) = (uint8_t)want;
+        return;
+    }
+    old = GVAR(uint32_t, PL(0xF8));
+    idx = (GVAR(uint32_t, PL(0xFC)) - old) / 8;
+    for (i = 0; i < idx; i++)   /* (the new one must reach that pose) */
+        if (GVAR(uint8_t, tbl + i * 8 + 3) & 0x80)
+            return;
+    {
+        uint8_t hold = P8(0x101);
+        P8(0x104) = P8(0x105) = (uint8_t)want;
+        GVAR(uint32_t, PL(0xF8)) = tbl;
+        GVAR(uint32_t, PL(0xFC)) = tbl + idx * 8;
+        GVAR(uint32_t, PL(0x100)) = GVAR(uint32_t, tbl + idx * 8);
+        P8(0x101) = hold;
     }
 }
 
@@ -2164,6 +2301,7 @@ static void on_after_state(regs_t *r)
     ws_in_state = 0;
     ws_show();
     jog_drive();
+    arms_follow_body();
     /* a jump in a face hold drifts by its turned speed (on_apply_velocity), so the body turn the game
        gives a jump's takeoff (+0x116 = 0x800 backward) would only flip his body for a frame */
     if (face_hold && ws_hooked && (P8(PL_STATE) == 7 || P8(PL_STATE) == 8))
@@ -2187,10 +2325,22 @@ void controls_walk_shoot(int on)
     log_printf("controls: walking while shooting %s", g_walk_shoot ? "on" : "off");
 }
 
+static int g_style_notice;   /* no combat style chosen yet: a notice once, when play starts */
+
+void controls_style_notice(int show)
+{
+    g_style_notice = show != 0;
+}
+
 static void on_player_update(regs_t *r)
 {
     if (r->eax != G_PLAYER)
         return;
+    if (g_style_notice && controls_in_gameplay()) {
+        /* (for whoever skips the start menu, which asks; Later there brings it here too) */
+        g_style_notice = 0;
+        toast_post(TOAST_ICON_PAD, TOAST_GOOD, "COMBAT STYLES", "NEW", "Pick one in the settings: Back + Start, or F1");
+    }
     shot_pitch_sync();   /* (shots spawn during the object updates) */
     if (air_steered && P8(PL_STATE) != 7 && P8(PL_STATE) != 8) {
         /* landed from a jump steered in a face hold: body back on the facing. A run in full
@@ -2363,9 +2513,11 @@ static void on_apply_velocity(regs_t *r)
     if (face_hold && move_active && ws_in_state && (st == 1 || st == 6 || st == 2)) {
         static double vx, vz;            /* the eased velocity, world angle frame (x = sin, z = cos) */
         static unsigned last_update;
+        static double body;              /* the run's body turn (+0x116), eased */
+        static int body_ok;              /* (it follows a run that is going on) */
         double fwd = (int16_t)r->edx, side = (int16_t)r->ecx, sp = sqrt(fwd * fwd + side * side), a, va, vs;
-        int f = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
-        if (ws_update - last_update > 2)
+        int f = (RD32(G_PLAYER_FACING) >> 16) & 0xfff, fresh = ws_update - last_update > 2;
+        if (fresh)
             vx = vz = 0;                 /* (starting off: from standing) */
         last_update = ws_update;
         a = (move_face & 0xfff) * (PI / 2048.0);
@@ -2373,11 +2525,31 @@ static void on_apply_velocity(regs_t *r)
         vz += (sp * cos(a) - vz) * MOVE_EASE;
         vs = sqrt(vx * vx + vz * vz);
         va = atan2(vx, vz);
-        if (st == 2) {                   /* the run: speed forward, the body turned toward the travel */
-            r->edx = (uint32_t)(int32_t)iround(vs);
-            S16(PL_MOVE_ANGLE) = (int16_t)signed12((f - iround(va * (2048.0 / PI))) & 0xfff);
+        if (st == 2) {
+            /* the run: the body turns toward the travel (+0x116), eased so a left-right reversal swings
+               it across the front instead of flipping it in one update; the speed goes along the exact
+               travel in the body's frame meanwhile */
+            double want = signed12((f - iround(va * (2048.0 / PI))) & 0xfff), d, rel;
+            if (fresh || !body_ok)
+                body = want;
+            body_ok = 1;
+            d = want - body;
+            if (d > 2304)
+                d -= 4096;
+            else if (d < -2304)
+                d += 4096;
+            body += d * BODY_EASE;
+            if (body > 2048)
+                body -= 4096;
+            else if (body < -2048)
+                body += 4096;
+            S16(PL_MOVE_ANGLE) = (int16_t)iround(body);
+            rel = va - (f - body) * (PI / 2048.0);
+            r->edx = (uint32_t)(int32_t)iround(vs * cos(rel));
+            r->ecx = (uint32_t)(int32_t)iround(-vs * sin(rel) * WS_SIDE_SIGN);
         } else {
             double rel = va - f * (PI / 2048.0);
+            body_ok = 0;
             r->edx = (uint32_t)(int32_t)iround(vs * cos(rel));
             r->ecx = (uint32_t)(int32_t)iround(-vs * sin(rel) * WS_SIDE_SIGN);
             S16(PL_MOVE_ANGLE) = 0;

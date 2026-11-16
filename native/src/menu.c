@@ -45,6 +45,7 @@
 #include "toast.h"
 #include "texreplace.h"
 #include "ui_style.h"
+#include "anim_blend.h"
 #include "updater.h"
 #include "voice_build.h"
 
@@ -54,6 +55,7 @@ enum {
     IT_FPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
     IT_HUD_SCALE,    /* size of the corner HUD: gauges and minimap ([video] hud_scale) */
+    IT_ANIMBLEND,    /* animation blending ([video] anim_blend) */
     IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR, IT_LOCKCAM, IT_AIMSENS,
     IT_STYLE,        /* combat style: a preset of the rows below (Classic / Adventure / Shooter), or Custom */
     IT_AIMBTN,       /* aim button: lock-on / free aim ([controls] aim_button) */
@@ -61,6 +63,7 @@ enum {
     IT_BACKPEDAL,    /* backpedal while shooting: walk / jog ([controls] backpedal) */
     IT_ASSIST,       /* aim assist ([controls] aim_assist) */
     IT_SHCAM,        /* camera position: behind / over the shoulder ([controls] camera_shoulder) */
+    IT_CAMFADE,      /* Mega Man fades when the camera is close ([controls] camera_fade) */
     IT_TRANSITION,   /* room transition speed ([general] transition_speed) */
     /* the keyboard's keys for the modern controls ([controls] key_*: two each), and putting them back */
     IT_KEY, IT_KEY_RESET,
@@ -140,12 +143,14 @@ static const item g_game_items[] = {
     { 1, IT_LOD, "Model detail", "Full detail keeps faraway models at their best instead of swapping in low-poly ones." },
     { 1, IT_HDTEX, "HD textures", "Replacement textures from the Modernization\\textures folder." },
     { 1, IT_HUD_SCALE, "HUD size", "Shrinks the life and weapon gauges and the minimap into their corners of the screen." },
+    { 1, IT_ANIMBLEND, "Animation blending", "Mega Man's animation changes cross-fade instead of snapping." },
     { 2, IT_CAMSPEED, "Camera speed", "How fast the right stick turns the camera." },
     { 2, IT_INVERT_X, "Invert camera X", "Flips left and right on the camera stick." },
     { 2, IT_INVERT_Y, "Invert camera Y", "Flips up and down on the camera stick and the mouse." },
     { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off." },
     { 3, IT_STYLE, "Combat style", STYLE_HELP },
     { 3, IT_SHCAM, "Camera position", SHCAM_HELP },
+    { 3, IT_CAMFADE, "Fade up close", "Mega Man turns see-through when the camera comes close to him." },
     { 3, IT_AIMBTN, "Aim button", AIMBTN_HELP },
     { 3, IT_LOCKCAM, "Lock-on camera", LOCKCAM_HELP },
     { 3, IT_AIM, "Shots aim", AIM_HELP },
@@ -318,6 +323,9 @@ static const item g_start_items[] = {
       "release did. Maximum keeps the full-detail models at any distance, at a small GPU cost." },
     { PG_GRAPHICS, IT_HDTEX, "Texture replacement", "Loads replacement textures (HD texture packs) from "
       "Modernization\\textures. Off uses the game's original textures." },
+    { PG_GRAPHICS, IT_ANIMBLEND, "Animation blending", "Mega Man's animation changes cross-fade over a "
+      "fraction of a second instead of snapping from one pose to the next: raising and lowering the buster, "
+      "starting and stopping, turning a run into a backpedal, landing." },
     { PG_GRAPHICS, IT_HUD_SCALE, "HUD size", "The size of the HUD in the screen corners: the life and weapon "
       "gauges and the minimap. Each one shrinks toward its own corner, so it stays in one piece. Widescreen only; "
       "dialogue, menus and the boss gauge keep their size." },
@@ -366,6 +374,8 @@ static const item g_start_items[] = {
     { PG_COMBAT, IT_SHCAM, "Camera position", "Behind: the camera follows behind Mega Man, as usual. Over the "
       "shoulder: it stays beside his shoulder all the time, like a third-person shooter, so the crosshair has the "
       "middle of the screen to itself; holding the aim button moves it closer and zooms in for precise aim." },
+    { PG_COMBAT, IT_CAMFADE, "Fade up close", "Mega Man turns see-through when the camera comes close to him, with "
+      "a wall at his back or in a narrow hallway, so he doesn't fill the view." },
     { PG_COMBAT, IT_AIMBTN, "Aim button", "Lock-on: holding the aim button locks on to the nearest enemy "
       "(Z-targeting), and Mega Man keeps facing it. Free aim: holding it always aims over the shoulder at the "
       "crosshair, with no lock-on, like a third-person shooter." },
@@ -452,6 +462,8 @@ static struct {
     int play, quit;                         /* the start menu: Play / close the app */
     int on_play;                            /* the start menu: the PLAY button has the focus */
     int welcome, welcome_sel;               /* the start menu: the first-run import prompt (nothing imported); its button */
+    int onboard, onboard_sel, onboard_next; /* the start menu: the combat style prompt (none chosen yet); its button;
+                                               shown after the import prompt */
     WORD pad_now;                           /* the controller's buttons this frame (menu_pad_buttons) */
     double back_at;                         /* in the game: the last Back press (twice quits) */
     /* the start menu's game files (gamefiles.h) */
@@ -474,7 +486,7 @@ static struct {
     /* values */
     int fps60, vsync, res, msaa, shader_game_res, nearest, texf, fog, lod_full, hdtex;   /* texf: TEXF_* */
     int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens, trans;
-    int aim_free, walk_shoot, backjog, assist, shcam;   /* crosshair: 0 off, 1 while aiming, 2 always */
+    int aim_free, walk_shoot, backjog, assist, shcam, anim_blend, camfade;   /* crosshair: 0 off, 1 while aiming, 2 always */
     int hud_scale;                      /* index into HUD_SCALES */
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
@@ -900,7 +912,18 @@ static void apply(int kind)
             controls_camera_shoulder(M.shcam);
         ini_int("controls", "camera_shoulder", M.shcam);
         break;
+    case IT_CAMFADE:
+        if (!M.start)
+            controls_camera_fade(M.camfade);
+        ini_int("controls", "camera_fade", M.camfade);
+        break;
+    case IT_ANIMBLEND:
+        if (!M.start)
+            anim_blend_set(M.anim_blend);
+        ini_int("video", "anim_blend", M.anim_blend);
+        break;
     case IT_STYLE:   /* (change() already set the rows' values from the preset) */
+        ini_int("controls", "combat_style_seen", 1);   /* (no more onboarding prompt or in-game notice) */
         apply(IT_AIMBTN);
         apply(IT_LOCKCAM);
         apply(IT_AIM);
@@ -990,6 +1013,8 @@ static void change(int kind, int dir)
     case IT_BACKPEDAL: M.backjog = !M.backjog; break;
     case IT_ASSIST: M.assist = !M.assist; break;
     case IT_SHCAM: M.shcam = !M.shcam; break;
+    case IT_ANIMBLEND: M.anim_blend = !M.anim_blend; break;
+    case IT_CAMFADE: M.camfade = !M.camfade; break;
     case IT_STYLE: {
         int c = style_index();
         c = c < 0 ? (dir > 0 ? 0 : NSTYLES - 1) : cycle(c, NSTYLES, dir);
@@ -1157,6 +1182,8 @@ static void value_text(int kind, char *out, size_t n)
     case IT_BACKPEDAL: strcpy_s(out, n, M.backjog ? "Jog" : "Walk"); break;
     case IT_ASSIST: strcpy_s(out, n, M.assist ? "On" : "Off"); break;
     case IT_SHCAM: strcpy_s(out, n, M.shcam ? "Over the shoulder" : "Behind"); break;
+    case IT_ANIMBLEND: strcpy_s(out, n, M.anim_blend ? "On" : "Off"); break;
+    case IT_CAMFADE: strcpy_s(out, n, M.camfade ? "On" : "Off"); break;
     case IT_STYLE: {
         int c = style_index();
         strcpy_s(out, n, c < 0 ? "Custom" : STYLES[c].name);
@@ -1854,6 +1881,7 @@ static void draw_start(int w, int h, float u, double t, float dt)
 }
 
 static void draw_welcome(int w, int h);
+static void draw_onboard(int w, int h);
 static void draw_menu(void *user, int w, int h);
 
 static void draw(void *user, int w, int h)
@@ -1861,6 +1889,8 @@ static void draw(void *user, int w, int h)
     draw_menu(user, w, h);
     if (M.start && M.welcome && M.shown > 0)
         draw_welcome(w, h);
+    else if (M.start && M.onboard && M.shown > 0)
+        draw_onboard(w, h);
 }
 
 static void draw_menu(void *user, int w, int h)
@@ -2315,6 +2345,7 @@ static void welcome_input(int pressed)
     if (!(pressed & (K_OK | K_PLAY)))
         return;
     M.welcome = 0;
+    M.onboard = M.onboard_next;   /* (the combat style prompt next, if it's due) */
     log_printf("menu: first run: %s", WELCOME_BTN[M.welcome_sel]);
     set_page(PAGE_FILES);
     if (M.welcome_sel == 2)
@@ -2381,6 +2412,122 @@ static void draw_welcome(int w, int h)
                 0.95f);
         ty += bh + u * 0.35f;
     }
+    {   /* the prompts */
+        float fy = ty + u * 0.65f, fx = x + pad, r = u * 0.34f, sc = 0.7f, lh = gfx_ui_font_line(UI_FONT_BODY, sc);
+        gfx_ui_rect(x + pad, ty + u * 0.05f, pw - pad * 2, 1, ui_col(0x14FFFFFF));
+        if (M.pad_ui) {
+            fx += dpad_glyph(fx, fy, r * 2) + u * 0.25f;
+            fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 0.7f;
+            fx += pad_button(fx, fy, r, "A", 0xFF3FA34D) + u * 0.25f;
+            fx += ui_text(fx, fy - lh / 2, "Select", COL_DIM, sc) + u * 0.7f;
+            fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.25f;
+            ui_text(fx, fy - lh / 2, "Later", COL_DIM, sc);
+        } else {
+            fx += ui_key_cap(fx, fy, r * 1.9f, "Arrows") + u * 0.25f;
+            fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 0.7f;
+            fx += ui_key_cap(fx, fy, r * 1.9f, "Enter") + u * 0.25f;
+            fx += ui_text(fx, fy - lh / 2, "Select", COL_DIM, sc) + u * 0.7f;
+            fx += ui_key_cap(fx, fy, r * 1.9f, "Esc") + u * 0.25f;
+            ui_text(fx, fy - lh / 2, "Later", COL_DIM, sc);
+        }
+    }
+    ui_alpha = save;
+}
+
+/* The combat style prompt: shown in the start menu until a style is chosen ([controls]
+ * combat_style_seen), on a new install (after the import prompt) and after the update that brought
+ * the styles, so nobody finds the controls changed without being asked. Starts on the style the
+ * settings match (Adventure when none). Later (B / Esc) asks again next time. */
+static const char *const ONBOARD_DESC[] = {
+    "The controls you know: lock-on with the classic camera, shots go where Mega Man faces, and the walk "
+    "stops for each shot.",
+    "Lock-on over the shoulder, and Mega Man keeps moving while he shoots: he strafes around enemies and "
+    "jogs backward facing them.",
+    "A third-person shooter: the camera stays over his shoulder, the aim button zooms in to aim freely at a "
+    "crosshair, and aim assist helps you stay on target.",
+};
+
+static void onboard_input(int pressed)
+{
+    if (plat_take_back() || (pressed & K_BACK)) {
+        M.onboard = 0;
+        log_printf("menu: combat style: later");
+        return;
+    }
+    if (pressed & (K_UP | K_LEFT))
+        M.onboard_sel = (M.onboard_sel + NSTYLES - 1) % NSTYLES;
+    if (pressed & (K_DOWN | K_RIGHT))
+        M.onboard_sel = (M.onboard_sel + 1) % NSTYLES;
+    if (!(pressed & (K_OK | K_PLAY)))
+        return;
+    M.onboard = 0;
+    style_set(M.onboard_sel);
+    apply(IT_STYLE);
+    log_printf("menu: combat style chosen: %s", STYLES[M.onboard_sel].name);
+}
+
+static void draw_onboard(int w, int h)
+{
+    float u = gfx_ui_line(1.0f), pw = u * 26, ph, x, y, pad = u * 1.1f, ts = 0.7f, bh = u * 1.5f, ty, dh;
+    double t = now_s();
+    const char *body = "This version brings new ways to aim and shoot. Pick the style that suits you. Every option "
+                       "can be changed any time in the settings, on the COMBAT page.";
+    int i;
+    float save = ui_alpha;
+    if (pw > w - u * 2)
+        pw = w - u * 2;
+    g_help_h = 1e9f;
+    dh = 0;
+    for (i = 0; i < NSTYLES; i++) {   /* (room for the longest description) */
+        float hh = wrap_text(0, 0, pw - pad * 2 - u * 0.6f, ONBOARD_DESC[i], 0, 0.86f, 0);
+        if (hh > dh)
+            dh = hh;
+    }
+    ph = pad + gfx_ui_font_line(UI_FONT_DISPLAY, ts) + u * 0.7f + wrap_text(0, 0, pw - pad * 2, body, 0, 0.9f, 0) +
+         u * 0.8f + NSTYLES * (bh + u * 0.35f) + u * 0.3f + dh + u * 1.0f + u * 1.3f + pad * 0.6f;
+    x = (w - pw) / 2;
+    y = (h - ph) / 2;
+    if (y < u * 0.5f)
+        y = u * 0.5f;
+    gfx_ui_rect(0, 0, (float)w, (float)h, ui_col(0xB0020610));   /* the menu behind, dimmed */
+    ui_panel(x + u * 0.25f, y + u * 0.3f, pw, ph, u * 0.9f, 0x60000000, 0x60000000);
+    ui_panel(x, y, pw, ph, u * 0.9f, COL_PANEL_TOP, COL_PANEL_BOT);
+    ui_panel_edge(x, y, pw, ph, u * 0.9f, u * 0.08f, COL_EDGE);
+    {
+        float b = u * 0.7f, th = u * 0.12f;
+        ui_line(x, y + b, x, y - th / 2, th, COL_YELLOW);
+        ui_line(x - th / 2, y, x + b, y, th, COL_YELLOW);
+        ui_line(x + pw, y + ph - b, x + pw, y + ph + th / 2, th, COL_YELLOW);
+        ui_line(x + pw + th / 2, y + ph, x + pw - b, y + ph, th, COL_YELLOW);
+    }
+    ty = y + pad;
+    ui_text_outlined(UI_FONT_DISPLAY, x + pad, ty, "CHOOSE YOUR COMBAT STYLE", 0xFFFFFFFF, 0xFF9EE2FF, ts, u * 0.06f,
+                     0xFF061226);
+    ty += gfx_ui_font_line(UI_FONT_DISPLAY, ts) + u * 0.25f;
+    gfx_ui_hgrad(x + pad, ty, pw - pad * 2, 1.5f, ui_col(0xA05CC8FF), ui_col(0x005CC8FF));
+    ty += u * 0.45f;
+    ty += wrap_text(x + pad, ty, pw - pad * 2, body, 0xFFD2DEEA, 0.9f, 1) + u * 0.8f;
+    for (i = 0; i < NSTYLES; i++) {
+        float bx = x + pad, bw = pw - pad * 2, lw = gfx_ui_font_width(UI_FONT_BODY, STYLES[i].name, 0.95f);
+        float lh = gfx_ui_font_line(UI_FONT_BODY, 0.95f);
+        int sel = i == M.onboard_sel;
+        if (sel) {
+            float pulse = 0.5f + 0.5f * sinf((float)t * 5.0f);
+            ui_slant(bx - u * 0.1f, ty - u * 0.1f, bw + u * 0.2f, bh + u * 0.2f, bh * 0.4f,
+                     ui_with_alpha(COL_YELLOW, 0.3f + 0.3f * pulse), 0x00FFD23A);
+            ui_slant(bx, ty, bw, bh, bh * 0.35f, COL_YELLOW, COL_YELLOW_LO);
+            ui_arrow(bx - u * 0.4f + sinf((float)t * 6.0f) * u * 0.08f, ty + bh / 2, u * 0.4f, 1, COL_YELLOW);
+        } else {
+            ui_slant(bx, ty, bw, bh, bh * 0.35f, COL_BLUE, COL_BLUE_DARK);
+        }
+        ui_text(bx + (bw - lw) / 2, ty + (bh - lh) / 2, STYLES[i].name, sel ? COL_NAVY : 0xFFFFFFFF, 0.95f);
+        ty += bh + u * 0.35f;
+    }
+    /* what the chosen one does */
+    ty += u * 0.3f;
+    gfx_ui_rect(x + pad, ty - u * 0.2f, u * 0.08f, dh + u * 0.4f, ui_col(COL_YELLOW));
+    wrap_text(x + pad + u * 0.6f, ty, pw - pad * 2 - u * 0.6f, ONBOARD_DESC[M.onboard_sel], 0xFFD2DEEA, 0.86f, 1);
+    ty += dh + u * 1.0f;
     {   /* the prompts */
         float fy = ty + u * 0.65f, fx = x + pad, r = u * 0.34f, sc = 0.7f, lh = gfx_ui_font_line(UI_FONT_BODY, sc);
         gfx_ui_rect(x + pad, ty + u * 0.05f, pw - pad * 2, 1, ui_col(0x14FFFFFF));
@@ -2514,6 +2661,10 @@ void menu_frame(void)
         }
         if (M.welcome) {
             welcome_input(pressed);
+            return;
+        }
+        if (M.onboard) {
+            onboard_input(pressed);
             return;
         }
         if (plat_take_back() || (pressed & K_BACK)) {   /* B or Android's Back: close the app */
@@ -2725,6 +2876,8 @@ static void load_values(const char *ini, const char *game_dir)
     M.backjog = _stricmp(s, "jog") == 0;
     M.assist = GetPrivateProfileIntA("controls", "aim_assist", 0, ini) != 0;
     M.shcam = GetPrivateProfileIntA("controls", "camera_shoulder", 0, ini) != 0;
+    M.anim_blend = GetPrivateProfileIntA("video", "anim_blend", 1, ini) != 0;
+    M.camfade = GetPrivateProfileIntA("controls", "camera_fade", 1, ini) != 0;
     GetPrivateProfileStringA("controls", "lockon_camera", "classic", s, sizeof s, ini);
     M.lock_shoulder = _stricmp(s, "shoulder") == 0;
     M.aim_sens = nearest_index(AIMSENS, 4, GetPrivateProfileIntA("controls", "aim_sensitivity", 60, ini));
@@ -2812,6 +2965,9 @@ int menu_start(const char *ini, const char *game_dir)
         M.gf_ready[1] = gamefiles_can_import() && gamefiles_version_ready(game_dir, 1);
         M.welcome = gamefiles_can_import() && !M.gf_ready[0] && !M.gf_ready[1];
         M.welcome_sel = 0;
+        M.onboard_next = !GetPrivateProfileIntA("controls", "combat_style_seen", 0, ini);
+        M.onboard = M.onboard_next && !M.welcome;
+        M.onboard_sel = style_index() >= 0 ? style_index() : 1;   /* (Adventure when the settings match none) */
         M.edition = gamefiles_edition(game_dir);
         {
             char p[MAX_PATH];

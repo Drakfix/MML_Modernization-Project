@@ -38,6 +38,7 @@
 #include "lockon.h"
 #include "log.h"
 #include "packets.h"
+#include "controls.h"
 #include "recomp.h"
 #include "shim.h"
 
@@ -1566,6 +1567,70 @@ static HRESULT WINAPI dev_draw_prim(void **i, D3DPRIMITIVETYPE pt, DWORD fvf, LP
         s.blend = 1;
         s.src_blend = D3DBLEND_SRCALPHA;
         s.dst_blend = D3DBLEND_INVSRCALPHA;
+    }
+    {
+        static int want_log = -1;
+        static unsigned frames, all, flagged, flagged_tex, flagged_blend;
+        static unsigned last_frame;
+        if (want_log < 0) {
+            char v[8] = "";
+            GetEnvironmentVariableA("MML_FADE_LOG", v, sizeof v);
+            want_log = v[0] == '1';
+        }
+        if (want_log) {
+            all++;
+            if (g_cur_pkt && packets_is_player((const void *)g_cur_pkt)) {
+                flagged++;
+                flagged_tex += d->tex != NULL;
+                flagged_blend += s.blend;
+            }
+            if (g_frame_no != last_frame) {
+                last_frame = g_frame_no;
+                if (++frames % 120 == 0)
+                    log_printf("fade census (120 frames): %u draws, %u flagged as his (%u textured, %u blended)",
+                               all, flagged, flagged_tex, flagged_blend);
+                if (frames % 120 == 0)
+                    all = flagged = flagged_tex = flagged_blend = 0;
+            }
+        }
+    }
+    if (g_cur_pkt && packets_is_player((const void *)g_cur_pkt) &&
+        (!s.blend || (s.src_blend == D3DBLEND_SRCALPHA && s.dst_blend == D3DBLEND_INVSRCALPHA))) {
+        /* Mega Man with the camera close behind him (a wall at his back): faded, so he doesn't
+           fill the view (controls.c). His opaque and alpha-blended draws (most of them draw with
+           blending on); the alpha test is scaled with it; additive effects are left alone. */
+        int a = controls_player_alpha();
+        static gfx_vertex fv[512];
+        {
+            static unsigned logged;
+            static int want_log = -1;
+            if (want_log < 0) {
+                char v[8] = "";
+                GetEnvironmentVariableA("MML_FADE_LOG", v, sizeof v);
+                want_log = v[0] == '1';
+            }
+            if (want_log && logged < 12 && a < 128) {
+                logged++;
+                log_printf("fade draw: a %d n %lu diffuse %08X tex %p atest %d func %d ref %d z %d/%d blend %d %d/%d",
+                           a, n, ((const gfx_vertex *)verts)[0].diffuse, (void *)d->tex, s.alpha_test, s.alpha_func,
+                           s.alpha_ref, s.z_enable, s.z_write, s.blend, s.src_blend, s.dst_blend);
+            }
+        }
+        if (a < 255 && n <= 512) {
+            DWORD k;
+            const gfx_vertex *src = (const gfx_vertex *)verts;
+            for (k = 0; k < n; k++) {
+                fv[k] = src[k];
+                /* (an opaque draw's alpha means nothing: full) */
+                uint32_t a0 = s.blend ? fv[k].diffuse >> 24 : 255;
+                fv[k].diffuse = (fv[k].diffuse & 0x00FFFFFF) | ((a0 * (uint32_t)a / 255) << 24);
+            }
+            verts = fv;
+            s.blend = 1;
+            s.src_blend = D3DBLEND_SRCALPHA;
+            s.dst_blend = D3DBLEND_INVSRCALPHA;
+            s.alpha_ref = (uint8_t)((s.alpha_ref * a) / 255);
+        }
     }
     prepare_texture(d);
     /* the 3D world's depth counts for effects (not 2D overlays drawn in its buckets) */

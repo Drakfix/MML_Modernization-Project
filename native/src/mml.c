@@ -21,6 +21,7 @@
 
 #include "ambience.h"
 #include "apicensus.h"
+#include "anim_blend.h"
 #include "controls.h"
 #include "crosshair.h"
 #include "input.h"
@@ -819,6 +820,10 @@ void mml_init(void)
     }
     controls_aim_assist(GetPrivateProfileIntA("controls", "aim_assist", 0, g_ini));
     controls_camera_shoulder(GetPrivateProfileIntA("controls", "camera_shoulder", 0, g_ini));
+    controls_camera_fade(GetPrivateProfileIntA("controls", "camera_fade", 1, g_ini));
+    controls_style_notice(!GetPrivateProfileIntA("controls", "combat_style_seen", 0, g_ini));
+    if (anim_blend_install())
+        anim_blend_set(GetPrivateProfileIntA("video", "anim_blend", 1, g_ini));
     {
         char bp[16];
         ini_string("controls", "backpedal", "walk", bp, sizeof bp);

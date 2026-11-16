@@ -29,6 +29,53 @@
 volatile const uint8_t *g_cur_pkt;
 volatile int g_cur_bucket = 7;
 
+/* Mega Man's polygons. FUN_004ea960 draws him with FUN_004eaa29, which links his model's prebuilt
+   polygon packets (they live in the model data, one copy per frame parity) into his own ordering
+   table. The model is 5 groups of parts from tables picked by his equipment (+0x171 / +0x170):
+   a group's part count at 0x550EF0[set * 5 + group], its parts (16 bytes each) at
+   0x550EB4[group + set * 5]. A part's word 0: triangles in its low byte (FUN_004eab81: packets at
+   word 1, 0x74 apart), quads in the next byte (FUN_004eac76: at word 2, 0x94 apart). A packet is his
+   when it lies in one of those runs (the walk doesn't say: his table's chain runs on into others). */
+static unsigned g_frame;   /* (below: the walk's frame count) */
+#define G_PART_COUNTS     GA(0x550EF0u)
+#define G_PART_TABLES     GA(0x550EB4u)
+#define MAX_RUNS          128
+static struct { uint32_t lo, hi; } g_runs[MAX_RUNS];
+static int g_nruns;
+static unsigned g_runs_frame = ~0u;
+
+int packets_is_player(const void *pkt)
+{
+    uint32_t a = GADDR(pkt);
+    int i;
+    if (g_runs_frame != g_frame) {   /* (once a frame: his equipment can change the parts) */
+        int set = !GVAR(uint8_t, G_PLAYER + 0x171) ? 0 : !GVAR(uint8_t, G_PLAYER + 0x170) ? 2 : 1, grp;
+        g_runs_frame = g_frame;
+        g_nruns = 0;
+        for (grp = 0; grp < 5; grp++) {
+            int n = GVAR(uint8_t, G_PART_COUNTS + (uint32_t)(set * 5 + grp)), k;
+            uint32_t part = GVAR(uint32_t, G_PART_TABLES + (uint32_t)(grp + set * 5) * 4);
+            for (k = 0; k < n && part && g_nruns < MAX_RUNS - 1; k++, part += 0x10) {
+                uint32_t w0 = GVAR(uint32_t, part), tris = w0 & 0xff, quads = (w0 >> 8) & 0xff;
+                if (tris) {
+                    g_runs[g_nruns].lo = GVAR(uint32_t, part + 4);
+                    g_runs[g_nruns].hi = g_runs[g_nruns].lo + tris * 0x74;
+                    g_nruns++;
+                }
+                if (quads) {
+                    g_runs[g_nruns].lo = GVAR(uint32_t, part + 8);
+                    g_runs[g_nruns].hi = g_runs[g_nruns].lo + quads * 0x94;
+                    g_nruns++;
+                }
+            }
+        }
+    }
+    for (i = 0; i < g_nruns; i++)
+        if (a >= g_runs[i].lo && a < g_runs[i].hi)
+            return 1;
+    return 0;
+}
+
 /* esp as it was at the hooked instruction (the stub pushed eflags first) */
 static uint32_t site_esp(const regs_t *r) { return r->esp + 4; }
 

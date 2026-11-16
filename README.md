@@ -226,7 +226,8 @@ the Japanese line being spoken.
   and moving while shooting, and Shooter turns it into a third-person shooter: the camera stays
   over Mega Man's shoulder, the aim button zooms in to aim freely, shots go to an always-on
   crosshair, and aim assist slows the camera over enemies. Each option can also be set on its
-  own (Settings, Combat).
+  own (Settings, Combat). The start menu asks which style you want the first time; when the start
+  menu is skipped, a notice in the game points to the setting.
 - **Remapping.** Every controller button and keyboard key used by the modern controls can be
   rebound.
 - **Vanilla mode.** Leaves the game's controls completely stock.
