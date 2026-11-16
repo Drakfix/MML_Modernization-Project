@@ -37,13 +37,13 @@ copy.
 
 ## What's new in 0.9
 
-- **Move while shooting.** Walking forward, backward and sideways no longer stops Mega Man for
-  each shot: his legs keep moving and the shot plays on his arms. While firing locked on, over the
-  shoulder or with camera aim, he moves every way around the target: he runs forward, strafes,
-  and backpedals or jogs backward facing it, slower toward the back. Jumps keep him facing the
-  target.
+- **Moving while locked on, and backpedaling.** The original lets Mega Man run and strafe while
+  shooting, but not walk backward, and locking on keeps him in place. Now he also walks backward
+  while shooting, his legs moving while the shot plays on his arms. While firing locked on, over the
+  shoulder or with camera aim, he moves every way around the target: he runs forward, strafes, and
+  backpedals or jogs backward facing it, slower toward the back. Jumps keep him facing the target.
 - **Combat styles.** **Classic** plays like the original, **Adventure** adds lock-on over the
-  shoulder and moving while shooting, and **Shooter** is a third-person shooter: the camera stays
+  shoulder and moving while locked on, and **Shooter** is a third-person shooter: the camera stays
   over Mega Man's shoulder, the aim button zooms in to aim freely at the crosshair (no lock-on),
   and aim assist slows the camera over enemies. Every option can also be set on its own, on the
   new **Combat** page of the settings. The start menu asks which style you want the first time.
@@ -64,8 +64,8 @@ copy.
 - **Localization names** (US version, experimental). An option puts the original Japanese
   release's names into the US text and subtitles: Rock, the Kobun, Digouters, Reaverbirds and
   more. The lines stay the US script's.
-- **Fix:** special weapons keep Mega Man planted while they fire again, as in the original. Move
-  while shooting is for the buster only.
+- **Fix:** special weapons keep Mega Man planted while they fire again, as in the original.
+  Backpedaling and moving while locked on are for the buster only.
 
 ## What's new in 0.8
 
@@ -239,12 +239,13 @@ the Japanese line being spoken.
 - **Camera aim** (optional). Shots go where the camera looks, up and down included, and meet at
   whatever is under the optional crosshair, which reacts when an enemy is under it. Mega Man turns to the camera's direction only while firing, so movement
   stays free in every direction.
-- **Move while shooting.** Walking forward, backward and sideways no longer stops Mega Man for
-  each shot: his legs keep walking and the shot plays on his arms. While firing locked on, over
+- **Moving while locked on, and backpedaling.** The original lets Mega Man run and strafe while
+  shooting, but not walk backward, and locking on keeps him in place. Now he also walks backward
+  while shooting, his legs walking while the shot plays on his arms. While firing locked on, over
   the shoulder or with camera aim, he moves every way around the target: he runs forward and
-  sideways, and backpedals facing it (an optional backward jog, `backpedal=jog`, is faster).
-  Changes of direction ease in, and jumps keep him facing the target. `walk_shoot=0` restores
-  the original stop for each shot.
+  sideways, and backpedals facing it (an optional backward jog, `backpedal=jog`, is faster). Changes
+  of direction ease in, and jumps keep him facing the target. `walk_shoot=0` restores the original
+  behavior.
 - **Analog movement.** A light stick tilt walks, a full tilt runs.
 - **Boat shooting sections.** Where Mega Man rides Roll's boat and only aims and shoots, the
   modern layout applies too: analog aim on the sticks and the mouse, RT to shoot, LT to zoom in,
@@ -258,7 +259,7 @@ the Japanese line being spoken.
   the PS1 version.
 - **Mouse and keyboard** (Windows and Linux). Mouse look, WASD movement and mouse aiming.
 - **Combat styles.** Classic plays like the original, Adventure adds lock-on over the shoulder
-  and moving while shooting, and Shooter turns it into a third-person shooter: the camera stays
+  and moving while locked on, and Shooter turns it into a third-person shooter: the camera stays
   over Mega Man's shoulder, the aim button zooms in to aim freely, shots go to an always-on
   crosshair, and aim assist slows the camera over enemies. Each option can also be set on its
   own (Settings, Combat). The start menu asks which style you want the first time; when the start
@@ -517,14 +518,15 @@ game.
 |------------------------|--------|
 | `aim` | `character` (default), `camera` |
 | `crosshair` | `1` (default, while aiming), `always`, `0` |
-| `walk_shoot` | `1` (default): keep moving while shooting; `0`: stop for each shot, as in the original |
+| `walk_shoot` | `1` (default): backpedal while shooting, and move around a locked-on target; `0`: as in the original, no backpedaling while shooting, and lock-on keeps him in place (running and strafing while shooting work either way) |
 | `aim_button` | `lockon` (default): Z-targeting; `free`: aim over the shoulder at the crosshair, no lock-on |
 | `camera_shoulder` | `0` (default); `1`: the camera stays over the shoulder, and aiming zooms in |
 | `aim_assist` | `0` (default); `1`: the camera slows and the crosshair closes in over an enemy |
 | `backpedal` | `walk` (default): backpedal while firing; `jog` (experimental): the run played backward, faster |
 
-Moving while shooting applies to the buster. The special weapons keep Mega Man planted while they
-fire, as in the original (the few the original lets fire while running still do so in a run).
+Backpedaling and moving while locked on apply to the buster. The special weapons keep Mega Man
+planted while they fire, as in the original (the few the original lets fire while running still do
+so in a run).
 
 ### Boat shooting sections
 
