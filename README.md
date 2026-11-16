@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.9.0 beta.** The 0.1 releases are kept on the
+**Current version: 0.9.1 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -55,6 +55,17 @@ copy.
   the map into their corners, and the boss and Roll gauges sit above the dialogue boxes.
 - **What's new in updates.** When an update is available, the start menu's update rows show a short
   summary of what it brings.
+
+**0.9.1:**
+
+- **Button prompts.** The start menu, the in-game menu and the title screen's hints name the
+  buttons as your controller shows them: Xbox, PlayStation 4, PlayStation 5 or Switch, picked
+  automatically from the controller connected or set by hand.
+- **Localization names** (US version, experimental). An option puts the original Japanese
+  release's names into the US text and subtitles: Rock, the Kobun, Digouters, Reaverbirds and
+  more. The lines stay the US script's.
+- **Fix:** special weapons keep Mega Man planted while they fire again, as in the original. Move
+  while shooting is for the buster only.
 
 ## What's new in 0.8
 
@@ -512,6 +523,9 @@ game.
 | `aim_assist` | `0` (default); `1`: the camera slows and the crosshair closes in over an enemy |
 | `backpedal` | `walk` (default): backpedal while firing; `jog` (experimental): the run played backward, faster |
 
+Moving while shooting applies to the buster. The special weapons keep Mega Man planted while they
+fire, as in the original (the few the original lets fire while running still do so in a run).
+
 ### Boat shooting sections
 
 On the boat rides Roll steers and Mega Man only turns, aims up and down, and shoots. With modern
@@ -543,10 +557,10 @@ menu shows each setting's full description and choices beside the list.
 
 | Page | Settings |
 |------|----------|
-| Game | Version to play, importing each version, English subtitles, voice language, start menu at launch (show / skip), intro video, title screen hints, room transitions, updates |
+| Game | Version to play, importing each version, English subtitles, voice language, localization names (US / Japanese), start menu at launch (show / skip), intro video, title screen hints, room transitions, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio, frame rate, V-Sync, executable |
 | Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement, animation blending, HUD size |
-| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |
+| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), button prompts (Auto / Xbox / PlayStation 4 / PlayStation 5 / Switch), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |
 | Combat | Combat style (Classic / Adventure / Shooter presets, or Custom), camera position (behind / over the shoulder), fade up close, aim button (lock-on / free aim), lock-on camera, shots aim, aim sensitivity, aim assist, move while shooting, backpedal (walk / jog), crosshair (off / while aiming / always), reticle colour |
 | Buttons | Controller and keyboard remapping |
 
