@@ -73,6 +73,7 @@ static int g_cs_ready;
 static int g_started, g_failed;
 static volatile LONG g_ready;    /* SDL_Init finished: other threads may read */
 static SDL_Gamepad *g_pad;
+static volatile int g_pad_type = -1;   /* SDL_GamepadType of the controller now or last connected */
 static pad_t g_raw;
 static int g_connected;
 static int g_rescan;
@@ -227,9 +228,10 @@ static void track_gamepad(void)
         if (ids) {
             if (n > 0) {
                 g_pad = sdl.OpenGamepad(ids[0]);
-                if (g_pad)
-                    log_printf("input: controller \"%s\" (%s)", sdl.GetGamepadName(g_pad),
-                               type_name(sdl.GetGamepadType(g_pad)));
+                if (g_pad) {
+                    g_pad_type = sdl.GetGamepadType(g_pad);
+                    log_printf("input: controller \"%s\" (%s)", sdl.GetGamepadName(g_pad), type_name(g_pad_type));
+                }
                 else
                     log_printf("input: SDL_OpenGamepad failed: %s", sdl.GetError());
             }
@@ -401,6 +403,11 @@ static void on_poll_done(regs_t *r)
         GVAR(uint8_t, G_KB_BINDINGS) = g_kb_saved;
         g_kb_muted = 0;
     }
+}
+
+int input_pad_type(void)
+{
+    return g_pad_type;
 }
 
 int input_sdl_active(void)

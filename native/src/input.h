@@ -36,6 +36,8 @@ void input_jp_buttons_check(void);   /* (the log: which way the tests are now) *
 
 /* 1 while SDL drives the controller. */
 int input_sdl_active(void);
+/* the SDL_GamepadType of the controller connected now, or of the last one; -1 before any */
+int input_pad_type(void);
 
 /* Latest physical pad as read by SDL this frame (raw, before any remap).
  * Returns 1 if a controller is connected. */

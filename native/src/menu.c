@@ -35,6 +35,7 @@
 #include "gfx_ui.h"
 #include "mml.h"
 #include "input.h"
+#include "padprompt.h"
 #include "kbm.h"
 #include "lockon.h"
 #include "lod.h"
@@ -116,6 +117,14 @@ typedef struct {
     int def;
 } item;
 
+/* [controls] button_prompts: how our screens name the controller's buttons (padprompt.h; Auto also
+   knows a DualShock 3: ps3, the PS4's look with SELECT / START) */
+static const choice CH_PROMPTS[] = { { "Auto", "controls.button_prompts=auto" }, { "Xbox", "controls.button_prompts=xbox" },
+                                     { "PlayStation 4", "controls.button_prompts=ps4" },
+                                     { "PlayStation 5", "controls.button_prompts=ps5" },
+                                     { "Nintendo Switch", "controls.button_prompts=switch" } };
+#define PROMPTS_HELP "How these menus name the controller's buttons. Auto follows the controller connected."
+
 static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "COMBAT", "GAME" };
 #define AIM_HELP "Camera: firing turns Mega Man to where the camera looks. Character: shots go where he faces."
 #define XH_HELP "Marks where camera-aimed shots go: while aiming, or always."
@@ -128,7 +137,7 @@ static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "COMBA
 #define SHCAM_HELP "Over the shoulder: the camera stays beside Mega Man, and aiming zooms in."
 #define AIMSENS_HELP "Camera speed while aiming over the shoulder with no target, for finer aim."
 #define TRANS_HELP "Plays room changes (doors, ladders) faster: the wipe, the black screen and the room setup. "     "The game was made to hide loading from the disc there; now the next room is ready long before."
-#define LOCKCAM_HELP "Over the shoulder: aiming looks past Mega Man's shoulder, at the locked enemy or the horizon, and he keeps moving. R3 swaps sides."
+#define LOCKCAM_HELP "Over the shoulder: aiming looks past Mega Man's shoulder, at the locked enemy or the horizon, and he keeps moving. " PT_R3 " swaps sides."
 
 static const item g_game_items[] = {
     { 0, IT_FPS, "Frame rate", "60 fps adds in-between frames for smooth motion. The game itself still runs at 30." },
@@ -148,6 +157,7 @@ static const item g_game_items[] = {
     { 2, IT_INVERT_X, "Invert camera X", "Flips left and right on the camera stick." },
     { 2, IT_INVERT_Y, "Invert camera Y", "Flips up and down on the camera stick and the mouse." },
     { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off." },
+    { 2, IT_CHOICE, "Button prompts", PROMPTS_HELP, CH_PROMPTS, (int)(sizeof CH_PROMPTS / sizeof CH_PROMPTS[0]) },
     { 3, IT_STYLE, "Combat style", STYLE_HELP },
     { 3, IT_SHCAM, "Camera position", SHCAM_HELP },
     { 3, IT_CAMFADE, "Fade up close", "Mega Man turns see-through when the camera comes close to him." },
@@ -208,7 +218,7 @@ static const choice CH_ACTION[] = { { "Jump", "=jump" }, { "Shoot", "=shoot" }, 
 #define BTN_HELP "What this button does with the modern controls. With the original controls the game uses its own " \
     "1997 layout."
 #define KEY_HELP "This action's key with mouse and keyboard (modern controls): " OK_KEY " and then the new key or " \
-    "mouse button (Esc or B cancels). A second key, such as the arrows for moving, stays as it is."
+    "mouse button (Esc or " PT_B " cancels). A second key, such as the arrows for moving, stays as it is."
 #define START_AIM_HELP "Camera: firing turns Mega Man toward where the camera looks, so shots go there, up and down " \
     "included. Character: shots go where Mega Man faces, as in the original."
 #define START_XH_HELP "Marks where your shots go when they follow the camera. While aiming: with camera aim it " \
@@ -243,7 +253,7 @@ static const item g_start_items[] = {
       "then switches between the two. Experimental: lines only the Japanese release voices stay silent." },
     { PAGE_FILES, IT_SECTION, "Launch" },
     { PAGE_FILES, IT_CHOICE, "Start menu at launch", "Show opens this menu every time. Skip starts the game straight "
-      "away with the saved settings. To come back here, hold Back (controller) or F2 (keyboard) on the game's "
+      "away with the saved settings. To come back here, hold " PT_BACK " (controller) or F2 (keyboard) on the game's "
       "title screen.", CH_STARTMENU, NCH(CH_STARTMENU) },
     { PAGE_FILES, IT_CHOICE, "Intro video", "Plays the project's intro video when the game starts. Any button skips "
       "it while it plays.", CH_INTRO, NCH(CH_INTRO) },
@@ -336,14 +346,18 @@ static const item g_start_items[] = {
       "stick, lock-on targeting and dodge rolls in any direction. Original (1997): the game's own tank-style "
       "controls and camera.", CH_CONTROLS, NCH(CH_CONTROLS) },
     { PG_CONTROLS, IT_CHOICE, "Modern controls on launch", "Whether the game starts with the modern controls "
-      "active. In game, L3 or R3 (F5 on the keyboard) switches them on and off.", CH_ORBIT, NCH(CH_ORBIT), 0, NULL,
+      "active. In game, " PT_L3 " or " PT_R3 " (F5 on the keyboard) switches them on and off.", CH_ORBIT, NCH(CH_ORBIT), 0, NULL,
       1 },
     { PG_CONTROLS, IT_CHOICE, "Input API", "SDL3 reads Xbox, PlayStation, Switch and most other controllers, with "
       "the right button layouts. DirectInput (legacy) goes through the Xidi wrapper: use it only if SDL3 doesn't "
       "detect your controller.", CH_INPUT, NCH(CH_INPUT), PL_WIN },
     { PG_CONTROLS, IT_CHOICE, "Confirm button (Rockman DASH)", "Rockman DASH only. US layout: the bottom face "
-      "button (A / Cross) confirms and the top one (Y / Triangle) goes back. Japanese layout: the right face "
-      "button (B / Circle) confirms and the bottom one goes back.", CH_JPBTN, NCH(CH_JPBTN) },
+      "button (" PT_A ") confirms and the top one (" PT_Y ") goes back. Japanese layout: the right face "
+      "button (" PT_B ") confirms and the bottom one goes back.", CH_JPBTN, NCH(CH_JPBTN) },
+    { PG_CONTROLS, IT_CHOICE, "Button prompts", "How these menus and the title screen's hints name the "
+      "controller's buttons, each as its own controller shows them: Xbox letters on their colours, the "
+      "PlayStation 4's coloured symbols, the PlayStation 5's plain symbols and icons, or the Switch's white "
+      "buttons. Auto follows the controller connected (Xbox for one it doesn't recognize).", CH_PROMPTS, NCH(CH_PROMPTS) },
     { PG_CONTROLS, IT_SECTION, "Camera" },
     { PG_CONTROLS, IT_CAMSPEED, "Camera sensitivity", "How fast the right stick turns the camera, relative to the "
       "default." },
@@ -381,7 +395,7 @@ static const item g_start_items[] = {
       "crosshair, with no lock-on, like a third-person shooter." },
     { PG_COMBAT, IT_LOCKCAM, "Lock-on camera", "Classic: while locked on, the camera swings behind Mega Man, and aiming with no target " 
       "roots him in place. Over the shoulder: the camera moves in beside him and looks past his shoulder, at " 
-      "the locked enemy or, with no target, the horizon; he keeps moving and shots go to the crosshair. The " "shoulder swap button (R3) switches sides." },
+      "the locked enemy or, with no target, the horizon; he keeps moving and shots go to the crosshair. The " "shoulder swap button (" PT_R3 ") switches sides." },
     { PG_COMBAT, IT_AIM, "Shots aim", START_AIM_HELP },
     { PG_COMBAT, IT_AIMSENS, "Aim sensitivity", "Camera and mouse speed while aiming over the shoulder with no "
       "target, relative to the normal camera speed. Lower is finer aim." },
@@ -401,18 +415,18 @@ static const item g_start_items[] = {
 
     /* ---- BUTTONS ---- */
     { PG_BUTTONS, IT_SECTION, "Controller" },
-    { PG_BUTTONS, IT_CHOICE, "A", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_a", 0 },
-    { PG_BUTTONS, IT_CHOICE, "B", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_b", 2 },
-    { PG_BUTTONS, IT_CHOICE, "X", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_x", 4 },
-    { PG_BUTTONS, IT_CHOICE, "Y", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_y", 3 },
-    { PG_BUTTONS, IT_CHOICE, "LB", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lb", 5 },
-    { PG_BUTTONS, IT_CHOICE, "RB", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rb", 9 },
-    { PG_BUTTONS, IT_CHOICE, "LT", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lt", 5 },
-    { PG_BUTTONS, IT_CHOICE, "RT", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rt", 1 },
-    { PG_BUTTONS, IT_CHOICE, "L3 (left stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_l3", 6 },
-    { PG_BUTTONS, IT_CHOICE, "R3 (right stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_r3", 11 },
-    { PG_BUTTONS, IT_CHOICE, "Back", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_back", 8 },
-    { PG_BUTTONS, IT_CHOICE, "Start", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_start", 7 },
+    { PG_BUTTONS, IT_CHOICE, PT_A, BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_a", 0 },
+    { PG_BUTTONS, IT_CHOICE, PT_B, BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_b", 2 },
+    { PG_BUTTONS, IT_CHOICE, PT_X, BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_x", 4 },
+    { PG_BUTTONS, IT_CHOICE, PT_Y, BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_y", 3 },
+    { PG_BUTTONS, IT_CHOICE, PT_LB, BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lb", 5 },
+    { PG_BUTTONS, IT_CHOICE, PT_RB, BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rb", 9 },
+    { PG_BUTTONS, IT_CHOICE, PT_LT, BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_lt", 5 },
+    { PG_BUTTONS, IT_CHOICE, PT_RT, BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_rt", 1 },
+    { PG_BUTTONS, IT_CHOICE, PT_L3 " (left stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_l3", 6 },
+    { PG_BUTTONS, IT_CHOICE, PT_R3 " (right stick)", BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_r3", 11 },
+    { PG_BUTTONS, IT_CHOICE, PT_BACK, BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_back", 8 },
+    { PG_BUTTONS, IT_CHOICE, PT_START, BTN_HELP, CH_ACTION, NCH(CH_ACTION), 0, "controls.btn_start", 7 },
     { PG_BUTTONS, IT_SECTION, "Keyboard and mouse", NULL, NULL, 0, WL },
     { PG_BUTTONS, IT_KEY, "Move forward", KEY_HELP, NULL, 0, WL, "key_up" },
     { PG_BUTTONS, IT_KEY, "Move back", KEY_HELP, NULL, 0, WL, "key_down" },
@@ -684,6 +698,7 @@ static void choice_write(const item *it, int c)
     char sec[48], key[48], val[48];
     while (p && *p && (p = choice_pair(it, p, sec, key, val, sizeof sec)) != NULL)
         ini_str(sec, key, val);
+    pad_prompts_load(M.ini);   /* (button prompts: the new names show at once) */
 }
 
 static int item_index(const item *it)
@@ -1289,16 +1304,6 @@ static int gauge(int kind, int *total)
 
 /* ---- drawing ---- */
 
-/* a pad button: round face with its letter */
-static float pad_button(float x, float cy, float r, const char *label, uint32_t face)
-{
-    float tw = gfx_ui_font_width(UI_FONT_BODY, label, 0.62f);
-    gfx_ui_circle(x + r, cy, r, ui_col(0xFF000000 | (face & 0xFFFFFF) ));
-    gfx_ui_ring(x + r, cy, r, r * 0.16f, ui_col(0x60FFFFFF));
-    ui_text(x + r - tw / 2, cy - gfx_ui_font_line(UI_FONT_BODY, 0.62f) / 2, label, 0xFFFFFFFF, 0.62f);
-    return r * 2;
-}
-
 static float dpad_glyph(float x, float cy, float s)
 {
     float t = s * 0.36f;
@@ -1448,16 +1453,34 @@ static float wrapped(float x, float y, float maxw, const char *s, uint32_t col, 
 /* a help text with its OK_KEY marks as the button the player uses now */
 static void button_words(const char *src, char *out, size_t n)
 {
-    const char *key = M.pad_ui ? "A" : "Space";
+    char tmp[1024];
+    const char *key = M.pad_ui ? PT_A : "Space";
     size_t o = 0, k;
-    for (; *src && o + 1 < n; src++) {
+    for (; *src && o + 1 < sizeof tmp; src++) {
         if (*src == OK_KEY[0]) {
-            for (k = 0; key[k] && o + 1 < n; k++)
-                out[o++] = key[k];
+            for (k = 0; key[k] && o + 1 < sizeof tmp; k++)
+                tmp[o++] = key[k];
         } else
-            out[o++] = *src;
+            tmp[o++] = *src;
     }
-    out[o] = 0;
+    tmp[o] = 0;
+    pad_expand(tmp, out, (unsigned)n);   /* (and every button by the controller's names) */
+}
+
+/* an item's name as shown: the BUTTONS page's rows are named by the controller's buttons */
+static const char *item_label(const item *it)
+{
+    static char buf[4][64];
+    static int k;
+    const char *p;
+    for (p = it->label; *p; p++)
+        if ((unsigned char)*p < 0x20)
+            break;
+    if (!*p)
+        return it->label;
+    k = (k + 1) & 3;
+    pad_expand(it->label, buf[k], sizeof buf[k]);
+    return buf[k];
 }
 
 static int page_list(int page, int *list)
@@ -1628,7 +1651,7 @@ static void start_play(float x, float y, float w, float h, float u, double t)
     float lh = gfx_ui_font_line(UI_FONT_DISPLAY, 0.8f), kh = u * 0.62f, gap = u * 0.6f, capw, lx;
     const char *cap = M.pad_ui ? "Start" : "Enter";
     /* the label and its key cap, centred together */
-    capw = ui_cap_width(kh, cap);
+    capw = ui_key_cap_width(kh, cap);
     lx = x + (w - lw - gap - capw) / 2;
     if (M.on_play) {
         ui_slant(x - u * 0.12f, y - u * 0.12f, w + u * 0.24f, h + u * 0.24f, h * 0.45f,
@@ -1754,7 +1777,7 @@ static void draw_start(int w, int h, float u, double t, float dt)
             } else {
                 if (i > 0 && g_items[list[M.scroll + i - 1]].kind != IT_SECTION)
                     gfx_ui_rect(lx + pad * 1.4f, ry, lw - pad * 2.6f, 1, ui_col(0x14FFFFFF));
-                ui_text(lx + pad * 1.8f, cy - gfx_ui_font_line(UI_FONT_BODY, 1.0f) / 2, it->label,
+                ui_text(lx + pad * 1.8f, cy - gfx_ui_font_line(UI_FONT_BODY, 1.0f) / 2, item_label(it),
                         sel ? 0xFFFFFFFF : 0xFFC4D3E2, 1.0f);
                 draw_value(it, lx + lw - pad * 1.3f, cy, u, sel, t);
             }
@@ -1767,7 +1790,7 @@ static void draw_start(int w, int h, float u, double t, float dt)
     {
         float ix = dx + pad, iw = dw - pad * 2, y = body_y + pad, play_y = body_b - pad - play_h, low = play_y - u * 1.0f;
         const item *it = M.cursor >= 0 && !M.on_play ? &g_items[M.cursor] : NULL;
-        const char *name = it ? it->label : "PLAY";
+        const char *name = it ? item_label(it) : "PLAY";
         float ns = 0.7f, status_h = 0;
         char help[700], line[300] = "";
         uint32_t line_col = 0xFFB4C6D8;
@@ -1846,8 +1869,9 @@ static void draw_start(int w, int h, float u, double t, float dt)
             button_words(it->help ? it->help : "", help, sizeof help);
             wrapped(ix, y, iw, help, 0xFFD2DEEA, 0.86f);
         } else {
-            wrapped(ix, y, iw, "Starts the game with these settings. They're saved, and the in-game menu "
-                    "(Back + Start, or F1) changes most of them while you play.", 0xFFD2DEEA, 0.86f);
+            button_words("Starts the game with these settings. They're saved, and the in-game menu "
+                         "(" PT_BACK " + " PT_START ", or F1) changes most of them while you play.", help, sizeof help);
+            wrapped(ix, y, iw, help, 0xFFD2DEEA, 0.86f);
         }
         start_play(ix + u * 0.3f, play_y, iw - u * 0.6f, play_h, u, t);
     }
@@ -1859,14 +1883,14 @@ static void draw_start(int w, int h, float u, double t, float dt)
         if (M.pad_ui) {
             fx += dpad_glyph(fx, fy, r * 2) + u * 0.3f;
             fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 1.0f;
-            fx += pad_button(fx, fy, r, "A", 0xFF3FA34D) + u * 0.3f;
+            fx += ui_pad_face(fx, fy, r, PB_A) + u * 0.3f;
             fx += ui_text(fx, fy - lh / 2, "Change", COL_DIM, sc) + u * 1.0f;
             fx += ui_key_cap(fx, fy, r * 1.9f, "LB") + u * 0.2f;
             fx += ui_key_cap(fx, fy, r * 1.9f, "RB") + u * 0.3f;
             fx += ui_text(fx, fy - lh / 2, "Page", COL_DIM, sc) + u * 1.0f;
             fx += ui_key_cap(fx, fy, r * 1.9f, "Start") + u * 0.3f;
             fx += ui_text(fx, fy - lh / 2, "Play", COL_YELLOW, sc) + u * 1.0f;
-            fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.3f;
+            fx += ui_pad_face(fx, fy, r, PB_B) + u * 0.3f;
             ui_text(fx, fy - lh / 2, "Quit", COL_DIM, sc);
         } else {
             static const char *const K[] = { "Arrows", "Choose", "Space", "Change", "Q / E", "Page", "Enter", "Play",
@@ -2091,7 +2115,7 @@ static void draw_menu(void *user, int w, int h)
             } else {
                 if (i > 0 && g_items[list[M.scroll + i - 1]].kind != IT_SECTION)
                     gfx_ui_rect(x + pad * 1.2f, ry, pw - pad * 2.2f, 1, ui_col(0x14FFFFFF));
-                ui_text(x + pad * 1.6f, cy - gfx_ui_font_line(UI_FONT_BODY, 0.9f) / 2, it->label,
+                ui_text(x + pad * 1.6f, cy - gfx_ui_font_line(UI_FONT_BODY, 0.9f) / 2, item_label(it),
                         sel ? 0xFFFFFFFF : 0xFFC4D3E2, 0.9f);
                 draw_value(it, x + pw - pad * 1.2f, cy, u, sel, t);
             }
@@ -2146,8 +2170,10 @@ static void draw_menu(void *user, int w, int h)
             /* (an extra's progress or outcome, on its row) */
             wrapped(hx, hy, hw, M.tk_line, M.tk_state == TASK_FAILED ? COL_WARN : 0xFFB4C6D8, 0.72f);
         } else if (M.start && M.on_play) {
-            wrapped(hx, hy, hw, "Starts the game with these settings. They're saved, and the in-game menu "
-                    "(Back + Start) changes most of them while you play.", 0xFFB4C6D8, 0.72f);
+            char help[300];
+            button_words("Starts the game with these settings. They're saved, and the in-game menu "
+                         "(" PT_BACK " + " PT_START ") changes most of them while you play.", help, sizeof help);
+            wrapped(hx, hy, hw, help, 0xFFB4C6D8, 0.72f);
         } else if (M.cursor >= 0) {
             char help[600];
             button_words(g_items[M.cursor].help, help, sizeof help);
@@ -2163,15 +2189,15 @@ static void draw_menu(void *user, int w, int h)
         if (M.pad_ui) {
             fx += dpad_glyph(fx, fy, r * 2) + u * 0.25f;
             fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 0.7f;
-            fx += pad_button(fx, fy, r, "A", 0xFF3FA34D) + u * 0.25f;
+            fx += ui_pad_face(fx, fy, r, PB_A) + u * 0.25f;
             fx += ui_text(fx, fy - lh / 2, "Change", COL_DIM, sc) + u * 0.7f;
             if (M.start) {
                 fx += ui_key_cap(fx, fy, r * 1.9f, "Start") + u * 0.25f;
                 fx += ui_text(fx, fy - lh / 2, "Play", COL_YELLOW, sc) + u * 0.7f;
-                fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.25f;
+                fx += ui_pad_face(fx, fy, r, PB_B) + u * 0.25f;
                 fx += ui_text(fx, fy - lh / 2, "Quit", COL_DIM, sc) + u * 0.7f;
             } else {
-                fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.25f;
+                fx += ui_pad_face(fx, fy, r, PB_B) + u * 0.25f;
                 fx += ui_text(fx, fy - lh / 2, "Close", COL_DIM, sc) + u * 0.7f;
             }
         } else {   /* the keyboard (start menu: Space is A, Enter is Start, Esc is B) */
@@ -2418,9 +2444,9 @@ static void draw_welcome(int w, int h)
         if (M.pad_ui) {
             fx += dpad_glyph(fx, fy, r * 2) + u * 0.25f;
             fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 0.7f;
-            fx += pad_button(fx, fy, r, "A", 0xFF3FA34D) + u * 0.25f;
+            fx += ui_pad_face(fx, fy, r, PB_A) + u * 0.25f;
             fx += ui_text(fx, fy - lh / 2, "Select", COL_DIM, sc) + u * 0.7f;
-            fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.25f;
+            fx += ui_pad_face(fx, fy, r, PB_B) + u * 0.25f;
             ui_text(fx, fy - lh / 2, "Later", COL_DIM, sc);
         } else {
             fx += ui_key_cap(fx, fy, r * 1.9f, "Arrows") + u * 0.25f;
@@ -2534,9 +2560,9 @@ static void draw_onboard(int w, int h)
         if (M.pad_ui) {
             fx += dpad_glyph(fx, fy, r * 2) + u * 0.25f;
             fx += ui_text(fx, fy - lh / 2, "Choose", COL_DIM, sc) + u * 0.7f;
-            fx += pad_button(fx, fy, r, "A", 0xFF3FA34D) + u * 0.25f;
+            fx += ui_pad_face(fx, fy, r, PB_A) + u * 0.25f;
             fx += ui_text(fx, fy - lh / 2, "Select", COL_DIM, sc) + u * 0.7f;
-            fx += pad_button(fx, fy, r, "B", 0xFFD8443C) + u * 0.25f;
+            fx += ui_pad_face(fx, fy, r, PB_B) + u * 0.25f;
             ui_text(fx, fy - lh / 2, "Later", COL_DIM, sc);
         } else {
             fx += ui_key_cap(fx, fy, r * 1.9f, "Arrows") + u * 0.25f;
@@ -2597,7 +2623,8 @@ void menu_frame(void)
                     gamefiles_defaults(M.game_dir);   /* (the intro, CAPCOM.AVI) */
                     M.edition = M.gf_jp;   /* (the one just imported plays) */
                     WritePrivateProfileStringA("general", "edition", M.edition ? "japanese" : "us", M.ini);
-                    strcpy_s(M.gf_line, sizeof M.gf_line, M.pad_ui ? "Ready. Press Start to play." : "Ready. Press Enter to play.");
+                    _snprintf_s(M.gf_line, sizeof M.gf_line, _TRUNCATE, "Ready. Press %s to play.",
+                                M.pad_ui ? pad_word(PB_START) : "Enter");
                     log_printf("menu: game files imported (the %s version)", M.gf_jp ? "Japanese" : "US");
                 } else {
                     M.gf_ready[M.gf_jp] = 0;
@@ -2833,6 +2860,7 @@ static void load_values(const char *ini, const char *game_dir)
     QueryPerformanceFrequency(&M.qpf);
     strcpy_s(M.ini, sizeof M.ini, ini);
     strcpy_s(M.game_dir, sizeof M.game_dir, game_dir);
+    pad_prompts_load(ini);
     M.fps60 = GetPrivateProfileIntA("video", "interp", 1, ini) != 0;
     M.vsync = GetPrivateProfileIntA("video", "vsync", 0, ini) != 0;
     M.res = GetPrivateProfileIntA("video", "render_scale", 0, ini);

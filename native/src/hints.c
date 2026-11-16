@@ -40,6 +40,7 @@
 #include "menu.h"
 #include "plat.h"
 #include "toast.h"
+#include "padprompt.h"
 #include "ui_style.h"
 #include "updater.h"
 
@@ -153,8 +154,8 @@ static float group(float x, float y, float u, int draw_it, const char *label, co
 {
     float ls = 0.4f, ch = u * 0.66f, cy = y + gfx_ui_font_line(UI_FONT_DISPLAY, ls) + u * 0.1f + ch / 2;
     float lw = gfx_ui_font_width(UI_FONT_DISPLAY, label, ls), cx = x, js = 0.66f;
-#define CAPW(s) ui_cap_width(ch, (s))
-    float w = CAPW(pad1) + u * 0.55f + CAPW(key);
+#define CAPW(s) ui_key_cap_width(ch, (s))
+    float w = CAPW(pad1) + u * 0.55f + ui_cap_width(ch, key);
     if (pad2)
         w += u * 0.2f + gfx_ui_font_width(UI_FONT_BODY, join, js) + u * 0.2f + CAPW(pad2);
     if (!draw_it)
@@ -215,14 +216,17 @@ static void draw_hold(int sw, int sh)
     arc(x + u * 0.6f + r, y + ph / 2, r, u * 0.2f, f, COL_YELLOW);
     {   /* what is held, inside the ring: the controller's Back, or the F2 key */
         float cx = x + u * 0.6f + r, cy = y + ph / 2, room = (r - u * 0.1f) * 2 * 0.8f;
-        if (H.hold_pad) {
-            float bs = 0.6f, bw = gfx_ui_font_width(UI_FONT_BODY, "Back", bs);
+        if (H.hold_pad && ui_pad_icon(cx, cy, r - u * 0.16f, PB_BACK)) {
+            /* (a DualSense's Create, a Switch's minus: an icon) */
+        } else if (H.hold_pad) {
+            const char *back = pad_cap(PB_BACK);
+            float bs = 0.6f, bw = gfx_ui_font_width(UI_FONT_BODY, back, bs);
             if (bw > room) {
                 bs *= room / bw;
                 bw = room;
             }
             gfx_ui_circle(cx, cy, r - u * 0.16f, ui_col(0xFF2B3A50));
-            ui_text(cx - bw / 2, cy - gfx_ui_font_line(UI_FONT_BODY, bs) / 2, "Back", 0xFFE6F0FA, bs);
+            ui_text(cx - bw / 2, cy - gfx_ui_font_line(UI_FONT_BODY, bs) / 2, back, 0xFFE6F0FA, bs);
         } else {
             float kh = u * 0.62f;
             ui_kb_cap(cx - ui_cap_width(kh, "F2") / 2, cy, kh, "F2");
@@ -255,7 +259,7 @@ static void draw_update(int sw, int sh)
     bl = gfx_ui_font_line(UI_FONT_BODY, bs);
     _snprintf_s(head, sizeof head, _TRUNCATE, "UPDATE %s", H.upd_ver);
     pw = u * 1.3f + gfx_ui_font_width(UI_FONT_DISPLAY, head, ts) + u * 0.4f +
-         gfx_ui_font_width(UI_FONT_BODY, "is out. Hold", bs) + u * 0.25f + ui_cap_width(kh, "Back") +
+         gfx_ui_font_width(UI_FONT_BODY, "is out. Hold", bs) + u * 0.25f + ui_key_cap_width(kh, "Back") +
 #ifndef __ANDROID__
          u * 0.25f + gfx_ui_font_width(UI_FONT_BODY, "or", bs) + u * 0.25f + ui_cap_width(kh, "F2") +
 #endif
@@ -424,6 +428,7 @@ void hints_install(const char *ini)
     char *slash;
     QueryPerformanceFrequency(&H.qpf);
     read_bindings(ini);
+    pad_prompts_load(ini);
     H.card = GetPrivateProfileIntA("general", "title_hints", 1, ini) != 0;
     strcpy_s(H.ini, sizeof H.ini, ini);
     strcpy_s(H.home, sizeof H.home, ini);   /* (the folder with mml.ini: the app's, with the start menu) */

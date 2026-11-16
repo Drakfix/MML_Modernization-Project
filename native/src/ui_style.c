@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "gfx_ui.h"
+#include "padprompt.h"
 #include "ui_style.h"
 
 float ui_alpha = 1;
@@ -146,10 +147,160 @@ float ui_cap(float x, float cy, float h, const char *label, uint32_t fill, uint3
     return w;
 }
 
-/* a controller button (dark cap) */
+/* a PlayStation face button's symbol, centred on cx, cy, s across half-way */
+static void ps_symbol(float cx, float cy, float s, int b, uint32_t col)
+{
+    float th = s * 0.3f;
+    if (b == PB_A) {   /* cross */
+        float d = s * 0.72f;
+        ui_line(cx - d, cy - d, cx + d, cy + d, th, col);
+        ui_line(cx - d, cy + d, cx + d, cy - d, th, col);
+    } else if (b == PB_B) {   /* circle */
+        gfx_ui_ring(cx, cy, s * 0.9f, th, ui_col(col));
+    } else if (b == PB_X) {   /* square: four sides, none drawn over another (a fade stays even) */
+        float e = s * 0.78f;
+        gfx_ui_rect(cx - e, cy - e, e * 2, th, ui_col(col));
+        gfx_ui_rect(cx - e, cy + e - th, e * 2, th, ui_col(col));
+        gfx_ui_rect(cx - e, cy - e + th, th, e * 2 - th * 2, ui_col(col));
+        gfx_ui_rect(cx + e - th, cy - e + th, th, e * 2 - th * 2, ui_col(col));
+    } else {   /* triangle: three bands between the outline and a smaller copy inside it */
+        float o[6], in[6], gx, gy, k;
+        int i;
+        o[0] = cx;           o[1] = cy - s * 0.95f;
+        o[2] = cx + s * 1.0f; o[3] = cy + s * 0.7f;
+        o[4] = cx - s * 1.0f; o[5] = cy + s * 0.7f;
+        gx = (o[0] + o[2] + o[4]) / 3;
+        gy = (o[1] + o[3] + o[5]) / 3;
+        {   /* the inradius: twice the area over the perimeter */
+            float a = fabsf((o[2] - o[0]) * (o[5] - o[1]) - (o[4] - o[0]) * (o[3] - o[1]));
+            float p = sqrtf((o[2] - o[0]) * (o[2] - o[0]) + (o[3] - o[1]) * (o[3] - o[1])) +
+                      sqrtf((o[4] - o[2]) * (o[4] - o[2]) + (o[5] - o[3]) * (o[5] - o[3])) +
+                      sqrtf((o[0] - o[4]) * (o[0] - o[4]) + (o[1] - o[5]) * (o[1] - o[5]));
+            k = 1 - th / (a / p);
+        }
+        for (i = 0; i < 3; i++) {
+            in[2 * i] = gx + (o[2 * i] - gx) * k;
+            in[2 * i + 1] = gy + (o[2 * i + 1] - gy) * k;
+        }
+        for (i = 0; i < 3; i++) {
+            int j = (i + 1) % 3;
+            float q[8];
+            q[0] = o[2 * i];  q[1] = o[2 * i + 1];
+            q[2] = o[2 * j];  q[3] = o[2 * j + 1];
+            q[4] = in[2 * j]; q[5] = in[2 * j + 1];
+            q[6] = in[2 * i]; q[7] = in[2 * i + 1];
+            gfx_ui_poly(q, 4, ui_col(col));
+        }
+    }
+}
+
+/* a face button (PB_A .. PB_Y, by position) as each controller family shows it, so they read apart at
+   a glance: Xbox letters on their colours, DualShock symbols in theirs, DualSense symbols in plain
+   light grey as the PS5 draws them, and Switch letters knocked out of a white disc as the Switch
+   draws them; x to x + 2r (returned) */
+float ui_pad_face(float x, float cy, float r, int b)
+{
+    static const uint32_t XBOX[4] = { 0xFF3FA34D, 0xFFD8443C, 0xFF2F7BE0, 0xFFE0A81C };
+    static const uint32_t PS[4] = { 0xFF8FB4F0, 0xFFF07070, 0xFFE88AD0, 0xFF4FD8B0 };
+    float cx = x + r;
+    int f = pad_family();
+    if (b < PB_A || b > PB_Y)
+        return 0;
+    if (f == PF_PS3 || f == PF_PS4 || f == PF_PS5) {
+        gfx_ui_circle(cx, cy, r, ui_col(f == PF_PS5 ? 0xFF161C26 : 0xFF2B3A50));
+        gfx_ui_ring(cx, cy, r, r * 0.16f, ui_col(f == PF_PS5 ? 0x90FFFFFF : 0x60FFFFFF));
+        ps_symbol(cx, cy, r * 0.62f, b, f == PF_PS5 ? 0xFFDCE2EA : PS[b]);
+    } else {
+        const char *label = pad_cap(b);
+        float tw = gfx_ui_font_width(UI_FONT_BODY, label, 0.62f);
+        int sw = f == PF_SWITCH;
+        gfx_ui_circle(cx, cy, r, ui_col(sw ? 0xFFE8ECF2 : XBOX[b]));
+        if (!sw)
+            gfx_ui_ring(cx, cy, r, r * 0.16f, ui_col(0x60FFFFFF));
+        ui_text(cx - tw / 2, cy - gfx_ui_font_line(UI_FONT_BODY, 0.62f) / 2, label, sw ? 0xFF141A24 : 0xFFFFFFFF,
+                0.62f);
+    }
+    return r * 2;
+}
+
+/* the buttons a controller marks with an icon rather than a word: a DualSense's Create and Options,
+   a Switch controller's minus and plus */
+enum { IC_NONE, IC_CREATE, IC_OPTIONS, IC_MINUS, IC_PLUS };
+
+static int pad_icon(int b)
+{
+    int f = pad_family();
+    if (b != PB_BACK && b != PB_START)
+        return IC_NONE;
+    if (f == PF_PS5)
+        return b == PB_BACK ? IC_CREATE : IC_OPTIONS;
+    if (f == PF_SWITCH)
+        return b == PB_BACK ? IC_MINUS : IC_PLUS;
+    return IC_NONE;
+}
+
+/* the icon, centred on cx, cy, s across half-way */
+static void icon_draw(float cx, float cy, float s, int ic, uint32_t col)
+{
+    float th = s * 0.26f;
+    switch (ic) {
+    case IC_OPTIONS: {   /* three lines */
+        int i;
+        for (i = -1; i <= 1; i++)
+            gfx_ui_rect(cx - s * 0.62f, cy + i * s * 0.5f - th / 2, s * 1.24f, th, ui_col(col));
+        break;
+    }
+    case IC_CREATE:   /* three rays fanning up from a short stem */
+        ui_line(cx, cy + s * 0.75f, cx, cy - s * 0.05f, th, col);
+        ui_line(cx, cy - s * 0.3f, cx, cy - s * 0.8f, th, col);
+        ui_line(cx - s * 0.25f, cy - s * 0.15f, cx - s * 0.7f, cy - s * 0.55f, th, col);
+        ui_line(cx + s * 0.25f, cy - s * 0.15f, cx + s * 0.7f, cy - s * 0.55f, th, col);
+        break;
+    case IC_MINUS:
+        gfx_ui_rect(cx - s * 0.6f, cy - th / 2, s * 1.2f, th, ui_col(col));
+        break;
+    case IC_PLUS:   /* (the upright drawn in two pieces, nothing drawn twice) */
+        gfx_ui_rect(cx - s * 0.6f, cy - th / 2, s * 1.2f, th, ui_col(col));
+        gfx_ui_rect(cx - th / 2, cy - s * 0.6f, th, s * 0.6f - th / 2, ui_col(col));
+        gfx_ui_rect(cx - th / 2, cy + th / 2, th, s * 0.6f - th / 2, ui_col(col));
+        break;
+    }
+}
+
+/* Back / Start drawn as an icon (cx, cy its centre, r the disc's radius, 0: only the icon); 0 when
+   this controller names them with a word instead */
+int ui_pad_icon(float cx, float cy, float r, int b)
+{
+    int ic = pad_icon(b);
+    if (ic == IC_NONE)
+        return 0;
+    if (r > 0) {
+        gfx_ui_circle(cx, cy, r, ui_col(0xFF2B3A50));
+        gfx_ui_ring(cx, cy, r, r * 0.12f, ui_col(0x40FFFFFF));
+    }
+    icon_draw(cx, cy, (r > 0 ? r : 1) * 0.62f, ic, 0xFFE6F0FA);
+    return 1;
+}
+
+/* a controller button (dark cap), named as on our Xbox layout ("A", "LB", "Back"): shown as the
+   controller in use names it (padprompt.c); any other label (a key) as it is */
 float ui_key_cap(float x, float cy, float h, const char *label)
 {
-    return ui_cap(x, cy, h, label, 0xFF2B3A50, 0xFFE6F0FA);
+    int b = pad_from_name(label);
+    if (b >= PB_A && b <= PB_Y)
+        return ui_pad_face(x, cy, h / 2, b);
+    if (b >= 0 && ui_pad_icon(x + h / 2, cy, h / 2, b))
+        return h;
+    return ui_cap(x, cy, h, b >= 0 ? pad_cap(b) : label, 0xFF2B3A50, 0xFFE6F0FA);
+}
+
+/* the width ui_key_cap takes */
+float ui_key_cap_width(float h, const char *label)
+{
+    int b = pad_from_name(label);
+    if ((b >= PB_A && b <= PB_Y) || (b >= 0 && pad_icon(b) != IC_NONE))
+        return h;
+    return ui_cap_width(h, b >= 0 ? pad_cap(b) : label);
 }
 
 /* a keyboard key (light keycap), when both kinds sit side by side */

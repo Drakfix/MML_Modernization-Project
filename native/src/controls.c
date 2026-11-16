@@ -38,6 +38,7 @@
 #include "lockon.h"
 #include "mml.h"
 #include "log.h"
+#include "padprompt.h"
 #include "recomp.h"
 #include "toast.h"
 
@@ -2338,8 +2339,10 @@ static void on_player_update(regs_t *r)
         return;
     if (g_style_notice && controls_in_gameplay()) {
         /* (for whoever skips the start menu, which asks; Later there brings it here too) */
+        char how[96];
         g_style_notice = 0;
-        toast_post(TOAST_ICON_PAD, TOAST_GOOD, "COMBAT STYLES", "NEW", "Pick one in the settings: Back + Start, or F1");
+        pad_expand("Pick one in the settings: " PT_BACK " + " PT_START ", or F1", how, sizeof how);
+        toast_post(TOAST_ICON_PAD, TOAST_GOOD, "COMBAT STYLES", "NEW", how);
     }
     shot_pitch_sync();   /* (shots spawn during the object updates) */
     if (air_steered && P8(PL_STATE) != 7 && P8(PL_STATE) != 8) {
