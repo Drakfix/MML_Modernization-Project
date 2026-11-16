@@ -45,7 +45,9 @@ typedef struct {
     interp_vec3 prev;      /* same vertex one frame earlier (filled in at frame end) */
     int has_prev;
     int next_in_cell;      /* grid chain of vertices that have a previous position */
+    unsigned inst;         /* its model copy (index into the frame's copies), NO_INST if past the budget */
 } vrec;
+#define NO_INST 0xFFFFFFFFu
 
 /* screen grid over the projector's 320x240 space (plus margins) for finding
  * the nearest vertex with a known previous position */
@@ -87,13 +89,22 @@ typedef struct {
     /* model copies drawn this frame: the code that drew each and its camera-space origin */
     interp_vec3 *inst_org, *inst_world;   /* origins; in the world too when the camera is known */
     uint32_t *inst_site;
+    /* how far each copy's origin moved into this frame (filled in at frame end): the next frame
+     * expects it about that far on again */
+    interp_vec3 *inst_vel;
+    unsigned *inst_vel_n;
+    unsigned char *inst_vel_space;     /* 0 unknown, VEL_CAM camera space, VEL_WORLD world */
     unsigned ninst;
 } frame_set;
+enum { VEL_CAM = 1, VEL_WORLD = 2 };
 
 static vrec g_recs[3][MAX_VERTS];
 #define MAX_INST 4096u
 static interp_vec3 g_inst_org[3][MAX_INST], g_inst_world[3][MAX_INST];
 static uint32_t g_inst_site[3][MAX_INST];
+static interp_vec3 g_inst_vel[3][MAX_INST];
+static unsigned g_inst_vel_n[3][MAX_INST];
+static unsigned char g_inst_vel_space[3][MAX_INST];
 static slot g_tables[3][2][TABLE_SIZE];
 static sslot g_screen_tables[3][SCREEN_SIZE];
 static frame_set g_sets[3];
@@ -145,6 +156,9 @@ static void setup(void)
         g_sets[i].inst_org = g_inst_org[i];
         g_sets[i].inst_world = g_inst_world[i];
         g_sets[i].inst_site = g_inst_site[i];
+        g_sets[i].inst_vel = g_inst_vel[i];
+        g_sets[i].inst_vel_n = g_inst_vel_n[i];
+        g_sets[i].inst_vel_space = g_inst_vel_space[i];
         g_sets[i].gen = 1;
     }
     g_build = 0;
@@ -289,6 +303,9 @@ void interp_vertex(uint32_t site, const int16_t model[3], const float cam[3], co
     f->recs[f->count].sy = sy;
     f->recs[f->count].has_prev = 0;
     f->recs[f->count].is_static = 0;
+    f->recs[f->count].inst = (f->ninst && f->inst_site[f->ninst - 1] == site && f->inst_org[f->ninst - 1].x == org[0] &&
+                              f->inst_org[f->ninst - 1].y == org[1] && f->inst_org[f->ninst - 1].z == org[2])
+                                 ? f->ninst - 1 : NO_INST;
     f->ndyn++;
     f->count++;
 }
@@ -323,6 +340,7 @@ void interp_vertex_static(const float cam[3], float sx, float sy)
     r->has_world = 0;
     r->rematched = 0;
     r->next_in_cell = -1;
+    r->inst = NO_INST;
     f->count++;
 }
 
@@ -356,6 +374,35 @@ static void to_camera(const camera *c, const interp_vec3 *w, interp_vec3 *p)
     p->z = c->r[6] * w->x + c->r[7] * w->y + c->r[8] * w->z + c->t[2];
 }
 
+/* the motion a copy of the previous frame was making (its origin's move into that frame), in the
+ * space asked for; NULL when unknown */
+static const interp_vec3 *copy_vel(const frame_set *p, unsigned inst, int world)
+{
+    if (inst == NO_INST || p->inst_vel_space[inst] != (world ? VEL_WORLD : VEL_CAM))
+        return NULL;
+    return &p->inst_vel[inst];
+}
+
+/* squared distance from a to b, or to b carried on by v when that's nearer: something moving
+ * fast is looked for where its motion takes it, not where it was, where something else may sit
+ * now (at jet skate speed Mega Man moves farther in a game frame than his two fists are apart,
+ * and the fists are copies of one model: the in-between frames swapped them) */
+static float dist2_moving(const interp_vec3 *a, const interp_vec3 *b, const interp_vec3 *v)
+{
+    float d = dist2(a, b);
+    if (v) {
+        interp_vec3 m;
+        float e;
+        m.x = b->x + v->x;
+        m.y = b->y + v->y;
+        m.z = b->z + v->z;
+        e = dist2(a, &m);
+        if (e < d)
+            d = e;
+    }
+    return d;
+}
+
 /* the previous frame's model copy drawn by `site` whose origin was nearest to org (world or
  * camera space, as `world` says); its origin in that space into *out. Returns the squared
  * distance, or -1 when that code drew nothing then. Vertices of one copy come in a run, so the
@@ -379,7 +426,7 @@ static float prev_instance(const frame_set *p, uint32_t site, const interp_vec3 
         if (p->inst_site[j] != site)
             continue;
         o = world ? p->inst_world[j] : p->inst_org[j];
-        d = dist2(&o, org);
+        d = dist2_moving(org, &o, copy_vel(p, j, world));
         if (best < 0 || d < best) {
             best = d;
             *out = o;
@@ -413,6 +460,11 @@ static void link_previous(void)
     if (c->cam.valid)
         for (i = 0; i < c->ninst; i++)
             to_world(&c->cam, &c->inst_org[i], &c->inst_world[i]);
+    for (i = 0; i < c->ninst; i++) {
+        c->inst_vel[i].x = c->inst_vel[i].y = c->inst_vel[i].z = 0;
+        c->inst_vel_n[i] = 0;
+        c->inst_vel_space[i] = 0;
+    }
     for (i = 0; i < c->count; i++) {
         vrec *r = &c->recs[i];
         const slot *k;
@@ -455,9 +507,10 @@ static void link_previous(void)
             best = -1;
             if (k->gen == p->gen) {
                 const vrec *q = &p->recs[k->val];
+                const interp_vec3 *qv = copy_vel(p, q->inst, world);
                 best = (int)k->val;
-                dv = dist2(world ? &r->world : &r->cam, world ? &q->world : &q->cam);
-                dorg = dist2(ro, world ? &q->org_world : &q->org);
+                dv = dist2_moving(world ? &r->world : &r->cam, world ? &q->world : &q->cam, qv);
+                dorg = dist2_moving(ro, world ? &q->org_world : &q->org, qv);
                 if (dv > 4.0f) {   /* the same-numbered copy isn't right there: search the copies */
                     float best_s = dorg + COPY_VERTEX_WEIGHT * dv - 1.0f;
                     uint32_t n;
@@ -469,8 +522,9 @@ static void link_previous(void)
                         q = &p->recs[o->val];
                         if (world && !q->has_world)
                             continue;
-                        d = dist2(world ? &r->world : &r->cam, world ? &q->world : &q->cam);
-                        e = dist2(ro, world ? &q->org_world : &q->org);
+                        qv = copy_vel(p, q->inst, world);
+                        d = dist2_moving(world ? &r->world : &r->cam, world ? &q->world : &q->cam, qv);
+                        e = dist2_moving(ro, world ? &q->org_world : &q->org, qv);
                         sc = e + COPY_VERTEX_WEIGHT * d;
                         if (sc < best_s) {
                             best_s = sc;
@@ -494,6 +548,14 @@ static void link_previous(void)
                     g_rematched++;
                 r->rematched = best != (int)k->val;
                 r->prev = p->recs[best].cam;
+                if (r->inst != NO_INST) {   /* the copy's motion into this frame, for the next one */
+                    const interp_vec3 *po = world ? &p->recs[best].org_world : &p->recs[best].org;
+                    c->inst_vel[r->inst].x += ro->x - po->x;
+                    c->inst_vel[r->inst].y += ro->y - po->y;
+                    c->inst_vel[r->inst].z += ro->z - po->z;
+                    c->inst_vel_n[r->inst]++;
+                    c->inst_vel_space[r->inst] = world ? VEL_WORLD : VEL_CAM;
+                }
             } else {
                 interp_vec3 w;
                 if (di < 0 || di > COPY_MAX_MOVE * COPY_MAX_MOVE)
@@ -506,6 +568,13 @@ static void link_previous(void)
                     to_camera(&p->cam, &w, &r->prev);
                 else
                     r->prev = w;
+                if (r->inst != NO_INST) {
+                    c->inst_vel[r->inst].x += ro->x - inst.x;
+                    c->inst_vel[r->inst].y += ro->y - inst.y;
+                    c->inst_vel[r->inst].z += ro->z - inst.z;
+                    c->inst_vel_n[r->inst]++;
+                    c->inst_vel_space[r->inst] = world ? VEL_WORLD : VEL_CAM;
+                }
                 g_rematched++;
                 r->rematched = 1;
             }
@@ -516,6 +585,17 @@ static void link_previous(void)
             r->next_in_cell = g_grid[cell];
             g_grid[cell] = (int)i;
         }
+    }
+    for (i = 0; i < c->ninst; i++) {   /* each copy's motion: the mean over its vertices */
+        interp_vec3 *v = &c->inst_vel[i];
+        float n = (float)c->inst_vel_n[i];
+        if (!c->inst_vel_n[i])
+            continue;
+        v->x /= n;
+        v->y /= n;
+        v->z /= n;
+        if (v->x * v->x + v->y * v->y + v->z * v->z > COPY_MAX_MOVE * COPY_MAX_MOVE)
+            c->inst_vel_space[i] = 0;
     }
 }
 
