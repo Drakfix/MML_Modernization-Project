@@ -992,8 +992,9 @@ static void input_update(void)
         /* a fire button only counts where Mega Man can shoot: the same buttons advance text
            and answer prompts (Circle is the special weapon by default) */
         firing = ok && can_shoot && (ACT(acts, ACT_SHOOT) || ACT(acts, ACT_SPECIAL));
-        /* (any mode, also locked on: the backpedal's burst below) */
-        fire_btn = st_active && st_allowed && can_shoot && (ACT(acts, ACT_SHOOT) || ACT(acts, ACT_SPECIAL));
+        /* (any mode, also locked on: the backpedal's burst below; the buster only: the special
+           weapons keep Mega Man planted, as in the original) */
+        fire_btn = st_active && st_allowed && can_shoot && ACT(acts, ACT_SHOOT);
         /* the crosshair follows real shots: the game's weapon-firing flags (+0x174 & 0xC0, set
            by the shot code), not presses */
         since_fire = ok && (P8(PL_FIRE_FLAGS) & 0xC0) ? 0 : since_fire < 1e9 ? since_fire + ticks : since_fire;
@@ -1096,7 +1097,7 @@ static void input_update(void)
         static int fled;   /* the last shots went out running toward the camera */
         static int was_back;
         int pedal = g_walk_shoot && ws_hooked;
-        int burst = fire_btn || (P8(PL_FIRE_FLAGS) & 0xC0);
+        int burst = fire_btn || (P8(PL_FIRE_FLAGS) & 0x80);
         /* in a burst the backpedal takes over from RUN_BACK_EDGE (100 deg), otherwise the back
            sector starts at 135 deg (the backward run) */
         int edge = pedal && burst ? RUN_BACK_EDGE + (was_back ? -BACK_HYST : BACK_HYST) : 1536;
@@ -2030,6 +2031,23 @@ static int ws_firing(void)
     return (P8(PL_FIRE_FLAGS) & 0xC0) || P8(PL_FIRE_PENDING);
 }
 
+/* The special weapons stay out of the walk-shoot: they plant Mega Man (balance, and their
+ * animations are made for standing), so with one pressed, buffered (+0x176 & 3 = 1), queued
+ * (+0x177 = 2) or out (+0x174 & 0x40) the game's own states handle it as in the original: the
+ * walks stop for it, the idle fires it standing, and only the weapons the game lets fire running
+ * (the weapon table's byte 0) do so in the run. Also the game's FUN_004ad3a7 (pre_00): a shot
+ * out whose weapon may not move (table byte 1, +0x170 special id, +0x171 buster id) roots him. */
+#define G_WEAPON_TABLE GA(0x550F7Cu)
+
+static int ws_special(void)
+{
+    uint16_t m = P16(PL_MASK_SPECIAL);
+    int f = P8(PL_FIRE_FLAGS) & 0xC0;
+    return (f & 0x40) || P8(PL_FIRE_PENDING) == 2 || (P8(PL_FIRE_BUFFER) & 3) == 1 ||
+           ((P16(PL_HELD) | P16(PL_PRESSED)) & m) ||
+           (f == 0x80 && !GVAR(uint8_t, G_WEAPON_TABLE + 1 + P8(0x171) * 12u));
+}
+
 static void ws_show(void)
 {
     if (!ws_hidden)
@@ -2149,7 +2167,7 @@ static void on_pre_handler(regs_t *r)
     ws_from_idle = 0;
     if (r->ebp == G_PLAYER)
         ws_update++;
-    if (r->ebp != G_PLAYER || !g_walk_shoot || !ws_hooked || (P8(PL_INPUT_FLAGS) & 0x60))
+    if (r->ebp != G_PLAYER || !g_walk_shoot || !ws_hooked || (P8(PL_INPUT_FLAGS) & 0x60) || ws_special())
         return;
     ws_director();
     st = P8(PL_STATE);
