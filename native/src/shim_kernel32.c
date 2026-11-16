@@ -10,10 +10,12 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
 #include "log.h"
+#include "names.h"
 #include "recomp_rt.h"
 #include "shim.h"
 
@@ -21,6 +23,51 @@
 #define HANDLE_BASE 0x7F000000u   /* far above any kernel handle value */
 static FILE *g_files[MAX_FILES];
 static int g_log;
+
+/* files served from memory: a stage file with the Japanese names (names.c), read-only */
+typedef struct {
+    uint8_t *data;
+    size_t size, pos;
+} mem_file;
+static mem_file g_mem[MAX_FILES];
+
+static mem_file *mem_of(uint32_t h)
+{
+    uint32_t i = (h - HANDLE_BASE) / 4;
+    if (h < HANDLE_BASE || (h & 3) || i >= MAX_FILES || !g_mem[i].data)
+        return NULL;
+    return &g_mem[i];
+}
+
+#ifdef _WIN32
+#define fseek64 _fseeki64
+#define ftell64 _ftelli64
+#else
+#define fseek64 fseeko
+#define ftell64 ftello
+#endif
+
+/* the file just opened for reading, as names.c would have it: into memory (1) or left (0) */
+static int names_swap(FILE *f, const char *path, int i)
+{
+    int64_t size;
+    uint8_t *d, *out;
+    size_t got, n = 0;
+    if (!names_active() || fseek64(f, 0, SEEK_END) != 0 || (size = ftell64(f)) <= 0 || size > (64 << 20))
+        return 0;
+    d = (uint8_t *)malloc((size_t)size);
+    fseek64(f, 0, SEEK_SET);
+    got = d ? fread(d, 1, (size_t)size, f) : 0;
+    fseek64(f, 0, SEEK_SET);
+    out = got == (size_t)size ? names_file(path, d, (size_t)size, &n) : NULL;
+    free(d);
+    if (!out)
+        return 0;
+    g_mem[i].data = out;
+    g_mem[i].size = n;
+    g_mem[i].pos = 0;
+    return 1;
+}
 
 static void put32(uint32_t guest, uint32_t v)
 {
@@ -52,14 +99,6 @@ static void host_path(uint32_t guest, char *out, size_t n)
     snprintf(out, n, "%s", tmp);
 #endif
 }
-
-#ifdef _WIN32
-#define fseek64 _fseeki64
-#define ftell64 _ftelli64
-#else
-#define fseek64 fseeko
-#define ftell64 ftello
-#endif
 
 /* a missing file, or a missing folder on the way to it */
 static uint32_t not_found(const char *path)
@@ -99,7 +138,7 @@ static uint32_t sh_create_file(const uint32_t *a)
     FILE *f = NULL;
     host_path(a[0], path, sizeof path);
     exists = stat(path, &st) == 0;
-    for (i = 0; i < MAX_FILES && g_files[i]; i++)
+    for (i = 0; i < MAX_FILES && (g_files[i] || g_mem[i].data); i++)
         ;
     if (i == MAX_FILES) {
         shim_set_error(ERROR_TOO_MANY_OPEN_FILES);
@@ -135,6 +174,11 @@ static uint32_t sh_create_file(const uint32_t *a)
         shim_set_error(errno == ENOENT ? not_found(path) : error_from_errno());
         return 0xFFFFFFFFu;
     }
+    if (exists && !wr && disp == OPEN_EXISTING && names_swap(f, path, i)) {
+        fclose(f);   /* (served from memory: g_mem[i]) */
+        shim_set_error(0);
+        return HANDLE_BASE + 4u * (uint32_t)i;
+    }
     g_files[i] = f;
     shim_set_error(exists && (disp == OPEN_ALWAYS || disp == CREATE_ALWAYS) ? ERROR_ALREADY_EXISTS : 0);
     return HANDLE_BASE + 4u * (uint32_t)i;
@@ -144,7 +188,19 @@ static uint32_t sh_create_file(const uint32_t *a)
 static uint32_t sh_read_file(const uint32_t *a)
 {
     FILE *f = file_of(a[0]);
+    mem_file *m = mem_of(a[0]);
     size_t n;
+    if (m) {
+        n = m->pos < m->size ? m->size - m->pos : 0;
+        if (n > a[2])
+            n = a[2];
+        memcpy(HPTR(a[1]), m->data + m->pos, n);
+        m->pos += n;
+        if (a[3])
+            put32(a[3], (uint32_t)n);
+        shim_set_error(0);
+        return 1;
+    }
     if (!f) {
         DWORD done = 0;
         BOOL ok = ReadFile(HOST_HANDLE(a[0]), HPTR(a[1]), a[2], &done, NULL);
@@ -169,6 +225,10 @@ static uint32_t sh_write_file(const uint32_t *a)
 {
     FILE *f = file_of(a[0]);
     size_t n;
+    if (mem_of(a[0])) {   /* (opened for reading only) */
+        shim_set_error(ERROR_ACCESS_DENIED);
+        return 0;
+    }
     if (!f) {
         DWORD done = 0;
         BOOL ok = WriteFile(HOST_HANDLE(a[0]), HPTR(a[1]), a[2], &done, NULL);
@@ -193,8 +253,26 @@ static uint32_t sh_write_file(const uint32_t *a)
 static uint32_t sh_set_file_pointer(const uint32_t *a)
 {
     FILE *f = file_of(a[0]);
+    mem_file *m = mem_of(a[0]);
     int64_t off = (int32_t)a[1], pos;
     int whence = a[3] == FILE_CURRENT ? SEEK_CUR : a[3] == FILE_END ? SEEK_END : SEEK_SET;
+    if (m) {
+        if (a[2]) {
+            uint32_t hi;
+            memcpy(&hi, HPTR(a[2]), 4);
+            off = (int64_t)(((uint64_t)hi << 32) | a[1]);
+        }
+        off += whence == SEEK_CUR ? (int64_t)m->pos : whence == SEEK_END ? (int64_t)m->size : 0;
+        if (off < 0 || off > 0xFFFFFFFFll) {
+            shim_set_error(off < 0 ? ERROR_NEGATIVE_SEEK : ERROR_INVALID_PARAMETER);
+            return 0xFFFFFFFFu;
+        }
+        m->pos = (size_t)off;
+        if (a[2])
+            put32(a[2], 0);
+        shim_set_error(0);
+        return (uint32_t)off;
+    }
     if (!f) {
         LONG hi = a[2] ? *(LONG *)HPTR(a[2]) : 0;
         DWORD r = SetFilePointer(HOST_HANDLE(a[0]), (LONG)a[1], a[2] ? &hi : NULL, a[3]);
@@ -233,7 +311,7 @@ static uint32_t sh_set_file_pointer(const uint32_t *a)
 
 static uint32_t sh_get_file_type(const uint32_t *a)
 {
-    if (file_of(a[0]))
+    if (file_of(a[0]) || mem_of(a[0]))
         return FILE_TYPE_DISK;
     return GetFileType(HOST_HANDLE(a[0]));
 }
@@ -241,9 +319,15 @@ static uint32_t sh_get_file_type(const uint32_t *a)
 static uint32_t sh_close_handle(const uint32_t *a)
 {
     FILE *f = file_of(a[0]);
+    mem_file *m = mem_of(a[0]);
     BOOL ok;
     if (shim_event_close(a[0]))
         return 1;
+    if (m) {
+        free(m->data);
+        memset(m, 0, sizeof *m);
+        return 1;
+    }
     if (f) {
         fclose(f);
         g_files[(a[0] - HANDLE_BASE) / 4] = NULL;
@@ -257,6 +341,8 @@ static uint32_t sh_close_handle(const uint32_t *a)
 static uint32_t sh_flush_file_buffers(const uint32_t *a)
 {
     FILE *f = file_of(a[0]);
+    if (mem_of(a[0]))
+        return 1;
     if (f)
         return fflush(f) == 0;
     return (uint32_t)FlushFileBuffers(HOST_HANDLE(a[0]));

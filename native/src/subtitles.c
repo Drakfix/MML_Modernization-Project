@@ -25,6 +25,7 @@
 #include "guest.h"
 #include "log.h"
 #include "menu.h"
+#include "names.h"
 #include "plat.h"
 #include "subtitles.h"
 #include "ui_style.h"
@@ -87,7 +88,12 @@ static int load(const char *path)
                 break;
             g_lines = n;
         }
-        l.text = _strdup(buf + used);
+        if (names_active()) {   /* the Japanese names ([general] names=japanese) */
+            char jp[1024];
+            names_ascii(buf + used, jp, sizeof jp);
+            l.text = _strdup(jp);
+        } else
+            l.text = _strdup(buf + used);
         if (!l.text)
             break;
         g_lines[g_nlines++] = l;

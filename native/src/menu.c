@@ -194,6 +194,7 @@ static const choice CH_ASPECT[] = { { "16:9 widescreen", "video.aspect=16:9" }, 
 static const choice CH_ENGINE[] = { { "Original (32-bit)", "general.engine=classic" },
                                     { "Recompiled (64-bit)", "general.engine=standalone" } };
 static const choice CH_INTRO[] = { { "Play", "general.intro=play" }, { "Skip", "general.intro=skip" } };
+static const choice CH_NAMES[] = { { "US", "general.names=us" }, { "Japanese", "general.names=japanese" } };
 static const choice CH_STARTMENU[] = { { "Show", "general.start_menu=1" }, { "Skip", "general.start_menu=0" } };
 static const choice CH_HINTS[] = { { "On", "general.title_hints=1" }, { "Off", "general.title_hints=0" } };
 static const choice CH_CONTROLS[] = { { "Modern", "controls.mode=modern" }, { "Original (1997)", "controls.mode=vanilla" } };
@@ -251,6 +252,11 @@ static const item g_start_items[] = {
     { PAGE_FILES, IT_GF_VOICES, "Voice language", "The voice acting in the US version: English, or the original "
       "Japanese voices. " OK_KEY " builds the Japanese voices from your imported Rockman DASH (about 260 MB, once), "
       "then switches between the two. Experimental: lines only the Japanese release voices stay silent." },
+    { PAGE_FILES, IT_CHOICE, "Localization names", "The names of characters, places and things in the US version's "
+      "text and subtitles: the US localization's, or the original Japanese release's. Japanese: Rock for Mega Man "
+      "(Rockman in Trigger's and Juno's titles), the Rock Buster, the Kobun for the Servbots, Digouters for "
+      "Diggers, Reaverbirds for Reaverbots, deflectors for refractors and the Great Legacy for the Mother Lode. "
+      "The lines stay the US script's. Experimental.", CH_NAMES, NCH(CH_NAMES) },
     { PAGE_FILES, IT_SECTION, "Launch" },
     { PAGE_FILES, IT_CHOICE, "Start menu at launch", "Show opens this menu every time. Skip starts the game straight "
       "away with the saved settings. To come back here, hold " PT_BACK " (controller) or F2 (keyboard) on the game's "

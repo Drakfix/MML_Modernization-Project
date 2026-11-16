@@ -198,7 +198,7 @@ LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
 RUNNER64 = "mml_run64.exe"   # the standalone game: recompiled, 64-bit, no original code
 DEFAULTS = {"renderer": "mml", "window": "fullscreen", "engine": "classic",
             "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play", "jp_buttons": "us",
-            "voices": "english", "subtitles": "on",
+            "voices": "english", "subtitles": "on", "names": "us",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
             "lod": "full", "fps": "60", "reticle": "FFD840", "aim": "character", "crosshair": "on",
             "lockon_camera": "classic", "aim_sens": "60", "aim_button": "lockon", "walk_shoot": "on",
@@ -312,6 +312,9 @@ def import_mml_ini(s):
     v = get("general", "voices")
     if v in ("english", "japanese"):
         s["voices"] = v
+    v = get("general", "names")
+    if v in ("us", "japanese"):
+        s["names"] = v
     v = get("general", "engine")   # (the start menu's Game engine)
     if v in ("classic", "standalone"):
         s["engine"] = v
@@ -622,6 +625,7 @@ def write_mml_ini(s, width):
                      "dump": 1 if s.get("texdump", "off") == "on" else 0},
         "general": {"intro": s["intro"], "engine": s.get("engine", "classic"),
                     **({"voices": s.get("voices", "english")} if JP_VOICES else {}),
+                    **({"names": s.get("names", "us")} if not JAPANESE else {}),
                     **({"subtitles": 0 if s.get("subtitles") == "off" else 1} if JP_SUBS else {})},
     }, header="; Mega Man Legends Modernization - settings, read by mml.dll when the game starts.\n"
               "; The launcher updates the keys it manages and leaves everything else alone.\n")
@@ -816,6 +820,9 @@ class App:
         option("Frame rate", "fps", [("60 fps", "60"), ("30 fps", "30")], row=r, side="right")
         option("Intro video", "intro",
                [("Play (any button skips)", "play"), ("Skip entirely", "skip")])
+        if not JAPANESE:
+            option("Localization names", "names", [("US", "us"), ("Japanese", "japanese")],
+                   "Japanese: Rock, Kobun, Digouters, Reaverbirds... (experimental)")
         if JP_VOICES or JP_SUBS:
             r = pair() if JP_VOICES and JP_SUBS else None
             if JP_VOICES:

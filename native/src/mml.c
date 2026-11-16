@@ -52,6 +52,7 @@
 #include "bglayer.h"
 #include "watch.h"
 #include "voice.h"
+#include "names.h"
 #include "subtitles.h"
 #include "gamefiles.h"
 
@@ -844,6 +845,11 @@ void mml_init(void)
         input_jp_buttons(_stricmp(in, "japanese") != 0);
     }
     ambience_install(g_ini);   /* room ambience loops ([general] ambience_loop) */
+    {   /* the Japanese names in the US text: the dialogue as it loads, the labels, the subtitles below */
+        char nm[16];
+        ini_string("general", "names", "us", nm, sizeof nm);
+        names_install(_stricmp(nm, "japanese") == 0);
+    }
     if (addr_game == GAME_US) {   /* (both are keyed by the US voice banks) */
         char v[16];
         int subs;
