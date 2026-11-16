@@ -10,11 +10,12 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.8.7 beta.** The 0.1 releases are kept on the
+**Current version: 0.9.0 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
 
+- [What's new in 0.9](#whats-new-in-09)
 - [What's new in 0.8](#whats-new-in-08)
 - [What's new in 0.7](#whats-new-in-07)
 - [What's new in 0.6](#whats-new-in-06)
@@ -33,6 +34,27 @@ copy.
 - [How it works](#how-it-works)
 - [Building from source](#building-from-source)
 - [Credits and licenses](#credits-and-licenses)
+
+## What's new in 0.9
+
+- **Move while shooting.** Walking forward, backward and sideways no longer stops Mega Man for
+  each shot: his legs keep moving and the shot plays on his arms. While firing locked on, over the
+  shoulder or with camera aim, he moves every way around the target: he runs forward, strafes,
+  and backpedals or jogs backward facing it, slower toward the back. Jumps keep him facing the
+  target.
+- **Combat styles.** **Classic** plays like the original, **Adventure** adds lock-on over the
+  shoulder and moving while shooting, and **Shooter** is a third-person shooter: the camera stays
+  over Mega Man's shoulder, the aim button zooms in to aim freely at the crosshair (no lock-on),
+  and aim assist slows the camera over enemies. Every option can also be set on its own, on the
+  new **Combat** page of the settings. The start menu asks which style you want the first time.
+- **Animation blending.** Mega Man's animation changes cross-fade instead of snapping: raising and
+  lowering the buster, starting and stopping, turning a run into a backpedal, landings.
+- **Close camera fade.** With a wall at his back or in a narrow hallway, the camera moves over his
+  head and Mega Man turns see-through as it comes close, so he doesn't fill the view.
+- **HUD.** The minimap moves to the top-left corner, a **HUD size** setting shrinks the gauges and
+  the map into their corners, and the boss and Roll gauges sit above the dialogue boxes.
+- **What's new in updates.** When an update is available, the start menu's update rows show a short
+  summary of what it brings.
 
 ## What's new in 0.8
 
@@ -189,6 +211,8 @@ the Japanese line being spoken.
   through librashader, and ReShade with a working depth buffer.
 - **HD texture packs.** Replace any game texture with a PNG of any size, or dump the
   originals to make your own.
+- **Animation blending.** Mega Man's animation changes cross-fade instead of snapping.
+- **HUD layout.** The minimap in the top-left corner, and an optional smaller HUD.
 
 ### Controls
 
@@ -521,9 +545,9 @@ menu shows each setting's full description and choices beside the list.
 |------|----------|
 | Game | Version to play, importing each version, English subtitles, voice language, start menu at launch (show / skip), intro video, title screen hints, room transitions, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio, frame rate, V-Sync, executable |
-| Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement |
+| Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement, animation blending, HUD size |
 | Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |
-| Combat | Combat style (Classic / Adventure / Shooter presets, or Custom), camera position (behind / over the shoulder), aim button (lock-on / free aim), lock-on camera, shots aim, aim sensitivity, aim assist, move while shooting, backpedal (walk / jog), crosshair (off / while aiming / always), reticle colour |
+| Combat | Combat style (Classic / Adventure / Shooter presets, or Custom), camera position (behind / over the shoulder), fade up close, aim button (lock-on / free aim), lock-on camera, shots aim, aim sensitivity, aim assist, move while shooting, backpedal (walk / jog), crosshair (off / while aiming / always), reticle colour |
 | Buttons | Controller and keyboard remapping |
 
 Settings that only exist on Windows (Graphics API, display mode, executable, input API, shaders)
