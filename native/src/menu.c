@@ -323,7 +323,7 @@ static const item g_start_items[] = {
     { PG_DISPLAY, IT_CHOICE, "Executable", "Original runs Capcom's 2001 MEGAMAN.EXE (32-bit) with the project's "
       "runtime, mml.dll, loaded into it. Recompiled runs the game's code translated to C and compiled into a "
       "native 64-bit program, mml_run64.exe: the original executable's code never runs, only its data is read. "
-      "Recompiled doesn't support shader presets yet. DirectDraw (legacy) always uses Original.",
+      "DirectDraw (legacy) always uses Original.",
       CH_ENGINE, NCH(CH_ENGINE), PL_WIN },
 
     /* ---- GRAPHICS ---- */
@@ -338,10 +338,10 @@ static const item g_start_items[] = {
       "square." },
     { PG_GRAPHICS, IT_SHADER, "Shader preset", "A RetroArch shader preset (.slangp: CRT, scanlines, LCD and more) "
       "applied to the final image. Presets go in Modernization\\shaders; RetroArch's slang-shaders collection "
-      "works. Original executable with Direct3D 11 only.", NULL, 0, PL_WIN },
+      "works.", NULL, 0, PL_WIN | PL_ANDROID },
     { PG_GRAPHICS, IT_SHADER_RES, "Shader input resolution", "The resolution the shader preset processes. Native "
       "(480p) feeds it the game's original resolution, which CRT presets are made for; Output feeds it the full "
-      "render resolution.", NULL, 0, PL_WIN },
+      "render resolution.", NULL, 0, PL_WIN | PL_ANDROID },
     { PG_GRAPHICS, IT_FOG, "Fog distance", "The game's distance fog. Original keeps it as released; Reduced pushes "
       "it further out, so more of the level is visible; Off removes it." },
     { PG_GRAPHICS, IT_LOD, "Level of detail", "Original swaps distant models for low-polygon versions, as the 2001 "
@@ -760,7 +760,7 @@ static void full_path(const char *in, char *out, size_t n)
 {
     if (!in[0])
         out[0] = 0;
-    else if (in[1] == ':' || (in[0] == '\\' && in[1] == '\\'))
+    else if (in[0] == '/' || in[1] == ':' || (in[0] == '\\' && in[1] == '\\'))
         strcpy_s(out, n, in);
     else
         _snprintf_s(out, n, _TRUNCATE, "%s\\%s", M.game_dir, in);

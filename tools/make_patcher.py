@@ -161,6 +161,11 @@ if os.path.isfile(RUNNER64) and os.path.isfile(SDL64):
     shutil.copyfile(RUNNER64, os.path.join(gf, "mml_run64.exe"))
     os.makedirs(os.path.join(gf, "x64"), exist_ok=True)
     shutil.copyfile(SDL64, os.path.join(gf, "x64", "SDL3.dll"))
+    RSHADER64 = os.path.join(GAME, "x64", "librashader.dll")   # (optional: the 64-bit engine's shader presets)
+    if os.path.isfile(RSHADER64):
+        shutil.copyfile(RSHADER64, os.path.join(gf, "x64", "librashader.dll"))
+    else:
+        print("WARNING: x64/librashader.dll missing - no shader presets in the Standalone engine")
 else:
     print("WARNING: mml_run64.exe or x64/SDL3.dll missing - the package has no Standalone engine")
 # our intro (played by mml.dll's own player; CAPCOM.AVI stays for the Compatibility renderer)

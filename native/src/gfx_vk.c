@@ -11,8 +11,8 @@
  * staging ring; what a frame used is destroyed once its fence has passed. The draw constants are
  * push constants; samplers (set 0) and images (set 1) are separate descriptor sets, so a texture
  * has one set whatever the filter. Pipelines are made on first use per blend and depth state.
- * Not yet: the effects depth target (ReShade), exclusive fullscreen, choosing the display's GPU,
- * RetroArch presets. */
+ * RetroArch presets go through librashader's Vulkan runtime (rshader.c) at compose time.
+ * Not yet: the effects depth target (ReShade), exclusive fullscreen, choosing the display's GPU. */
 #ifdef MML_VULKAN
 #define VK_NO_PROTOTYPES
 #ifdef _WIN32
@@ -26,6 +26,7 @@
 #include "gfx_backend.h"
 #include "gfx_ui.h"
 #include "log.h"
+#include "rshader.h"
 #ifdef _WIN32
 #include "gfx_win.h"
 #else
@@ -179,6 +180,7 @@ static struct {
     VkFormat depth_fmt;
     VkSampleCountFlagBits samples;
     VkRenderPass pass_clear, pass_load, pass_swap;
+    VkRenderPass pass_swap_load;       /* over a picture a shader preset drew: the UI, then present */
     target tg[2];
     int cur, tg_used[2];
     int scene_w, scene_h;
@@ -687,10 +689,12 @@ static int make_target(int i)
     int w, h, ms = v.samples != VK_SAMPLE_COUNT_1_BIT;
     scene_size(&w, &h);
     if (!image_make(w, h, VK_FORMAT_R8G8B8A8_UNORM,
-                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (ms ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : VK_IMAGE_USAGE_SAMPLED_BIT),
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                        (ms ? 0 : VK_IMAGE_USAGE_SAMPLED_BIT),   /* (a preset's history copies it) */
                     v.samples, VK_IMAGE_ASPECT_COLOR_BIT, &t->color, &t->color_mem, &t->color_view))
         return 0;
-    if (ms && !image_make(w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+    if (ms && !image_make(w, h, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                           VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT, &t->resolved, &t->resolved_mem,
                           &t->resolved_view))
         return 0;
@@ -1500,6 +1504,25 @@ static int surface_follow(void)
 #endif
 }
 
+/* the RetroArch preset of v.opt.shader ("" = none) through librashader, replacing the one there
+   was: with the GPU idle and the queue to itself (the flip thread presents on it) */
+static int load_preset(void)
+{
+    rshader_vk_device d;
+    int ok;
+    d.inst = v.inst;
+    d.phys = v.phys;
+    d.dev = v.dev;
+    d.queue = v.queue;
+    d.gipa = vkGetInstanceProcAddr;
+    d.frames_in_flight = FRAMES;
+    EnterCriticalSection(&v.qlock);
+    vkDeviceWaitIdle(v.dev);
+    ok = rshader_vk_load(&d, v.opt.game_dir, v.opt.shader);
+    LeaveCriticalSection(&v.qlock);
+    return ok;
+}
+
 static int vk_init(void *window, int app_w, int app_h, const gfx_options *opt)
 {
     if (v.ready)
@@ -1527,7 +1550,8 @@ static int vk_init(void *window, int app_w, int app_h, const gfx_options *opt)
     v.pass_clear = make_pass(VK_FORMAT_R8G8B8A8_UNORM, v.depth_fmt, v.samples, 1, 0);
     v.pass_load = make_pass(VK_FORMAT_R8G8B8A8_UNORM, v.depth_fmt, v.samples, 0, 0);
     v.pass_swap = make_pass(v.swap_fmt, VK_FORMAT_UNDEFINED, VK_SAMPLE_COUNT_1_BIT, 1, 1);
-    if (!v.pass_clear || !v.pass_load || !v.pass_swap || !make_frames() || !make_layouts())
+    v.pass_swap_load = make_pass(v.swap_fmt, VK_FORMAT_UNDEFINED, VK_SAMPLE_COUNT_1_BIT, 0, 1);
+    if (!v.pass_clear || !v.pass_load || !v.pass_swap || !v.pass_swap_load || !make_frames() || !make_layouts())
         return 0;
     v.sh_game_v = shader(spv_game_vert, sizeof spv_game_vert);
     v.sh_game_f = shader(spv_game_frag, sizeof spv_game_frag);
@@ -1567,7 +1591,7 @@ static int vk_init(void *window, int app_w, int app_h, const gfx_options *opt)
     }
     v.cb_dirty = v.state_dirty = 1;
     if (v.opt.shader[0])
-        log_printf("gfx: RetroArch presets aren't in the Vulkan backend yet");
+        load_preset();
     log_printf("gfx: Vulkan ready (%s)", v.opt.windowed ? "windowed" : "borderless fullscreen");
     return 1;
 }
@@ -2002,7 +2026,7 @@ static void vk_compose_target(int ti)
     VkResult r;
     double sx, sy, s;
     float vw, vh;
-    int cw, ch;
+    int cw, ch, shaded;
     if (!v.ready)
         return;
     if (v.opt.perf_log && ++g_stat.frames == 300) {
@@ -2094,29 +2118,48 @@ static void vk_compose_target(int ti)
                 VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
     }
-    memset(&rb, 0, sizeof rb);
-    memset(&black, 0, sizeof black);
-    black.color.float32[3] = 1.0f;
-    rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rb.renderPass = v.pass_swap;
-    rb.framebuffer = v.swap_fb[g_img];
-    rb.renderArea.extent.width = v.swap_w;
-    rb.renderArea.extent.height = v.swap_h;
-    rb.clearValueCount = 1;
-    rb.pClearValues = &black;
-    vkCmdBeginRenderPass(c, &rb, VK_SUBPASS_CONTENTS_INLINE);
     /* keep the game's aspect (pillar/letterbox) unless told to stretch */
     sx = (double)v.back_w / v.app_w;
     sy = (double)v.back_h / v.app_h;
     s = sx < sy ? sx : sy;
     vw = v.opt.stretch ? (float)v.back_w : (float)(v.app_w * s);
     vh = v.opt.stretch ? (float)v.back_h : (float)(v.app_h * s);
-    set_viewport((v.back_w - vw) / 2, (v.back_h - vh) / 2, vw, vh, v.back_w, v.back_h);
-    vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, v.pipe_blit);
-    vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, v.layout, 0, 1,
-                            v.opt.nearest_upscale ? &v.set_blit_point : &v.set_blit_linear, 0, NULL);
-    vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, v.layout, 1, 1, &t->set, 0, NULL);
-    vkCmdDraw(c, 3, 1, 0, 0);
+    shaded = 0;
+    if (rshader_active()) {   /* the preset draws the picture (and clears the rest of the image) */
+        rshader_vk_image src, dst;
+        src.img = t->resolved ? t->resolved : t->color;
+        src.fmt = VK_FORMAT_R8G8B8A8_UNORM;
+        src.w = (unsigned)v.scene_w;
+        src.h = (unsigned)v.scene_h;
+        dst.img = v.swap_img[g_img];
+        dst.fmt = v.swap_fmt;
+        dst.w = v.swap_w;
+        dst.h = v.swap_h;
+        barrier(dst.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        shaded = rshader_vk_frame(c, &src, &dst, (v.back_w - vw) / 2, (v.back_h - vh) / 2, (unsigned)(vw + 0.5f),
+                                  (unsigned)(vh + 0.5f));
+    }
+    memset(&rb, 0, sizeof rb);
+    memset(&black, 0, sizeof black);
+    black.color.float32[3] = 1.0f;
+    rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rb.renderPass = shaded ? v.pass_swap_load : v.pass_swap;   /* (failed: the swap pass clears it) */
+    rb.framebuffer = v.swap_fb[g_img];
+    rb.renderArea.extent.width = v.swap_w;
+    rb.renderArea.extent.height = v.swap_h;
+    rb.clearValueCount = 1;
+    rb.pClearValues = &black;
+    vkCmdBeginRenderPass(c, &rb, VK_SUBPASS_CONTENTS_INLINE);
+    if (!shaded) {   /* plain upscale */
+        set_viewport((v.back_w - vw) / 2, (v.back_h - vh) / 2, vw, vh, v.back_w, v.back_h);
+        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, v.pipe_blit);
+        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, v.layout, 0, 1,
+                                v.opt.nearest_upscale ? &v.set_blit_point : &v.set_blit_linear, 0, NULL);
+        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, v.layout, 1, 1, &t->set, 0, NULL);
+        vkCmdDraw(c, 3, 1, 0, 0);
+    }
     set_viewport(0, 0, (float)v.back_w, (float)v.back_h, v.back_w, v.back_h);
     ui_draw(c);   /* in-game menu, if open */
     vkCmdEndRenderPass(c);
@@ -2286,10 +2329,14 @@ static void vk_set_scene(int render_scale, int msaa)
     v.state_dirty = v.cb_dirty = 1;
 }
 
+/* RetroArch preset ("" = none) */
 static int vk_set_shader(const char *path)
 {
     strcpy_s(v.opt.shader, sizeof v.opt.shader, path ? path : "");
-    return !v.opt.shader[0];   /* presets aren't in this backend yet: only "none" works */
+    if (!v.ready)
+        return 0;
+    vk_wait_flip();
+    return load_preset();
 }
 
 static void vk_use_target(int t)

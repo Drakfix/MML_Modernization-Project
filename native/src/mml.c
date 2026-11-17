@@ -704,7 +704,7 @@ void mml_gfx_options(const char *ini, const char *game_dir, gfx_options *o)
         char sh[MAX_PATH];
         GetPrivateProfileStringA("video", "shader", "", sh, sizeof sh, ini);
         if (sh[0]) {
-            if (sh[1] == ':' || (sh[0] == '\\' && sh[1] == '\\'))
+            if (sh[0] == '/' || sh[1] == ':' || (sh[0] == '\\' && sh[1] == '\\'))
                 strcpy_s(o->shader, sizeof o->shader, sh);
             else
                 _snprintf_s(o->shader, sizeof o->shader, _TRUNCATE, "%s\\%s", game_dir, sh);

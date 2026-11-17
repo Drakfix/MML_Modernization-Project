@@ -36,9 +36,9 @@ OUT = os.environ.get("MML_LINUX_OUT") or os.path.join(HERE, "build")
 GEN = os.path.join(NATIVE, "build", "gen")        # the recompiled game (never committed)
 GEN_JP = os.path.join(NATIVE, "build", "gen_jp")  # the Japanese program's, when it was made
 CLANG = os.environ.get("CC") or "clang"
-# Windows-only sources (as for Android): Direct3D 11 and its shader runtime, GDI fonts, the Windows
+# Windows-only sources (as for Android): Direct3D 11, GDI fonts, the Windows
 # platform and window placement, debugging tools; recomp_native.c compiles to nothing here
-WINDOWS_ONLY = {"gfx_d3d11.c", "rshader.c", "ui_font_gdi.c", "plat_win32.c", "gfx_win.c", "iat.c",
+WINDOWS_ONLY = {"gfx_d3d11.c", "ui_font_gdi.c", "plat_win32.c", "gfx_win.c", "iat.c",
                 "apicensus.c", "sampler.c", "watch.c", "kbm.c", "recomp_native.c"}
 FLAGS = ["-O2", "-D_GNU_SOURCE", "-fms-extensions", "-DMML_RUNNER", "-DMML_VULKAN", "-DMML_PATCH_DATA"]
 

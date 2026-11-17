@@ -40,6 +40,10 @@ SDK = env("ANDROID_SDK", os.path.join(os.environ.get("LOCALAPPDATA", ""), "Andro
 JDK = env("JAVA_HOME", r"C:\Program Files\Android\Android Studio\jbr")
 SDL_SRC = env("SDL3_SRC", os.path.join(DEPS, "SDL3-3.4.18"))
 SDL_LIB = env("SDL3_ANDROID", os.path.join(DEPS, "SDL3-android"))
+# librashader (RetroArch shader presets) built for Android, Vulkan runtime only (BUILDING-librashader.md);
+# optional: without it the app has no presets
+LIBRASHADER = env("MML_LIBRASHADER_ANDROID", os.path.join(DEPS, "librashader", "target", "aarch64-linux-android",
+                                                          "optimized", "liblibrashader_capi.so"))
 KEYSTORE = env("MML_KEYSTORE", os.path.join(DEPS, "android", "debug.keystore"))
 OUT = os.path.join(HERE, "build")
 
@@ -66,9 +70,9 @@ def run(*cmd):
 NATIVE = os.path.join(REPO, "native")
 GEN = os.path.join(NATIVE, "build", "gen")   # the recompiled game (tools/recomp; never committed)
 GEN_JP = os.path.join(NATIVE, "build", "gen_jp")   # the Japanese program's, when it was made (optional)
-# Windows-only sources: Direct3D 11 and its shader runtime, GDI fonts, the Windows platform and
+# Windows-only sources: Direct3D 11, GDI fonts, the Windows platform and
 # window placement, debugging tools; recomp_native.c compiles to nothing without machine code
-WINDOWS_ONLY = {"gfx_d3d11.c", "rshader.c", "ui_font_gdi.c", "plat_win32.c", "gfx_win.c", "iat.c",
+WINDOWS_ONLY = {"gfx_d3d11.c", "ui_font_gdi.c", "plat_win32.c", "gfx_win.c", "iat.c",
                 "apicensus.c", "sampler.c", "watch.c", "kbm.c", "recomp_native.c"}
 # -fno-semantic-interposition and -Bsymbolic (link): calls and data inside libmain.so go direct,
 # not through the PLT and GOT as for symbols another library could replace (53,577 PLT calls)
@@ -111,7 +115,7 @@ def assets():
     os.makedirs(os.path.join(d, "licenses"))
     shutil.copyfile(os.path.join(REPO, "LICENSE"), os.path.join(d, "licenses", "LICENSE.txt"))
     shutil.copyfile(os.path.join(REPO, "THIRD-PARTY-NOTICES.txt"), os.path.join(d, "licenses", "THIRD-PARTY-NOTICES.txt"))
-    for f in ("SDL3-LICENSE.txt", "pl_mpeg-LICENSE.txt"):
+    for f in ("SDL3-LICENSE.txt", "pl_mpeg-LICENSE.txt", "librashader-LICENSE.txt"):
         shutil.copyfile(os.path.join(REPO, "licenses", f), os.path.join(d, "licenses", f))
     if os.path.isfile(intro):
         shutil.copyfile(intro, os.path.join(d, "intro.mpg"))
@@ -172,6 +176,11 @@ def native():
     run(CLANG, TARGET, "-shared", "-fPIC", "-Wl,--no-undefined", "-Wl,-Bsymbolic", "-o", os.path.join(lib, "libmain.so"), "@" + rsp,
         "-L", os.path.join(SDL_LIB, ABI), "-lSDL3", "-llog", "-landroid", "-lm", "-ldl")
     shutil.copy(os.path.join(SDL_LIB, ABI, "libSDL3.so"), lib)
+    if os.path.isfile(LIBRASHADER):   # loaded by name at run time (rshader.c), stripped of its symbols
+        run(os.path.join(os.path.dirname(CLANG), "llvm-strip.exe"), "--strip-unneeded", "-o",
+            os.path.join(lib, "librashader.so"), LIBRASHADER)
+    else:
+        print("WARNING: no librashader.so (MML_LIBRASHADER_ANDROID): the app has no shader presets")
 
 
 def native_hello():
