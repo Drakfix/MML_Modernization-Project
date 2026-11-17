@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.9.1 beta.** The 0.1 releases are kept on the
+**Current version: 0.9.2 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -66,6 +66,19 @@ copy.
   more. The lines stay the US script's.
 - **Fix:** special weapons keep Mega Man planted while they fire again, as in the original.
   Backpedaling and moving while locked on are for the buster only.
+
+**0.9.2:**
+
+- **120 fps** (experimental, tested on Android). For screens that refresh at 120 Hz, the renderer
+  draws three in-between frames per game frame. Where the screen or the GPU can't keep up, it goes
+  back to 60 fps by itself.
+- **FPS counter.** An optional counter in the top-right corner shows how many frames per second
+  reach the screen.
+- **Aspect ratio: Fill screen, 16:9 or 4:3.** Fill screen (experimental) makes the picture as wide
+  as your screen, as the old widescreen setting did; on screens wider than 16:9, a few scenes don't
+  draw all the way to the sides. The new 16:9 keeps a 16:9 picture, with bars on wider screens.
+- **Fix:** at Jet Skate speed, Mega Man's fists swapped places in the in-between frames, so his
+  arm flickered and deformed.
 
 ## What's new in 0.8
 
@@ -570,7 +583,7 @@ menu shows each setting's full description and choices beside the list.
 | Page | Settings |
 |------|----------|
 | Game | Version to play, importing each version, English subtitles, voice language, localization names (US / Japanese), start menu at launch (show / skip), intro video, title screen hints, room transitions, updates |
-| Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio, frame rate, V-Sync, executable |
+| Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio (fill screen / 16:9 / 4:3), frame rate (30 / 60 / 120), FPS counter, V-Sync, executable |
 | Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement, animation blending, HUD size |
 | Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), button prompts (Auto / Xbox / PlayStation 4 / PlayStation 5 / Switch), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |
 | Combat | Combat style (Classic / Adventure / Shooter presets, or Custom), camera position (behind / over the shoulder), fade up close, aim button (lock-on / free aim), lock-on camera, shots aim, aim sensitivity, aim assist, move while shooting, backpedal (walk / jog), crosshair (off / while aiming / always), reticle colour |
