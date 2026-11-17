@@ -130,9 +130,9 @@ static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "COMBA
 #define AIM_HELP "Camera: firing turns Mega Man to where the camera looks. Character: shots go where he faces."
 #define XH_HELP "Marks where camera-aimed shots go: while aiming, or always."
 #define STYLE_HELP "Sets the aiming options below at once. Classic: as the original. Adventure: lock-on, and you " \
-    "keep moving while shooting. Shooter: a camera over the shoulder, free aim that zooms in, no lock-on."
+    "move while locked on. Shooter: a camera over the shoulder, free aim that zooms in, no lock-on."
 #define AIMBTN_HELP "Lock-on: holding aim locks on to the nearest enemy. Free aim: it aims over the shoulder instead."
-#define MOVESHOOT_HELP "On: walking keeps going while you shoot, and aiming you move every way. Off: as the original."
+#define MOVESHOOT_HELP "On: backpedal while shooting, and move every way while locked on. Off: as the original."
 #define BACKPEDAL_HELP "Moving away from the target while shooting. Walk: a quick walk backward. Jog: faster."
 #define ASSIST_HELP "Over an enemy, the camera turns slower and the crosshair closes in."
 #define SHCAM_HELP "Over the shoulder: the camera stays beside Mega Man, and aiming zooms in."
@@ -394,11 +394,11 @@ static const item g_start_items[] = {
     /* ---- COMBAT ---- */
     { PG_COMBAT, IT_SECTION, "Style" },
     { PG_COMBAT, IT_STYLE, "Combat style", "Sets every aiming option below at once. Classic: lock-on with the "
-      "classic camera and shots where Mega Man faces; the walk stops for each shot, as in the original (running "
-      "still shoots on the move). Adventure: lock-on over the shoulder, and Mega Man walks, strafes and jogs "
-      "backward while shooting. Shooter: the camera stays over the shoulder, the aim button zooms in to aim freely "
-      "with no lock-on, shots go to the crosshair, and aim assist slows the camera over enemies. Changing an "
-      "option below shows Custom." },
+      "classic camera and shots where Mega Man faces; lock-on keeps him in place, as in the original. Adventure: "
+      "lock-on over the shoulder, and Mega Man strafes around the target and jogs backward while shooting. "
+      "Shooter: the camera stays over the shoulder, the aim button zooms in to aim freely with no lock-on, "
+      "shots go to the crosshair, and aim assist slows the camera over enemies. Changing an option below "
+      "shows Custom." },
     { PG_COMBAT, IT_SECTION, "Aiming" },
     { PG_COMBAT, IT_SHCAM, "Camera position", "Behind: the camera follows behind Mega Man, as usual. Over the "
       "shoulder: it stays beside his shoulder all the time, like a third-person shooter, so the crosshair has the "
@@ -417,10 +417,10 @@ static const item g_start_items[] = {
     { PG_COMBAT, IT_ASSIST, "Aim assist", "While the crosshair is over an enemy, the camera turns slower and "
       "the crosshair closes in, so it's easier to stay on target." },
     { PG_COMBAT, IT_SECTION, "Moving while shooting" },
-    { PG_COMBAT, IT_MOVESHOOT, "Move while shooting", "On: walking forward, backward and sideways keeps going "
-      "while you shoot (the shot plays on his arms), and while locked on or aiming Mega Man moves every way around "
-      "the target, backpedaling when you move away from it. Off: the walk stops for each shot, as in the "
-      "original." },
+    { PG_COMBAT, IT_MOVESHOOT, "Move while shooting", "On: Mega Man can walk backward while shooting (the "
+      "shot plays on his arms), and while locked on or aiming he moves every way around the target instead of "
+      "standing still, backpedaling when you move away from it. Off: as in the original, where he runs and "
+      "strafes while shooting but can't backpedal, and lock-on keeps him in place." },
     { PG_COMBAT, IT_BACKPEDAL, "Backpedal", "How Mega Man moves away from the target while shooting. Walk: a "
       "quick walk backward. Jog: the run played backward, faster." },
     { PG_COMBAT, IT_SECTION, "Crosshair and reticle" },
@@ -2492,10 +2492,10 @@ static void draw_welcome(int w, int h)
  * the styles, so nobody finds the controls changed without being asked. Starts on the style the
  * settings match (Adventure when none). Later (B / Esc) asks again next time. */
 static const char *const ONBOARD_DESC[] = {
-    "The controls you know: lock-on with the classic camera, shots go where Mega Man faces, and the walk "
-    "stops for each shot.",
-    "Lock-on over the shoulder, and Mega Man keeps moving while he shoots: he strafes around enemies and "
-    "jogs backward facing them.",
+    "The controls you know: lock-on with the classic camera, shots go where Mega Man faces, and lock-on "
+    "keeps him in place.",
+    "Lock-on over the shoulder, and Mega Man moves while locked on: he strafes around enemies and jogs "
+    "backward facing them.",
     "A third-person shooter: the camera stays over his shoulder, the aim button zooms in to aim freely at a "
     "crosshair, and aim assist helps you stay on target.",
 };
