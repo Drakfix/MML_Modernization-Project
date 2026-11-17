@@ -8,7 +8,7 @@
  * at the user's own copy (most of them are GPL, ours is MIT).
  *
  * Where it lives: the 32-bit game folder's librashader.dll, x64\librashader.dll for the 64-bit
- * runner, librashader.so in the APK (Android) or next to the game (Linux). */
+ * runner, librashader.so in the APK (Android) or in the package's lib/ (Linux). */
 #include <windows.h>   /* (native/compat elsewhere) */
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,18 +88,19 @@ static HMODULE open_library(const char *game_dir, char *path, size_t n)
     _snprintf_s(path, n, _TRUNCATE, "%s\\x64\\librashader.dll", game_dir);   /* the 64-bit build's */
 #elif defined(_WIN32)
     _snprintf_s(path, n, _TRUNCATE, "%s\\librashader.dll", game_dir);
-#elif defined(__ANDROID__)
-    (void)game_dir;
-    _snprintf_s(path, n, _TRUNCATE, "librashader.so");   /* the APK's own, by name */
 #else
-    _snprintf_s(path, n, _TRUNCATE, "%s/librashader.so", game_dir);
+    /* by name: Android, the APK's own; Linux, the package's lib/ (the program's rpath, searched
+       before the system's libraries) */
+    _snprintf_s(path, n, _TRUNCATE, "librashader.so");
 #endif
     m = LoadLibraryA(path);
 #if !defined(_WIN32) && !defined(__ANDROID__)
-    if (!m) {   /* (installed with the system's libraries) */
-        _snprintf_s(path, n, _TRUNCATE, "librashader.so");
+    if (!m) {   /* (or put next to the game) */
+        _snprintf_s(path, n, _TRUNCATE, "%s/librashader.so", game_dir);
         m = LoadLibraryA(path);
     }
+#else
+    (void)game_dir;
 #endif
     return m;
 }

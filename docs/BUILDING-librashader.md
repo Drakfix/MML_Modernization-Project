@@ -2,7 +2,7 @@
 
 The optional Shader setting (RetroArch `.slangp` presets: CRT, scanlines, NTSC and so on)
 runs through [librashader](https://github.com/SnowflakePowered/librashader), loaded at
-runtime by mml.dll, the 64-bit runner and the Android app. librashader only publishes
+runtime by mml.dll, the 64-bit runner, the Android app and the Linux version. librashader only publishes
 64-bit desktop builds, and the game is 32-bit, so we build every copy ourselves from the
 unmodified tagged source.
 
@@ -16,6 +16,7 @@ License: MPL-2.0 (`licenses/librashader-LICENSE.txt`). The C header in
 | mml.dll (32-bit) | `i686-pc-windows-msvc` | Direct3D 11, Vulkan | `librashader.dll` in the game folder |
 | mml_run64.exe | `x86_64-pc-windows-msvc` | Direct3D 11, Vulkan | `x64\librashader.dll` in the game folder |
 | Android app | `aarch64-linux-android` | Vulkan | `lib/arm64-v8a/librashader.so` in the APK |
+| Linux version | `x86_64-unknown-linux-gnu` | Vulkan | `lib/librashader.so` in the package |
 
 ## Steps
 
@@ -64,6 +65,20 @@ License: MPL-2.0 (`licenses/librashader-LICENSE.txt`). The C header in
    The result is `target\aarch64-linux-android\optimized\liblibrashader_capi.so`.
    `android\build_android.py` finds it there (or at `MML_LIBRASHADER_ANDROID`), strips it
    and packages it as `librashader.so`.
+
+5. Linux, on Linux (or WSL) with Rust, g++ and cmake installed there, from a copy of the
+   source in the Linux file system (`~/mml-linux-deps/librashader`, where
+   `linux/build_linux.py` looks for the result):
+
+   ```
+   cargo rustc -p librashader-capi --lib --crate-type cdylib --profile optimized --no-default-features --features runtime-vulkan -- -C link-arg=-Wl,--no-undefined
+   ```
+
+   Build it on the same system as the Linux version (Ubuntu 24.04), so it asks for no newer
+   glibc or libstdc++ than the program does. The result is
+   `target/optimized/liblibrashader_capi.so`; `linux/build_linux.py` (or
+   `MML_LIBRASHADER_LINUX`) strips it into the package's `lib/librashader.so`, which the
+   program finds through its rpath.
 
 If the header changes on a librashader update, copy the new `include/librashader.h` into
 `native/vendor/librashader/` too: the runtime refuses a library whose ABI version doesn't

@@ -338,10 +338,10 @@ static const item g_start_items[] = {
       "square." },
     { PG_GRAPHICS, IT_SHADER, "Shader preset", "A RetroArch shader preset (.slangp: CRT, scanlines, LCD and more) "
       "applied to the final image. Presets go in Modernization\\shaders; RetroArch's slang-shaders collection "
-      "works.", NULL, 0, PL_WIN | PL_ANDROID },
+      "works.", NULL, 0, PL_WIN | PL_ANDROID | PL_LINUX },
     { PG_GRAPHICS, IT_SHADER_RES, "Shader input resolution", "The resolution the shader preset processes. Native "
       "(480p) feeds it the game's original resolution, which CRT presets are made for; Output feeds it the full "
-      "render resolution.", NULL, 0, PL_WIN | PL_ANDROID },
+      "render resolution.", NULL, 0, PL_WIN | PL_ANDROID | PL_LINUX },
     { PG_GRAPHICS, IT_FOG, "Fog distance", "The game's distance fog. Original keeps it as released; Reduced pushes "
       "it further out, so more of the level is visible; Off removes it." },
     { PG_GRAPHICS, IT_LOD, "Level of detail", "Original swaps distant models for low-polygon versions, as the 2001 "

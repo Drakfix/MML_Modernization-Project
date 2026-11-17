@@ -12,6 +12,9 @@ Needs (environment variables override the defaults):
   SDL3_SRC    SDL3's source (mml-deps/SDL3-3.4.18 next to the repo): the Vulkan headers it carries
   MML_INTRO   our intro video to bundle (else MML_GAME_DIR/Modernization/intro.mpg)
   MML_LINUX_OUT  where to build (linux/build)
+  MML_LIBRASHADER_LINUX  librashader built for Linux, Vulkan runtime (docs/BUILDING-librashader.md;
+              ~/mml-linux-deps/librashader/target/optimized/liblibrashader_capi.so); optional: without
+              it the package has no shader presets
 and clang, glslangValidator and spirv-opt (glslang-tools, spirv-tools), and the development files
 of FreeType and fontconfig (libfreetype-dev, libfontconfig-dev).
 """
@@ -33,6 +36,8 @@ from patch_data import patch_data  # noqa: E402
 SDL_LIB = os.environ.get("SDL3_LINUX") or os.path.expanduser("~/mml-linux-deps/SDL3")
 SDL_SRC = os.environ.get("SDL3_SRC") or os.path.join(DEPS, "SDL3-3.4.18")
 OUT = os.environ.get("MML_LINUX_OUT") or os.path.join(HERE, "build")
+LIBRASHADER = os.environ.get("MML_LIBRASHADER_LINUX") or os.path.expanduser(
+    "~/mml-linux-deps/librashader/target/optimized/liblibrashader_capi.so")
 GEN = os.path.join(NATIVE, "build", "gen")        # the recompiled game (never committed)
 GEN_JP = os.path.join(NATIVE, "build", "gen_jp")  # the Japanese program's, when it was made
 CLANG = os.environ.get("CC") or "clang"
@@ -157,6 +162,10 @@ def program(pkgdir):
         *pkg("--libs", "freetype2", "fontconfig"), "-lm", "-ldl", "-lpthread", "-Wl,-rpath,$ORIGIN/lib",
         "-Wl,--as-needed")
     shutil.copy(os.path.join(SDL_LIB, "lib", "libSDL3.so.0"), libdir)
+    if os.path.isfile(LIBRASHADER):   # loaded by name at run time (rshader.c), found through the rpath
+        run("strip", "--strip-unneeded", "-o", os.path.join(libdir, "librashader.so"), LIBRASHADER)
+    else:
+        print("WARNING: no librashader.so (MML_LIBRASHADER_LINUX): the package has no shader presets")
 
 
 def assets(pkgdir):
@@ -166,7 +175,7 @@ def assets(pkgdir):
     shutil.copyfile(os.path.join(REPO, "config", "mml.ini"), os.path.join(d, "mml.ini"))
     shutil.copyfile(os.path.join(REPO, "LICENSE"), os.path.join(d, "licenses", "LICENSE.txt"))
     shutil.copyfile(os.path.join(REPO, "THIRD-PARTY-NOTICES.txt"), os.path.join(d, "licenses", "THIRD-PARTY-NOTICES.txt"))
-    for f in ("SDL3-LICENSE.txt", "pl_mpeg-LICENSE.txt"):
+    for f in ("SDL3-LICENSE.txt", "pl_mpeg-LICENSE.txt", "librashader-LICENSE.txt"):
         shutil.copyfile(os.path.join(REPO, "licenses", f), os.path.join(d, "licenses", f))
     intro = os.environ.get("MML_INTRO") or os.path.join(os.environ.get("MML_GAME_DIR", ""), "Modernization", "intro.mpg")
     if os.path.isfile(intro):
