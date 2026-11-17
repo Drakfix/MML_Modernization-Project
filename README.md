@@ -222,8 +222,8 @@ the Japanese line being spoken.
   HUD elements sit at the screen's edges at correct proportions, and 4:3 backgrounds are
   stretched to fit. Three aspect ratio choices:
   - **Fill screen** (experimental; the default) makes the picture as wide as your display:
-    16:9, 16:10, an ultrawide monitor or a phone. On screens wider than 16:9, a few scenes
-    don't draw all the way to the sides.
+    16:9, 16:10, an ultrawide monitor or a phone. Screens wider than 16:9 now draw all the
+    way to the sides, but that has not been tested much yet.
   - **16:9** keeps a 16:9 picture on any screen, with bars on wider or narrower displays.
   - **4:3** keeps the original framing.
 - **60 fps.** The game logic still runs at 30 fps; the renderer draws an interpolated frame in

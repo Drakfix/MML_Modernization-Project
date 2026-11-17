@@ -307,8 +307,8 @@ static const item g_start_items[] = {
       "lines: lower values keep the original pixelated look and cost less GPU time." },
     { PG_DISPLAY, IT_CHOICE, "Aspect ratio", "Fill screen (experimental) makes the picture as wide as your "
       "screen (16:10, ultrawide, a phone): a wider field of view, the HUD at the screen's edges, 4:3 backgrounds stretched to fit. "
-      "On screens wider than 16:9 a few scenes don't draw all the way to the sides. 16:9 keeps the widescreen view "
-      "the game's scenes are made for, with bars on wider or narrower screens. 4:3 original keeps the original "
+      "Screens wider than 16:9 now draw all the way to the sides, but that hasn't been tested much yet. 16:9 keeps "
+      "the widescreen view the game's scenes are made for, with bars on wider or narrower screens. 4:3 original keeps the original "
       "framing.", CH_ASPECT, NCH(CH_ASPECT) },
     { PG_DISPLAY, IT_FPS, "Frame rate", "The game's logic always runs at 30 fps. At 60 fps the renderer draws an "
       "interpolated frame between every two game frames: smoother camera and motion, a little more GPU time, no "

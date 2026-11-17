@@ -56,6 +56,7 @@
 #include "names.h"
 #include "subtitles.h"
 #include "gamefiles.h"
+#include "widecull.h"
 
 
 static char g_game_dir[MAX_PATH];   /* the playing version's folder: its program, data and saves */
@@ -130,6 +131,7 @@ static void on_h_set(regs_t *r)
     g_zoom = 1.0f;   /* a new scene: no zoom carried into it (the zoom's owner applies it again) */
     *h = adj;
     *g_shadow_h_x = adj * g_ratio;
+    widecull_set_h(adj);
     if (g_h_set_logs < 8) {
         g_h_set_logs++;
         log_printf("widescreen: game set H %.3f -> H %.3f, shadow X %.3f",
@@ -582,6 +584,7 @@ static void on_frame(regs_t *r)
     apicensus_frame();
     ddshim_frame();
     display_frame();
+    widecull_frame();
     quicksave_frame();
     menu_frame();
     hints_frame();
@@ -786,6 +789,8 @@ void mml_init(void)
             g_native_wide = display_install(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), width,
                                             GetPrivateProfileIntA("video", "hud_edges", 1, g_ini),
                                             ini_float("video", "hud_scale", 1.0f));
+        if (g_native_wide)
+            widecull_install(display_native_width());
         display_set_minimap_pos(GetPrivateProfileIntA("video", "minimap_x", 6, g_ini),
                                 GetPrivateProfileIntA("video", "minimap_y", 12, g_ini));
         display_set_top_gauge_y(GetPrivateProfileIntA("video", "top_gauge_y", 4, g_ini));
