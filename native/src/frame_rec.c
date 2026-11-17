@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "frame_rec.h"
+#include "fps_counter.h"
 #include "log.h"
 
 #include <windows.h>   /* (native/compat elsewhere) */
@@ -66,11 +67,25 @@ static gfx_vertex g_out[65536];
 static gfx_tex *g_defer[MAX_DEFER];
 static int g_ncmds, g_nstates, g_nverts, g_ndefer, g_overflow;
 static int g_on;
+static volatile int g_mult = 1;      /* presents per 1/60 s (2 = 120 fps) */
+static volatile int g_mult_failed;   /* 120 fps couldn't be kept: 60 until it's asked for again */
+static volatile int g_drain;         /* game frames still to show without in-between frames */
+static int g_check_n, g_check_slow, g_check_logged, g_check_bad;
+static double g_check_planned, g_check_took, g_burst0;
+static volatile int g_check_paused;   /* the in-game menu is open: its frames don't count */
 static int g_mid_only, g_timing;   /* debug */
 static double g_last_present, g_gap_sum, g_gap_max;
 static unsigned g_presents, g_late, g_cut_draws;
 
-void rec_enable(int on) { g_on = on; }
+/* on: 0 off (30 fps), 1 60 fps, 2 120 fps */
+void rec_enable(int on)
+{
+    g_on = on;
+    g_mult = on >= 2 ? 2 : 1;
+    g_mult_failed = 0;   /* (asking again measures again) */
+    g_check_n = g_check_slow = g_check_logged = g_check_bad = 0;
+    g_check_planned = g_check_took = 0.0;
+}
 void rec_debug(int mid_only, int timing) { g_mid_only = mid_only; g_timing = timing; }
 int rec_enabled(void) { return g_on; }
 
@@ -322,6 +337,7 @@ static void replay(float t)
 static void note_present(void)
 {
     double t;
+    fps_counter_present();
     if (!g_timing)
         return;
     t = now_ms();
@@ -372,38 +388,120 @@ static double present_slot(double period)
     return slot;
 }
 
+/* 120 fps: three in-between frames per game frame instead of one, presented 1/120 s apart. It
+ * needs a screen that refreshes at 120 Hz (else every present waits for the next 60 Hz refresh)
+ * and the time to draw them; when a frame's in-between presents keep taking much longer than
+ * planned, 120 fps can't be kept here and it's back to 60 until it's asked for again. */
+#define CHECK_SKIP   30     /* frames left out while the screen switches its refresh rate */
+#define CHECK_FRAMES 60     /* frames measured (about 2 s) */
+#define CHECK_RATIO  1.4    /* in-between presents this much slower than planned: can't keep up */
+#define CHECK_WINDOWS 2     /* windows in a row with most frames slow before going back to 60 */
+
+int rec_rate_hz(void)
+{
+    return g_on && g_mult == 2 && !g_mult_failed ? 120 : 60;
+}
+
+void rec_check_pause(int paused)
+{
+    g_check_paused = paused;
+}
+
+/* one game frame's in-between presents: did they keep to their 1/120 s slots? (presenting thread)
+ * A frame is slow when they took CHECK_RATIO times the plan; 120 fps can't be kept when most frames
+ * of a window are (a screen at 60 Hz: all of them), not when a few are (a room loading, the textures
+ * of a new area going up): the average let one long hitch decide. The in-game menu's frames don't
+ * count (its overlay is drawn for every present: a heavy menu says nothing about the game). */
+static void check_rate(int s, int sub, double tick, int paused)
+{
+    double t = now_ms(), took;
+    if (s == 1) {
+        g_burst0 = paused ? 0.0 : t;
+        return;
+    }
+    if (s != sub - 1 || g_mult_failed || g_burst0 <= 0.0)
+        return;
+    if (++g_check_n <= CHECK_SKIP)
+        return;
+    took = t - g_burst0;
+    g_check_planned += tick * (sub - 2);
+    g_check_took += took;
+    if (took > CHECK_RATIO * tick * (sub - 2))
+        g_check_slow++;
+    if (g_check_n < CHECK_SKIP + CHECK_FRAMES)
+        return;
+    /* one slow window can be a new area's first second (its textures going up); a screen that
+       can't do 120 or a GPU that can't keep up is slow window after window (seen on the Poco:
+       a fallback right after a load, 32 of 60 frames slow) */
+    if (g_check_slow * 2 > CHECK_FRAMES && ++g_check_bad < CHECK_WINDOWS) {
+        log_printf("interp: 120 fps slow for a moment (in-between frames %.1f ms apart, planned %.1f; %d of %d "
+                   "frames slow): checking again", g_check_took / g_check_planned * tick, tick, g_check_slow, CHECK_FRAMES);
+    } else if (g_check_slow * 2 > CHECK_FRAMES) {
+        g_mult_failed = 1;
+        /* the presents that didn't keep up are still queued for the screen, and at 60 they never
+           drain (as many go in as come out): every present waits for a refresh then, and
+           gaps over 20 ms went from 1-2 to 8-45 per 300. A few frames with one present each
+           empty the queue. */
+        g_drain = 3;
+        log_printf("interp: 120 fps can't be kept here (in-between frames %.1f ms apart, planned %.1f; %d of %d "
+                   "frames slow): back to 60 fps", g_check_took / g_check_planned * tick, tick, g_check_slow, CHECK_FRAMES);
+    } else {
+        g_check_bad = 0;
+        if (!g_check_logged) {
+            g_check_logged = 1;
+            log_printf("interp: 120 fps holds (in-between frames %.1f ms apart, planned %.1f; %d of %d frames slow)",
+                       g_check_took / g_check_planned * tick, tick, g_check_slow, CHECK_FRAMES);
+        }
+    }
+    g_check_n = CHECK_SKIP;   /* (it keeps checking: a phone that gets hot may fall behind later) */
+    g_check_slow = 0;
+    g_check_planned = g_check_took = 0.0;
+}
+
 /* The present steps run where the presents happen: on the render thread when there is one
  * (gfx_run), so the slot follows when the frame is actually drawn, not when the game thread
- * finished queuing it. arg: steps << 8 | s for an in-between frame. */
+ * finished queuing it. arg: paused << 24 | mult << 16 | sub << 8 | s for an in-between frame
+ * (sub = presents this game frame covers, mult = presents per 1/60 s, paused = the menu is open). */
 static double g_t0;   /* this frame's first slot (the presenting thread's) */
 
 static void present_mid(double arg)
 {
-    int steps = (int)arg >> 8, s = (int)arg & 255;
-    double tick = 1000.0 / 60.0;
+    int a = (int)arg, paused = a >> 24 & 1, mult = a >> 16 & 255, sub = a >> 8 & 255, s = a & 255;
+    double tick = 1000.0 / (60.0 * mult);
     if (s == 1)
-        g_t0 = present_slot(tick * steps);
+        g_t0 = present_slot(tick * sub);
     wait_until(g_t0 + tick * (s - 1));
     gfx_present_target(1);
     note_present();
+    if (mult == 2)
+        check_rate(s, sub, tick, paused);
 }
 
 static void present_game(double arg)
 {
-    int steps = (int)arg;
-    /* the game's frame goes up half a tick later from the timer thread, so the presenting
+    int a = (int)arg, mult = a >> 16 & 255, sub = a & 255;
+    /* the game's frame goes up one present later from the timer thread, so the presenting
        thread can get on with the next frame meanwhile */
     gfx_compose_target(0);
-    gfx_flip_at(g_t0 + 1000.0 / 60.0 * (steps - 1), note_present);
+    gfx_flip_at(g_t0 + 1000.0 / (60.0 * mult) * (sub - 1), note_present);
+}
+
+static void counted(double arg)
+{
+    (void)arg;
+    fps_counter_present();
 }
 
 void rec_present(int steps)
 {
     static int overflow_logged;
-    int s;
+    int s, mult, sub;
 
-    if (!g_on || !g_ncmds || steps < 2) {
+    if (!g_on || !g_ncmds || steps < 2 || g_drain > 0) {
+        if (g_drain > 0 && g_on && g_ncmds && steps >= 2)
+            g_drain--;
         gfx_present();
+        gfx_run(counted, 0.0);
         reset();
         return;
     }
@@ -413,17 +511,19 @@ void rec_present(int steps)
                    g_ncmds, g_nverts);
     }
     g_overflow = 0;
-    if (steps > 255)
-        steps = 255;
+    mult = rec_rate_hz() / 60;
+    sub = steps * mult;
+    if (sub > 255)
+        sub = 255;
     gfx_finish_depth(0);   /* the game's frame is complete: its depth is final before the replay */
-    for (s = 1; s < steps; s++) {
+    for (s = 1; s < sub; s++) {
         gfx_use_target(1);
-        replay((float)s / (float)steps);
-        gfx_run(present_mid, (double)(steps << 8 | s));
+        replay((float)s / (float)sub);
+        gfx_run(present_mid, (double)(g_check_paused << 24 | mult << 16 | sub << 8 | s));
     }
     gfx_use_target(0);
     if (!g_mid_only)
-        gfx_run(present_game, (double)steps);
+        gfx_run(present_game, (double)(mult << 16 | sub));
     gfx_end_frame();
     reset();
 }

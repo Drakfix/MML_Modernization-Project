@@ -37,6 +37,7 @@
 #include "mml.h"
 #include "packets.h"
 #include "toast.h"
+#include "fps_counter.h"
 #include "terrain.h"
 #include "fog.h"
 #include "lod.h"
@@ -727,6 +728,24 @@ void mml_gfx_options(const char *ini, const char *game_dir, gfx_options *o)
     }
 }
 
+/* [video] aspect: fill (as wide as the screen), 16:9 or 4:3. Until 0.9.1 there was no fixed 16:9: "16:9"
+   meant as wide as the screen, so an ini from then moves to fill once (marker aspect_fill). Only an ini
+   that has the key: a missing one gets the default (fill). */
+void mml_ini_migrate(const char *ini)
+{
+    char a[16];
+    if (GetPrivateProfileIntA("video", "aspect_fill", 0, ini))
+        return;
+    GetPrivateProfileStringA("video", "aspect", "", a, sizeof a, ini);
+    if (!a[0])
+        return;
+    if (strcmp(a, "16:9") == 0) {
+        WritePrivateProfileStringA("video", "aspect", "fill", ini);
+        log_printf("settings: aspect 16:9 (as wide as the screen until 0.9.1) is \"fill\" now");
+    }
+    WritePrivateProfileStringA("video", "aspect_fill", "1", ini);
+}
+
 void mml_init(void)
 {
     char aspect[16], controls[16], mode[16];
@@ -752,16 +771,19 @@ void mml_init(void)
 #endif
     addr_detect();   /* US or Japanese program: every GA() after this translates for it */
 
-    ini_string("video", "aspect", "16:9", aspect, sizeof aspect);
+    mml_ini_migrate(g_ini);
+    ini_string("video", "aspect", "fill", aspect, sizeof aspect);
     g_closer = ini_float("video", "closer_factor", g_closer);
 
     install_timing();
     disable_dev_keys();
     ini_string("video", "mode", "anamorphic", mode, sizeof mode);
     if (strcmp(aspect, "4:3") != 0) {
+        int width = GetPrivateProfileIntA("video", "native_width", 0, g_ini);
+        if (width <= 0 && strcmp(aspect, "16:9") == 0)
+            width = 854;   /* a 16:9 picture whatever the screen: bars where it's wider or narrower */
         if (_stricmp(mode, "native") == 0)
-            g_native_wide = display_install(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
-                                            GetPrivateProfileIntA("video", "native_width", 0, g_ini),
+            g_native_wide = display_install(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), width,
                                             GetPrivateProfileIntA("video", "hud_edges", 1, g_ini),
                                             ini_float("video", "hud_scale", 1.0f));
         display_set_minimap_pos(GetPrivateProfileIntA("video", "minimap_x", 6, g_ini),
@@ -934,6 +956,7 @@ void mml_init(void)
                 intro_video_install(g_home);   /* our intro player, if Modernization\intro.mpg exists */
                 crosshair_install();               /* camera aim's crosshair, under everything else */
                 toast_use_ui();                    /* notices in our UI's style, under the menu */
+                fps_counter_install(GetPrivateProfileIntA("video", "show_fps", 0, g_ini));   /* [video] show_fps */
                 hints_install(g_ini);              /* shortcut card on the title screen */
                 menu_install(g_ini, g_home);   /* in-game options (F1 / Back + Start) */
             }
@@ -943,7 +966,7 @@ void mml_init(void)
                 g_bglayer_on = g_smooth_bg = 1;
                 g_bglayer_log = GetPrivateProfileIntA("debug", "bglayer_log", 0, g_ini);
             }
-            /* [video] interp=1: 60 fps by drawing an in-between frame per game tick */
+            /* [video] interp=1: 60 fps by drawing an in-between frame per game tick; 2: 120 fps */
             {
                 int want = GetPrivateProfileIntA("video", "interp", 1, g_ini);
                 g_interp_census = GetPrivateProfileIntA("debug", "interp_census", 0, g_ini);
@@ -954,7 +977,8 @@ void mml_init(void)
                     rec_enable(want);
                     rec_debug(GetPrivateProfileIntA("debug", "interp_mid_only", 0, g_ini),
                               GetPrivateProfileIntA("debug", "interp_timing", 0, g_ini));
-                    log_printf("interp: %s", want ? "60 fps interpolation ON" : "30 fps (60 available in game)");
+                    log_printf("interp: %s", want >= 2 ? "120 fps interpolation ON" : want ? "60 fps interpolation ON"
+                                                                  : "30 fps (60 available in game)");
                     clipfix_report(1);
                 }
             }

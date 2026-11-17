@@ -197,7 +197,7 @@ LEGACY_RES = {"640x480": "app(1)", "1280x960": "app(2)", "1920x1440": "app(3)",
               "2560x1920": "app(4)", "3200x2400": "app(5)"}   # 0.1.x settings.json values
 RUNNER64 = "mml_run64.exe"   # the standalone game: recompiled, 64-bit, no original code
 DEFAULTS = {"renderer": "mml", "window": "fullscreen", "engine": "classic",
-            "res": "display", "aspect": "16:9", "controls": "modern", "intro": "play", "jp_buttons": "us",
+            "res": "display", "aspect2": "fill", "controls": "modern", "intro": "play", "jp_buttons": "us",
             "voices": "english", "subtitles": "on", "names": "us",
             "scalefilter": "bilinear", "texfilter": "af16x", "aa": "off", "fog": "original",
             "lod": "full", "fps": "60", "reticle": "FFD840", "aim": "character", "crosshair": "on",
@@ -278,6 +278,9 @@ def load_settings():
     try:
         data = json.load(open(SETTINGS, encoding="utf-8"))
         s.update({k: v for k, v in data.items() if k in DEFAULTS})
+        if "aspect2" not in data and "aspect" in data:
+            # until 0.9.1 "16:9" meant as wide as the screen: that is Fill screen now
+            s["aspect2"] = "4:3" if data["aspect"] == "4:3" else "fill"
     except Exception:
         pass
     s["res"] = LEGACY_RES.get(s["res"], s["res"])
@@ -331,7 +334,11 @@ def import_mml_ini(s):
         s["subtitles"] = "on" if v else "off"
     v = num("video", "interp")
     if v is not None:
-        s["fps"] = "60" if v else "30"
+        s["fps"] = "120" if v == 2 else "60" if v else "30"
+    v = get("video", "aspect")
+    if v in ("fill", "16:9", "4:3"):
+        # (an ini from before the marker: its "16:9" was as wide as the screen)
+        s["aspect2"] = "fill" if v == "16:9" and not num("video", "aspect_fill") else v
     v = num("video", "render_scale")
     if v is not None:
         s["res"] = "display" if v <= 0 else f"app({v})"
@@ -443,7 +450,7 @@ def start_game(s):
     button and the --play direct-launch mode."""
     if not GAME_DIR:
         return None
-    width = native_width()
+    width = 854 if s["aspect2"] == "16:9" else native_width()
     write_ini(s, width)
     write_mml_ini(s, width)
     log = os.path.join(GAME_DIR, "Modernization", "launcher.log")
@@ -489,7 +496,7 @@ def write_ini(s, width):
     out_path = os.path.join(GAME_DIR, "DDrawCompat.ini")
     overrides = {
         "resolutionscale": f"ResolutionScale         = {s['res']}\n",
-        "displayaspectratio": f"DisplayAspectRatio      = {'display' if s['aspect'] == '16:9' else '4:3'}\n",
+        "displayaspectratio": f"DisplayAspectRatio      = {dict(fill='display').get(s['aspect2'], s['aspect2'])}\n",
         "resolutionscalefilter": f"ResolutionScaleFilter   = {'bilinear' if s['scalefilter'] == 'bilinear' else 'point'}\n",
         "texturefilter": f"TextureFilter           = {s['texfilter']}\n",
         "antialiasing": f"Antialiasing            = {s['aa']}\n",
@@ -601,7 +608,8 @@ def write_mml_ini(s, width):
     scale = 0 if s["res"] == "display" else int("".join(c for c in s["res"] if c.isdigit()) or 0)
     merge_ini(os.path.join(GAME_DIR, "mml.ini"), {
         "video": {
-            "aspect": "16:9" if s["aspect"] == "16:9" else "4:3",
+            "aspect": s["aspect2"] if s["aspect2"] in ("fill", "16:9") else "4:3",
+            "aspect_fill": 1,   # (the value has its new meaning: mml.dll moves nothing)
             "mode": "native",
             "native_width": width,
             # renderer "vulkan" = our renderer on the Vulkan backend ([video] backend)
@@ -616,7 +624,7 @@ def write_mml_ini(s, width):
             "nearest_textures": 1 if s["texfilter"] == "point" else 0,
             "fog": s["fog"],
             "lod": s["lod"],
-            "interp": 1 if s["fps"] == "60" else 0,
+            "interp": 2 if s["fps"] == "120" else 1 if s["fps"] == "60" else 0,
             "shader": s.get("shader", ""),
             "shader_scale": 1 if s.get("shader_res", "game") == "game" else 0,
         },
@@ -816,8 +824,9 @@ class App:
                "Exclusive = lowest GPU use, limited Alt+Tab and capture")
         option("Resolution", "res", RES_CHOICES, "Display = your monitor (recommended)")
         r = pair()
-        option("Aspect ratio", "aspect", [("16:9 Wide", "16:9"), ("4:3 Classic", "4:3")], row=r, side="left")
-        option("Frame rate", "fps", [("60 fps", "60"), ("30 fps", "30")], row=r, side="right")
+        option("Aspect ratio", "aspect2",
+               [("Fill screen (experimental)", "fill"), ("16:9", "16:9"), ("4:3", "4:3")], row=r, side="left")
+        option("Frame rate", "fps", [("60 fps", "60"), ("120 fps (experimental)", "120"), ("30 fps", "30")], row=r, side="right")
         option("Intro video", "intro",
                [("Play (any button skips)", "play"), ("Skip entirely", "skip")])
         if not JAPANESE:

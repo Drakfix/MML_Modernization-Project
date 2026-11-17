@@ -1429,6 +1429,39 @@ static int make_surface(void)
 #endif
 }
 
+#ifdef __ANDROID__
+#include <dlfcn.h>
+int rec_rate_hz(void);   /* frame_rec.c: 120 while 120 fps is on and kept up, else 60 */
+
+/* Android sets the screen's refresh rate from what the app in front asks for (phones with 120 Hz
+   screens often run games at 60 otherwise): ask for the rate frame_rec.c presents at, again for
+   each new window and when it changes. A screen that can't stays as it is, and frame_rec.c then
+   notices that 120 fps isn't kept and asks for 60. ANativeWindow_setFrameRate is Android 11+:
+   looked up, not linked (the app runs from Android 9). */
+static void follow_frame_rate(void)
+{
+    typedef int32_t (*set_rate_fn)(void *window, float rate, int8_t compatibility);
+    static set_rate_fn set_rate;
+    static int looked, asked_hz;
+    static void *asked_win;
+    int hz = rec_rate_hz();
+    if (!v.native || (v.native == asked_win && hz == asked_hz))
+        return;
+    if (!looked) {
+        void *lib = dlopen("libandroid.so", RTLD_NOW);
+        looked = 1;
+        set_rate = lib ? (set_rate_fn)dlsym(lib, "ANativeWindow_setFrameRate") : NULL;
+        if (!set_rate)
+            log_printf("gfx: this Android can't be asked for a refresh rate (needs Android 11)");
+    }
+    asked_win = v.native;
+    asked_hz = hz;
+    if (set_rate)
+        log_printf("gfx: asked the screen for %d Hz (%d)", hz,
+                   (int)set_rate(v.native, (float)hz, 0 /* ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT */));
+}
+#endif
+
 /* Android takes the window's surface away while the app is in the background (Home, the screen
    off, another app in front) and gives a new one when it returns; SDL keeps the current one in
    a window property. Before each frame: no window, no surface (the frame isn't shown); a new
@@ -1438,8 +1471,10 @@ static int surface_follow(void)
 #ifdef __ANDROID__
     void *now = SDL_GetPointerProperty(SDL_GetWindowProperties(plat_sdl_window()),
                                        SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
-    if (v.surface && now == v.native && !v.surface_bad)
+    if (v.surface && now == v.native && !v.surface_bad) {
+        follow_frame_rate();
         return 1;
+    }
     if (v.surface) {
         vk_wait_flip();   /* (a frame waiting for its moment goes to the old surface, or fails) */
         vkDeviceWaitIdle(v.dev);
@@ -1458,6 +1493,7 @@ static int surface_follow(void)
         return 0;
     v.swap_dirty = 1;
     log_printf("gfx: a new window surface (the app is back)");
+    follow_frame_rate();
     return 1;
 #else
     return 1;

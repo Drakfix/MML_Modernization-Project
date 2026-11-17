@@ -21,7 +21,12 @@ typedef struct {
     float near_z;        /* REC_PERSP: in-between triangles are cut at this depth, like the game's */
 } rec_prev;
 
+/* on: 0 = off (30 fps), 1 = 60 fps, 2 = 120 fps (three in-between frames per game frame) */
 void rec_enable(int on);
+/* the rate presented now: 120 when asked for and kept up, else 60 (Android asks the screen for it) */
+int rec_rate_hz(void);
+/* the in-game menu is open (1) or closed: while open, the 120 fps check doesn't count frames */
+void rec_check_pause(int paused);
 /* debug: show only the in-between frames; log present timing */
 void rec_debug(int mid_only, int timing);
 int rec_enabled(void);
@@ -37,5 +42,5 @@ void rec_tex_destroy(gfx_tex *t);
 
 /* show the in-between frame(s), then the game's frame.
  * steps = game ticks of display time this frame covers in 60 Hz units
- * (2 at 30 fps: one in-between frame; 4 at 15 fps: three). */
+ * (2 at 30 fps: one in-between frame; 4 at 15 fps: three); twice as many at 120 fps. */
 void rec_present(int steps);

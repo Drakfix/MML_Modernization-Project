@@ -26,5 +26,7 @@ void mml_transition_flip_present(void);
 void mml_sleep_ms(double ms);
 /* everything mml installs (the DLL's DllMain; the standalone runner after loading the game) */
 void mml_init(void);
+/* old settings in mml.ini to their current form (aspect 16:9 -> fill): before anything reads it */
+void mml_ini_migrate(const char *ini);
 #include "gfx.h"
 void mml_gfx_options(const char *ini, const char *game_dir, gfx_options *o);

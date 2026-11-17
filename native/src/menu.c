@@ -30,6 +30,7 @@
 #include "display.h"
 #include "fog.h"
 #include "frame_rec.h"
+#include "fps_counter.h"
 #include "gamefiles.h"
 #include "gfx.h"
 #include "gfx_ui.h"
@@ -53,7 +54,7 @@
 #define MAX_PRESETS 4096
 
 enum {
-    IT_FPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
+    IT_FPS, IT_SHOWFPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
     IT_HUD_SCALE,    /* size of the corner HUD: gauges and minimap ([video] hud_scale) */
     IT_ANIMBLEND,    /* animation blending ([video] anim_blend) */
@@ -140,7 +141,8 @@ static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "COMBA
 #define LOCKCAM_HELP "Over the shoulder: aiming looks past Mega Man's shoulder, at the locked enemy or the horizon, and he keeps moving. " PT_R3 " swaps sides."
 
 static const item g_game_items[] = {
-    { 0, IT_FPS, "Frame rate", "60 fps adds in-between frames for smooth motion. The game itself still runs at 30." },
+    { 0, IT_FPS, "Frame rate", "60 and 120 fps add in-between frames for smooth motion. 120 is experimental and needs a 120 Hz screen. The game itself still runs at 30." },
+    { 0, IT_SHOWFPS, "FPS counter", "Shows how many frames per second reach the screen, in the top-right corner." },
     { 0, IT_VSYNC, "Vsync", "Locks frames to your monitor's refresh so the picture never tears. Adds a little lag." },
     { 0, IT_RES, "Resolution", "Display renders at your monitor's resolution. 1x to 4x are multiples of the game's 480 lines." },
     { 0, IT_MSAA, "Antialiasing", "Smooths jagged polygon edges. ReShade depth effects stop working while it's on." },
@@ -190,7 +192,8 @@ static const choice CH_RENDERER[] = { { "Direct3D 11", "video.renderer=mml;video
 static const choice CH_WINDOW[] = { { "Borderless window", "video.windowed=0;video.exclusive=0" },
                                     { "Exclusive fullscreen", "video.windowed=0;video.exclusive=1" },
                                     { "Windowed", "video.windowed=1;video.exclusive=0" } };
-static const choice CH_ASPECT[] = { { "16:9 widescreen", "video.aspect=16:9" }, { "4:3 original", "video.aspect=4:3" } };
+static const choice CH_ASPECT[] = { { "Fill screen (experimental)", "video.aspect=fill" },
+                                    { "16:9", "video.aspect=16:9" }, { "4:3 original", "video.aspect=4:3" } };
 static const choice CH_ENGINE[] = { { "Original (32-bit)", "general.engine=classic" },
                                     { "Recompiled (64-bit)", "general.engine=standalone" } };
 static const choice CH_INTRO[] = { { "Play", "general.intro=play" }, { "Skip", "general.intro=skip" } };
@@ -302,12 +305,18 @@ static const item g_start_items[] = {
     { PG_DISPLAY, IT_RES, "Render resolution", "The resolution the 3D scene is rendered at before it's scaled to "
       "the screen. Native renders at your display's resolution. 1x to 4x are multiples of the game's original 480 "
       "lines: lower values keep the original pixelated look and cost less GPU time." },
-    { PG_DISPLAY, IT_CHOICE, "Aspect ratio", "16:9 widescreen renders a wider field of view, places the HUD for a "
-      "wide screen and stretches 4:3 backgrounds to fit. 4:3 original keeps the original framing, with bars on a "
-      "wide screen.", CH_ASPECT, NCH(CH_ASPECT) },
+    { PG_DISPLAY, IT_CHOICE, "Aspect ratio", "Fill screen (experimental) makes the picture as wide as your "
+      "screen (16:10, ultrawide, a phone): a wider field of view, the HUD at the screen's edges, 4:3 backgrounds stretched to fit. "
+      "On screens wider than 16:9 a few scenes don't draw all the way to the sides. 16:9 keeps the widescreen view "
+      "the game's scenes are made for, with bars on wider or narrower screens. 4:3 original keeps the original "
+      "framing.", CH_ASPECT, NCH(CH_ASPECT) },
     { PG_DISPLAY, IT_FPS, "Frame rate", "The game's logic always runs at 30 fps. At 60 fps the renderer draws an "
       "interpolated frame between every two game frames: smoother camera and motion, a little more GPU time, no "
-      "change to game speed. 30 fps shows the original frames only." },
+      "change to game speed. 120 fps (experimental, so far tested on Android only) draws three, for screens that "
+      "refresh at 120 Hz; where the screen or the GPU "
+      "can't keep up it goes back to 60 by itself. 30 fps shows the original frames only." },
+    { PG_DISPLAY, IT_SHOWFPS, "FPS counter", "Shows in the top-right corner how many frames per second reach "
+      "the screen while you play, the in-between frames included." },
     { PG_DISPLAY, IT_VSYNC, "V-Sync", "Synchronizes frames with the monitor's refresh rate. On removes screen "
       "tearing and adds up to one frame of input latency. Off presents frames as soon as they're ready.",
       NULL, 0, WL },
@@ -504,7 +513,7 @@ static struct {
     int pad_ui;                             /* button prompts for the pad (else the keyboard) */
     char ini[MAX_PATH], game_dir[MAX_PATH];
     /* values */
-    int fps60, vsync, res, msaa, shader_game_res, nearest, texf, fog, lod_full, hdtex;   /* texf: TEXF_* */
+    int fps, showfps, vsync, res, msaa, shader_game_res, nearest, texf, fog, lod_full, hdtex;   /* texf: TEXF_* */
     int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens, trans;
     int aim_free, walk_shoot, backjog, assist, shcam, anim_blend, camfade;   /* crosshair: 0 off, 1 while aiming, 2 always */
     int hud_scale;                      /* index into HUD_SCALES */
@@ -814,8 +823,13 @@ static void apply(int kind)
     switch (kind) {
     case IT_FPS:
         if (!M.start)
-            rec_enable(M.fps60);
-        ini_int("video", "interp", M.fps60);
+            rec_enable(M.fps);
+        ini_int("video", "interp", M.fps);
+        break;
+    case IT_SHOWFPS:
+        if (!M.start)
+            fps_counter_set(M.showfps);
+        ini_int("video", "show_fps", M.showfps);
         break;
     case IT_VSYNC:
         gfx_set_vsync(M.vsync);
@@ -1003,7 +1017,8 @@ static void change_item(const item *it, int dir);
 static void change(int kind, int dir)
 {
     switch (kind) {
-    case IT_FPS: M.fps60 = !M.fps60; break;
+    case IT_FPS: M.fps = cycle(M.fps, 3, dir); break;
+    case IT_SHOWFPS: M.showfps = !M.showfps; break;
     case IT_VSYNC: M.vsync = !M.vsync; break;
     case IT_RES: M.res = cycle(M.res, 5, dir); break;
     case IT_MSAA: M.msaa = M.msaa == 1 ? (dir > 0 ? 4 : 8) : M.msaa == 4 ? (dir > 0 ? 8 : 1) : (dir > 0 ? 1 : 4); break;
@@ -1154,7 +1169,11 @@ static void value_text(int kind, char *out, size_t n)
     static const char *RES[] = { "Native", "1x (480p)", "2x (960p)", "3x (1440p)", "4x (1920p)" };
     static const char *FOG[] = { "Original", "Reduced", "Off" };
     switch (kind) {
-    case IT_FPS: strcpy_s(out, n, M.fps60 ? "60 fps (interpolated)" : "30 fps (original)"); break;
+    case IT_FPS:
+        strcpy_s(out, n, M.fps == 2 ? (!M.start && rec_enabled() && rec_rate_hz() < 120 ? "120 fps (60 here)" : "120 fps (experimental)")
+                         : M.fps ? "60 fps (interpolated)" : "30 fps (original)");
+        break;
+    case IT_SHOWFPS: strcpy_s(out, n, M.showfps ? "On" : "Off"); break;
     case IT_VSYNC: strcpy_s(out, n, M.vsync ? "On" : "Off"); break;
     case IT_RES: strcpy_s(out, n, RES[M.res]); break;
     case IT_MSAA: strcpy_s(out, n, M.msaa > 1 ? (M.msaa == 4 ? "MSAA 4x" : "MSAA 8x") : "Off"); break;
@@ -1273,6 +1292,7 @@ static int toggle_state(int kind)
     case IT_GF_SUBS: return M.tk_state == TASK_RUNNING && M.tk_kind == kind ? -1 : M.subs_there ? M.subs_on : 0;
     case IT_GF_VOICES: return M.tk_state == TASK_RUNNING && M.tk_kind == kind ? -1 : M.voices_built && M.voices_jp;
     case IT_VSYNC: return M.vsync;
+    case IT_SHOWFPS: return M.showfps;
     case IT_HDTEX: return M.hdtex;
     case IT_INVERT_X: return M.inv_x;
     case IT_INVERT_Y: return M.inv_y;
@@ -2338,6 +2358,7 @@ static void move_cursor(int dir)
 static void set_open(int open)
 {
     M.open = open;
+    rec_check_pause(open);
     M.block = 1;   /* until every key/button is let go: nothing leaks into the game */
     if (open) {
         M.page_since = now_s();
@@ -2867,8 +2888,11 @@ static void load_values(const char *ini, const char *game_dir)
     strcpy_s(M.ini, sizeof M.ini, ini);
     strcpy_s(M.game_dir, sizeof M.game_dir, game_dir);
     pad_prompts_load(ini);
-    M.fps60 = GetPrivateProfileIntA("video", "interp", 1, ini) != 0;
+    M.fps = GetPrivateProfileIntA("video", "interp", 1, ini);
+    if (M.fps < 0 || M.fps > 2)
+        M.fps = 1;
     M.vsync = GetPrivateProfileIntA("video", "vsync", 0, ini) != 0;
+    M.showfps = GetPrivateProfileIntA("video", "show_fps", 0, ini) != 0;
     M.res = GetPrivateProfileIntA("video", "render_scale", 0, ini);
     if (M.res < 0 || M.res > 4)
         M.res = 0;
@@ -2986,6 +3010,7 @@ static void draw_start_backdrop(float w, float h, float u, double t, int with_ti
 
 int menu_start(const char *ini, const char *game_dir)
 {
+    mml_ini_migrate(ini);
     g_items = g_start_items;
     NITEMS = (int)(sizeof g_start_items / sizeof g_start_items[0]);
     PAGES = START_PAGES;

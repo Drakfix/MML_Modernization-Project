@@ -205,11 +205,21 @@ the Japanese line being spoken.
 
 ### Graphics
 
-- **True 16:9 widescreen.** The game renders to a wide surface: the 3D view gets the extra
-  width, HUD elements are placed at correct proportions, and 4:3 backgrounds are stretched to
-  fit. A 4:3 mode is available.
+- **True widescreen.** The game renders to a wide surface: the 3D view gets the extra width,
+  HUD elements sit at the screen's edges at correct proportions, and 4:3 backgrounds are
+  stretched to fit. Three aspect ratio choices:
+  - **Fill screen** (experimental; the default) makes the picture as wide as your display:
+    16:9, 16:10, an ultrawide monitor or a phone. On screens wider than 16:9, a few scenes
+    don't draw all the way to the sides.
+  - **16:9** keeps a 16:9 picture on any screen, with bars on wider or narrower displays.
+  - **4:3** keeps the original framing.
 - **60 fps.** The game logic still runs at 30 fps; the renderer draws an interpolated frame in
   between. Can be switched back to 30 fps.
+- **120 fps (experimental).** For screens that refresh at 120 Hz, the renderer draws three
+  interpolated frames per game frame. Where the screen or the GPU can't keep up, it goes back to
+  60 fps by itself. So far tested on Android only.
+- **FPS counter.** An optional counter in the top-right corner shows how many frames per second
+  reach the screen.
 - **Resolution and image quality.** Render at your display's resolution or at 1x to 5x the
   game's resolution, with up to 8x MSAA, 16x anisotropic filtering and a choice of bilinear or
   nearest-neighbour upscaling.
