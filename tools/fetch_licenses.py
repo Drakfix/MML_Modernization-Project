@@ -41,7 +41,7 @@ NOTICES = """MEGA MAN LEGENDS - MODERNIZATION PROJECT
 Third-Party Notices and Licenses
 ================================================================================
 
-The Modernization Project itself (the launcher, the widescreen / camera / controls
+The Modernization Project itself (the start menu, the widescreen / camera / controls
 / HUD / audio-timing work, and the exe byte-patch) is this project's own work and
 contains NO Capcom code or data. It requires your own copy of the Mega Man Legends
 PC game.

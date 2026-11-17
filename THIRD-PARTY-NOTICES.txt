@@ -2,7 +2,7 @@ MEGA MAN LEGENDS - MODERNIZATION PROJECT
 Third-Party Notices and Licenses
 ================================================================================
 
-The Modernization Project itself (the launcher, the start menu, the renderers, the
+The Modernization Project itself (the start menu, the renderers, the
 widescreen / camera / controls / HUD / audio-timing work, and the exe byte-patch) is this
 project's own work. It contains no game assets. It does include a translation of the game's
 program code made by the project's recompiler (mml.dll, mml_run64.exe, the Android app and

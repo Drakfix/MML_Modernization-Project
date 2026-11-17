@@ -2,7 +2,7 @@
 
     python tools/icons/make_icons.py
 
-- art/mml.ico for Windows (the launcher, the installer, the standalone game): the hand-made
+- art/mml.ico for Windows (the installer, the start menu and the standalone game): the hand-made
   16, 32 and 256 px images, with 48, 64 and 128 px scaled down from the 256 one.
 - android/res/mipmap-*/ic_launcher_foreground.png for Android: the adaptive icon's foreground
   at each screen density (108 dp: 108 to 432 px). Launchers mask an adaptive icon to its central

@@ -166,7 +166,7 @@ const char *update_current(void)
     return v;
 }
 
-/* "v0.7.3-beta" -> 0.7.3 as one number to compare (mml_update.py numbers) */
+/* "v0.7.3-beta" -> 0.7.3 as one number to compare */
 static long long version_number(const char *s)
 {
     long long n[3] = { 0, 0, 0 };

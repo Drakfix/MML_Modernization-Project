@@ -2,7 +2,7 @@
 
 Diffs a vanilla and a patched MEGAMAN.EXE to produce the byte-patch table (only this
 project's own bytes), writes src/patch_manifest.py, and assembles the runtime package
-(wrappers, config templates, launcher, intro, licenses) that the installer bundles.
+(wrappers, config templates, the start menu and engines, intro, licenses) that the installer bundles.
 
 Requires a working game folder containing MEGAMAN.EXE.orig (vanilla), the patched
 MEGAMAN.EXE, the wrapper DLLs and the intro. Set its path with MML_GAME_DIR. End users
@@ -21,7 +21,6 @@ SRC = os.path.join(REPO, "src")
 CONFIG = os.path.join(REPO, "config")
 LICENSES = os.path.join(REPO, "licenses")
 OUTDIR = os.path.join(REPO, "dist", "release")
-GUI_EXE = os.path.join(REPO, "dist", "MML Launcher.exe")
 
 # Game-specific inputs (the copyrighted executable, the redistributable wrapper DLLs and
 # the intro) come from the maintainer's game folder, set via MML_GAME_DIR.
@@ -35,8 +34,8 @@ CUSTOM_AVI = os.path.join(GAME, "CAPCOM.AVI")
 DLL_FILES = ["ddraw.dll", "dinput.dll", "dsound.dll", "dsoal-aldrv.dll", "SDL3.dll", "librashader.dll"]   # from GAME
 CONFIG_FILES = ["DDrawCompat.ini.16to9", "DDrawCompat.ini.4to3", "mml.ini"]     # from CONFIG
 NATIVE_DLL = os.path.join(REPO, "native", "build", "mml.dll")
-# the standalone game (launcher: Advanced, Game engine): the recompiled game, 64-bit, with its own
-# 64-bit SDL3 in x64\ (from the game folder)
+# the start menu (mml_run64.exe --menu) and the standalone game (start menu: Executable, Recompiled):
+# the recompiled game, 64-bit, with its own 64-bit SDL3 in x64\ (from the game folder)
 RUNNER64 = os.path.join(REPO, "native", "build", "mml_run64.exe")
 if not os.path.isfile(NATIVE_DLL):
     raise SystemExit("native/build/mml.dll is missing - run native\\build.bat first.")
@@ -139,8 +138,7 @@ OUR_DLLS = {{
 open(os.path.join(SRC, "patch_manifest.py"), "w", encoding="utf-8").write(MANIFEST)
 
 if "--manifest-only" in sys.argv:
-    # build_release runs this first: the launcher imports the manifest, so it has to
-    # exist before the launcher is built, and the launcher exe goes into the package
+    # (the manifest alone, for Setup run from source: python src/mml_installer.py)
     print("patch_manifest.py written (manifest only)")
     sys.exit(0)
 
@@ -174,10 +172,6 @@ if os.path.isfile(INTRO_MPG):
     shutil.copyfile(INTRO_MPG, os.path.join(mod, "intro.mpg"))
 else:
     print("WARNING: Modernization/intro.mpg missing in the game folder - package keeps the MCI intro only")
-if os.path.exists(GUI_EXE):
-    shutil.copyfile(GUI_EXE, os.path.join(gf, "MML Launcher.exe"))
-else:
-    print("WARNING: dist/MML Launcher.exe missing - run build_gui.bat first; package will be CLI-only")
 
 # Third-party license texts + attribution. THIRD-PARTY-NOTICES.txt is placed at the game
 # folder root; the full license texts go into a licenses/ subfolder. Both install with the
@@ -213,7 +207,7 @@ Steps:
   2. Install the Modernization intro video (your original CAPCOM.AVI is kept as
      CAPCOM.AVI.original). Skip with --no-intro.
   3. Install the runtime stack (mml.dll, DDrawCompat/Xidi/DSOAL wrappers, config
-     templates, the launcher). Any FOREIGN wrapper DLLs from a
+     templates, the start menu). Any FOREIGN wrapper DLLs from a
      repack (dxwrapper, dgVoodoo2, ReShade, ENB shims...) are auto-detected by name
      +hash and QUARANTINED to Modernization/quarantined-wrappers (moved, not deleted;
      move them back to undo). Skip all of step 3 with --no-runtime.
@@ -357,7 +351,7 @@ def install_runtime(game, pkg):
         for fn in files:
             shutil.copyfile(os.path.join(root, fn), os.path.join(tgt, fn))
             copied += 1
-    print(f"Runtime stack installed ({{copied}} files: mml.dll, wrappers, configs, launcher).")
+    print(f"Runtime stack installed ({{copied}} files: mml.dll, mml_run64.exe, wrappers, configs).")
 
 
 def main():
@@ -375,7 +369,7 @@ def main():
     else:
         install_runtime(game, pkg)
     print()
-    print("DONE. To play: double-click 'MML Launcher.exe' in the game folder (settings),")
+    print("DONE. To play: run 'mml_run64.exe --menu' in the game folder (the start menu: settings),")
     print("or just run MEGAMAN.EXE - the modernization loads with the game itself.")
 
 
@@ -391,8 +385,8 @@ with open(os.path.join(OUTDIR, "README.txt"), "w") as f:
 ============================================================================
 
 Install:  python apply_modernization_patch.py <path-to-your-game-folder>
-Then:     double-click 'MML Launcher.exe' in the game folder to pick settings
-          and play, or just run MEGAMAN.EXE (settings live in mml.ini).
+Then:     run 'mml_run64.exe --menu' in the game folder (the start menu) to pick
+          settings and play, or just run MEGAMAN.EXE (settings live in mml.ini).
 Requires: your own install of the Mega Man Legends PC port (CD-ROM release).
 
 What the installer does:
@@ -405,7 +399,7 @@ What the installer does:
   2. Installs the Modernization intro video (original kept as CAPCOM.AVI.original).
   3. Installs the runtime stack: DDrawCompat (ddraw.dll), Xidi (dinput.dll),
      DSOAL (dsound.dll + dsoal-aldrv.dll), SDL3 (SDL3.dll, controllers), librashader (librashader.dll, optional shaders), mml.dll (the Modernization runtime,
-     loaded by the patched exe itself), config templates and the launcher. Foreign wrapper DLLs from
+     loaded by the patched exe itself), config templates and the start menu (mml_run64.exe). Foreign wrapper DLLs from
      repacks (dxwrapper, dgVoodoo2, ReShade, ENB...) are auto-detected and
      quarantined to Modernization/quarantined-wrappers (moved, never deleted -
      move them back to restore the old setup).

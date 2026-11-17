@@ -343,7 +343,7 @@ static int st_allowed = 1, flick_armed = 1;   /* st_allowed: the player has the 
 static int cam_owned = 1;                      /* ...and the orbit drives the camera (after the settle) */
 static volatile LONG cam_follow;               /* modern controls on, the game camera still settling */
 static volatile LONG cam_fresh;                /* the camera updates paused (a room load): take over at once */
-/* launcher Controls tab: camera speed (signed: negative = inverted) and deadzone */
+/* the menus' Controls page: camera speed (signed: negative = inverted) and deadzone */
 static double g_yaw_speed = YAW_SPEED, g_pitch_speed = PITCH_SPEED, g_stick_dz = STICK_DZ;
 static double cam_dist_cur = -1;
 static int32_t *g_view_target;   /* handed to the game (EAX): in guest memory */

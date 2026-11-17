@@ -1,5 +1,5 @@
-/* kbm.h's key names, on every platform: the names mml.ini's key_* values use (the launcher and the
- * start menu use the same ones), as Windows virtual keys. kbm.c (Windows) and kbm_sdl.c (SDL) read
+/* kbm.h's key names, on every platform: the names mml.ini's key_* values use (the start menu and
+ * the in-game menu use the same ones), as Windows virtual keys. kbm.c (Windows) and kbm_sdl.c (SDL) read
  * the keys by those codes. */
 #include <windows.h>   /* (native/compat elsewhere) */
 #include <stdio.h>

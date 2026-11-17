@@ -7,16 +7,19 @@ not have to install anything separately.
 Setup installs the app (do_app_install): the start menu, both game engines, the runtime and the
 intro, into a folder the player chooses. The games are added in the start menu (its Game page):
 the player picks their Mega Man Legends and/or Rockman DASH folder and it is copied into the app's
-folder, patched there. A game folder an earlier Setup (0.5 to 0.7) patched in place is still
-updated where it is (do_install). Both are plain functions, independent of the GUI, so they can
+folder, patched there. A game folder an earlier Setup patched in place is still updated where
+it is (do_install), and its old launcher (MML Launcher.exe, up to 0.9) is replaced by the start
+menu (retire_launcher). Both are plain functions, independent of the GUI, so they can
 be tested directly. Patch data comes from patch_manifest.py.
 """
 import ctypes
 import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 
 import patch_manifest as M
 
@@ -223,7 +226,7 @@ def install_jp_voices(game_dir, jp_dir, log):
     except BaseException as e:
         return f"The Japanese voices couldn't be built: {e}"
     set_ini(os.path.join(game_dir, "mml.ini"), "general", {"voices": "japanese"})
-    return "Japanese voices installed (the launcher switches between them and the English ones)."
+    return "Japanese voices installed (the start menu's Voice language switches between them and the English ones)."
 
 
 HOOK_DLL_NAMES = [n.lower() for n in M.HOOK_DLL_NAMES]
@@ -355,6 +358,7 @@ def do_install(game_dir, add_desktop_shortcut, log, jp_dir=None, subtitles=False
             shutil.copyfile(os.path.join(root, fn), dst)
             copied += 1
     log(f"Installed {copied} files.", 0.80)
+    retire_launcher(game_dir, log)
 
     # 4. intro video --------------------------------------------------------------
     src_avi = os.path.join(res, "CAPCOM.AVI")
@@ -399,7 +403,7 @@ def is_app_folder(path):
     return bool(path) and os.path.isfile(os.path.join(path, APP_MARKER))
 
 
-# what an earlier Setup left in a game folder it patched in place (0.1 to 0.7: the launcher, the
+# what an earlier Setup left in a game folder it patched in place (0.1 to 0.9: the launcher, the
 # runtime, the settings, the executable's backup)
 PATCHED_SIGNS = ("MML Launcher.exe", "mml.dll", "mml.ini")
 
@@ -473,14 +477,13 @@ def do_app_install(app_dir, add_desktop_shortcut, log):
         tgt = app_dir if rel == "." else os.path.join(app_dir, rel)
         os.makedirs(tgt, exist_ok=True)
         for fn in files:
-            if fn.lower() == "mml launcher.exe":
-                continue   # (the start menu is the app's launcher)
             dst = os.path.join(tgt, fn)
             if fn.lower() in KEEP_IF_PRESENT and os.path.exists(dst):
                 continue
             shutil.copyfile(os.path.join(root, fn), dst)
             copied += 1
     log(f"Installed {copied} files.", 0.80)
+    retire_launcher(app_dir, log)   # (Setup 0.8.0 to 0.8.3 put it into some game folders)
     # our intro as CAPCOM.AVI for the Compatibility renderer (the start menu's import keeps it)
     src_avi = os.path.join(res, "CAPCOM.AVI")
     dst_avi = os.path.join(app_dir, "CAPCOM.AVI")
@@ -495,32 +498,130 @@ def do_app_install(app_dir, add_desktop_shortcut, log):
     if add_desktop_shortcut:
         log("Adding the Desktop shortcut...", 0.90)
         try:
-            make_desktop_shortcut(app_dir, "Mega Man Legends", app=True)
+            make_desktop_shortcut(app_dir, "Mega Man Legends")
         except Exception as e:
             log(f"(couldn't add the shortcut: {e})", 0.90)
     log("Done!", 1.0)
     return True, "Installation complete."
 
 
-def make_desktop_shortcut(game_dir, title="Mega Man Legends", app=False):
-    """app: the start menu (mml_run64.exe --menu); else the launcher of a game folder patched in place"""
-    target = os.path.join(game_dir, RUNNER64 if app else "MML Launcher.exe")
-    args = "--menu" if app else ""
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    lnk = os.path.join(desktop, title + ".lnk")
-    ps = (
-        "$w = New-Object -ComObject WScript.Shell; "
-        f"$s = $w.CreateShortcut('{lnk}'); "
-        f"$s.TargetPath = '{target}'; "
-        f"$s.Arguments = '{args}'; "
-        f"$s.WorkingDirectory = '{game_dir}'; "
-        f"$s.IconLocation = '{target}'; "
-        f"$s.Description = 'Play {title} (Modernization Project)'; "
-        "$s.Save()"
-    )
-    subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True,
-                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    return lnk
+def _powershell(script, env):
+    """runs a PowerShell script; values go in through the environment (paths may hold quotes)"""
+    full = dict(os.environ)
+    full.update(env)
+    return subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], check=True,
+                          env=full, capture_output=True, text=True,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def make_desktop_shortcut(game_dir, title="Mega Man Legends"):
+    """a Desktop shortcut to the start menu (mml_run64.exe --menu) in game_dir"""
+    ps = ("$l = Join-Path ([Environment]::GetFolderPath('Desktop')) ($env:MML_SC_TITLE + '.lnk'); "
+          "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($l); "
+          "$s.TargetPath = $env:MML_SC_TARGET; $s.Arguments = '--menu'; "
+          "$s.WorkingDirectory = $env:MML_SC_DIR; $s.IconLocation = $env:MML_SC_TARGET + ',0'; "
+          "$s.Description = 'Play ' + $env:MML_SC_TITLE + ' (Modernization Project)'; $s.Save(); $l")
+    out = _powershell(ps, {"MML_SC_TITLE": title, "MML_SC_TARGET": os.path.join(game_dir, RUNNER64),
+                           "MML_SC_DIR": game_dir})
+    return out.stdout.strip()
+
+
+# ---- the old launcher (MML Launcher.exe, 0.1 to 0.9, in game folders Setup patched in place) ----
+# The start menu (mml_run64.exe --menu) took its place. The launcher wrote its settings into mml.ini
+# each time it started the game, and the start menu reads them from there; the one setting it kept
+# only in its own Modernization\settings.json is whether it checked for updates.
+OLD_LAUNCHER = "MML Launcher.exe"
+OLD_LAUNCHER_SETTINGS = os.path.join("Modernization", "settings.json")
+
+
+def ini_has(path, section, key):
+    """[section] has key= in an ini file"""
+    try:
+        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        return False
+    cur = None
+    for line in lines:
+        st = line.strip()
+        if st.startswith("[") and st.endswith("]"):
+            cur = st[1:-1].strip().lower()
+        elif cur == section.lower() and "=" in st and not st.startswith(";"):
+            if st.split("=", 1)[0].strip().lower() == key.lower():
+                return True
+    return False
+
+
+def retarget_shortcuts(old_target, game_dir):
+    """The shortcuts to old_target (on the Desktop and in the Start menu, the user's and everyone's)
+    start the start menu instead. Returns how many were changed."""
+    ps = ("$w = New-Object -ComObject WScript.Shell; $n = 0; "
+          "$desk = @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonDesktopDirectory')); "
+          "$progs = @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('CommonPrograms')); "
+          "foreach ($d in $desk + $progs) { if (-not $d -or -not (Test-Path -LiteralPath $d)) { continue }; "
+          "Get-ChildItem -LiteralPath $d -Filter *.lnk -Recurse:($progs -contains $d) -ErrorAction SilentlyContinue | "
+          "ForEach-Object { "
+          "try { $s = $w.CreateShortcut($_.FullName); "
+          "if ($s.TargetPath -ieq $env:MML_SC_OLD) { $s.TargetPath = $env:MML_SC_TARGET; $s.Arguments = '--menu'; "
+          "$s.WorkingDirectory = $env:MML_SC_DIR; $s.IconLocation = $env:MML_SC_TARGET + ',0'; $s.Save(); $n++ } "
+          "} catch { } } }; $n")
+    out = _powershell(ps, {"MML_SC_OLD": old_target, "MML_SC_TARGET": os.path.join(game_dir, RUNNER64),
+                           "MML_SC_DIR": game_dir})
+    try:
+        return int(out.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+def remove_file(path, tries=20):
+    """deletes path, waiting up to 10 s for a program still running from it (the old launcher that
+    started this update closes right after)"""
+    for _ in range(tries):
+        try:
+            os.remove(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            time.sleep(0.5)
+    return False
+
+
+def retire_launcher(game_dir, log):
+    """The old launcher out of a game folder: its shortcuts start the start menu, its update setting
+    moves to mml.ini, and MML Launcher.exe and its settings.json are deleted. One that can't be
+    deleted (still running) goes to Modernization\\retired, which the next update deletes."""
+    exe = os.path.join(game_dir, OLD_LAUNCHER)
+    settings = os.path.join(game_dir, OLD_LAUNCHER_SETTINGS)
+    retired = os.path.join(game_dir, "Modernization", "retired")
+    if os.path.isdir(retired):
+        shutil.rmtree(retired, ignore_errors=True)
+    if not os.path.isfile(exe) and not os.path.isfile(settings):
+        return
+    log("Replacing the old launcher with the start menu...", 0.82)
+    try:
+        with open(settings, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    ini = os.path.join(game_dir, "mml.ini")
+    if isinstance(data, dict) and data.get("updates") == "off" and not ini_has(ini, "general", "check_updates"):
+        set_ini(ini, "general", {"check_updates": 0})
+    if os.path.isfile(ini):   # (the launcher wrote the monitor's width at each Play; 0 = the game works it out)
+        set_ini(ini, "video", {"native_width": 0})
+    try:
+        n = retarget_shortcuts(exe, game_dir)
+        if n:
+            log(f"Shortcuts to the old launcher now open the start menu ({n}).", 0.84)
+    except Exception as e:
+        log(f"(couldn't update the old launcher's shortcuts: {e})", 0.84)
+    for path in (exe, settings):
+        if os.path.isfile(path) and not remove_file(path):
+            try:
+                os.makedirs(retired, exist_ok=True)
+                os.replace(path, os.path.join(retired, os.path.basename(path)))
+            except OSError as e:
+                log(f"(couldn't remove '{os.path.basename(path)}': {e})", 0.85)
+    log("The start menu replaces the old launcher.", 0.86)
 
 
 # ============================ GUI wizard ============================
@@ -555,7 +656,7 @@ def run_gui():
     except Exception:
         pass
 
-    # --dir FOLDER: the app's (or an earlier launcher's) update starts this installer on its folder
+    # --dir FOLDER: the start menu's update (or the old launcher's, up to 0.9) starts this installer on its folder
     given = sys.argv[sys.argv.index("--dir") + 1] if "--dir" in sys.argv[:-1] else ""
     state = {"shortcut": tk.BooleanVar(value=True)}
 
@@ -642,7 +743,8 @@ def run_gui():
         elif install_kind(d) == "update":
             name = "Rockman DASH" if game_exe(d) == "ROCKMAN.EXE" else "Mega Man Legends"
             text = (f"✓  This is your {name} folder from an earlier version of the patch: Setup updates it "
-                    "where it is. Your settings and saves stay.")
+                    "where it is. Your settings and saves stay. The start menu replaces the old launcher, "
+                    "and the launcher's shortcuts open the start menu.")
             if not is_writable(d):
                 ok, col, text = False, AMBER, NOT_WRITABLE.replace("\n", " ")
         elif is_app_folder(d):
@@ -730,8 +832,9 @@ def run_gui():
                         "Mega Man Legends (and/or Rockman DASH) folder, then press Play.\n" + shortcut +
                         f"You can also start it any time with {RUNNER64} --menu in the install folder.")
             else:
-                text = ("Your game folder is updated.\n" + shortcut +
-                        "You can start it any time from MML Launcher.exe in the game folder.")
+                text = ("Your game folder is updated. Play now opens the start menu, which replaces the old "
+                        "launcher and has your settings. Shortcuts to the launcher open it too.\n" + shortcut +
+                        f"You can also start it any time with {RUNNER64} --menu in the game folder.")
             done_sub.configure(text=text + ("\n\n" + note if note else ""), wraplength=px(580))
             play_btn.pack(side="right", ipady=4)
         else:
@@ -741,11 +844,8 @@ def run_gui():
 
     def play_now():
         try:
-            d, kind = state["played"]
-            if kind == "app" or not os.path.isfile(os.path.join(d, "MML Launcher.exe")):
-                subprocess.Popen([os.path.join(d, RUNNER64), "--menu"], cwd=d)
-            else:
-                subprocess.Popen([os.path.join(d, "MML Launcher.exe")], cwd=d)
+            d, _ = state["played"]
+            subprocess.Popen([os.path.join(d, RUNNER64), "--menu"], cwd=d)
         except Exception:
             pass
         root.destroy()

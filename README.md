@@ -174,8 +174,8 @@ copy.
   made Mega Man turn in place without shooting. The modern controls now work the same with
   either Turn setting; the option still applies to the classic controls.
 
-The separate launcher (`MML Launcher.exe`) is still installed in game folders that an earlier
-Setup patched in place, and updating such a folder keeps it. New installs use the start menu.
+The separate launcher (`MML Launcher.exe`) is retired: updating a game folder that an earlier
+Setup patched in place replaces it with the start menu (see [Installation on Windows](#installation-on-windows)).
 
 ## What's new in 0.7
 
@@ -294,8 +294,8 @@ the Japanese line being spoken.
 ### Quality of life
 
 - **In-game settings menu** (F1, or Back + Start). Changes apply instantly, which makes it easy
-  to compare graphics options side by side. Settings are saved and shared with the launcher
-  and the start menu.
+  to compare graphics options side by side. Settings are saved and shared with the start
+  menu.
 - **Quick save** (F6, or Back + RB) to a dedicated slot, from anywhere you have control of
   Mega Man.
 - **On-screen notices** for quick saves and the modern controls toggle, and a short list of
@@ -315,8 +315,8 @@ the Japanese line being spoken.
   [Rockman DASH PSP English project](https://github.com/JamesAZ0/RockmanDASH-PSP-English-Patcher)
   and are downloaded from its repository by the start menu (see [Credits](#subtitles-and-japanese-voices)).
 - **Japanese voices,** built from your own copy of Rockman DASH (the Japanese PC version): the
-  cutscenes, the in-game lines and the title screen. The start menu (or the launcher, in older
-  installs) switches between the English and the Japanese voices.
+  cutscenes, the in-game lines and the title screen. The start menu switches between the
+  English and the Japanese voices.
 
 **Experimental.** The subtitles and the Japanese voices have not been checked through the whole
 game yet. The subtitles are timed to the English voice acting. With the Japanese voices they
@@ -380,7 +380,9 @@ Game page) and installs it with **Update**. You can also run the new `MML-Setup.
 folder. The imported games, settings and saves are kept.
 
 **Earlier installs:** a game folder that an earlier Setup patched in place is updated where it
-is, and keeps `MML Launcher.exe`. Setup moves conflicting wrapper DLLs from other fix packs to
+is. The start menu replaces the old launcher (`MML Launcher.exe`): Setup removes it, the
+shortcuts that started it open the start menu instead, and the settings are kept, since the
+launcher saved them in `mml.ini`. Setup moves conflicting wrapper DLLs from other fix packs to
 `Modernization\quarantined-wrappers` instead of deleting them, and keeps the original executable
 as `MEGAMAN.EXE.vanilla-backup` and the original intro as `CAPCOM.AVI.original`.
 
@@ -575,8 +577,7 @@ in control of Mega Man (not in menus or cutscenes).
 
 ## Settings
 
-Settings are changed in the start menu before playing (on Windows installs that an earlier
-Setup patched in place, in the launcher). The in-game settings menu changes most of them while
+Settings are changed in the start menu before playing. The in-game settings menu changes most of them while
 playing. All of them edit the same file (`mml.ini` in the app's or the game's folder). The start
 menu shows each setting's full description and choices beside the list.
 
@@ -584,7 +585,7 @@ menu shows each setting's full description and choices beside the list.
 |------|----------|
 | Game | Version to play, importing each version, English subtitles, voice language, localization names (US / Japanese), start menu at launch (show / skip), intro video, title screen hints, room transitions, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio (fill screen / 16:9 / 4:3), frame rate (30 / 60 / 120), FPS counter, V-Sync, executable |
-| Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement, animation blending, HUD size |
+| Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement, texture dump, animation blending, HUD size |
 | Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), button prompts (Auto / Xbox / PlayStation 4 / PlayStation 5 / Switch), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |
 | Combat | Combat style (Classic / Adventure / Shooter presets, or Custom), camera position (behind / over the shoulder), fade up close, aim button (lock-on / free aim), lock-on camera, shots aim, aim sensitivity, aim assist, move while shooting, backpedal (walk / jog), crosshair (off / while aiming / always), reticle colour |
 | Buttons | Controller and keyboard remapping |
@@ -639,7 +640,7 @@ The folder you imported from is not changed.
 
 1. Rename `MEGAMAN.EXE.vanilla-backup` back to `MEGAMAN.EXE`.
 2. Rename `CAPCOM.AVI.original` back to `CAPCOM.AVI`.
-3. Delete `MML Launcher.exe`, `mml.dll`, `mml_run64.exe`, `mml.ini`, `DDrawCompat.ini`, the
+3. Delete `mml.dll`, `mml_run64.exe`, `mml.ini`, `DDrawCompat.ini`, the
    `Modernization` and `x64` folders, `THIRD-PARTY-NOTICES.txt` and the `licenses` folder.
 4. Delete the added DLLs: `SDL3.dll`, `librashader.dll`, `ddraw.dll`, `dinput.dll`,
    `dsound.dll` and `dsoal-aldrv.dll`. If you had your own wrappers before, restore them from
@@ -678,7 +679,6 @@ game and the saves: copy the `DASH_*.MCD` files out of it first if you want to k
 
 - **Linux:** testing on real hardware and the Steam Deck, and a build for older distributions.
 - **Touch controls** on Android.
-- **Retiring the separate launcher** in game folders patched in place by earlier versions.
 - Shader presets for the Vulkan renderer and the standalone engine.
 - Later candidates: bloom and ambient occlusion, HUD repositioning options, and further mod
   support.
@@ -691,8 +691,7 @@ Open an [issue](../../issues) and include:
   on Android: `Android/data/org.mml.legends/files`; on Linux: `~/.local/share/mml-modernization`). It is
   rewritten every time the game starts, so copy it right after the problem. Its first line
   identifies the build.
-- On Windows, `Modernization\menu.log` (the start menu), or `Modernization\launcher.log` for
-  installs that use the launcher.
+- On Windows, `Modernization\menu.log` (the start menu).
 - What you were doing, and a screenshot if the problem is visual.
 - If the installer or the start menu's import rejected your game: the hash it reported (in
   `menu.log` on Windows, in `mml.log` on Android and Linux). Other builds of the PC port exist, and their hashes help add support for
@@ -717,7 +716,7 @@ Open an [issue](../../issues) and include:
 - **Wrappers** (Windows Classic) handle the rest: DSOAL and OpenAL Soft for the game's
   DirectSound3D audio, DDrawCompat for the Compatibility renderer, and Xidi for the Legacy
   controller backend.
-- The launcher and the start menu only edit `mml.ini`. Every part can be switched off.
+- The start menu and the in-game menu only edit `mml.ini`. Every part can be switched off.
 
 The reverse-engineering tooling (a Ghidra project setup and symbol map) is in
 [tools/ghidra](tools/ghidra).
@@ -736,7 +735,7 @@ Android NDK's `clang-cl` (set `RECOMP_CLANG` to it) and Python 3 with
 |---------|--------|
 | `native\build.bat` | `native\build\mml.dll` |
 | `native\build_runner.bat x64` | `native\build\mml_run64.exe` |
-| `build\build_release.bat` | `dist\MML-Setup.exe` (also rebuilds the runtime and the launcher) |
+| `build\build_release.bat` | `dist\MML-Setup.exe` (also rebuilds the runtime and the start menu) |
 
 `build_release.bat` needs `MML_GAME_DIR` set to a game folder that holds the redistributable
 DLLs (`SDL3.dll`, `x64\SDL3.dll`, `librashader.dll` and the wrappers) and the intro video, so

@@ -1158,7 +1158,7 @@ void recomp_install(const char *ini)
         log_printf("recomp: no recompiled code for the Japanese program in this build");
 #ifdef MML_RUNNER
         MessageBoxA(NULL, "This build of the Standalone engine has no code for the Japanese version.\n"
-                    "Choose the Classic engine in the launcher to play it.",
+                    "Choose Executable: Original in the start menu to play it.",
                     "Mega Man Legends", MB_OK | MB_ICONWARNING);
         ExitProcess(1);
 #endif

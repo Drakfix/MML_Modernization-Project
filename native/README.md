@@ -87,7 +87,7 @@ the game window, so the shim centres it at 4:3 on the black window.
 
 ### 60 fps (frame interpolation)
 
-`[video] interp=1` (the launcher's Frame rate option, Modern renderer only). The
+`[video] interp=1` (the start menu's Frame rate setting, the project's own renderers only). The
 game still thinks at 30 frames a second; for every game frame we also show one
 in between, with everything halfway between the last two frames. A frame
 starts reacting to your input at the same moment as before, it just gets an
@@ -118,7 +118,7 @@ timer that only ticks every 15.6 ms; it now gets a 1 ms clock and sleeps.
 the fastest one (laptops with two GPUs). On some machines (the test laptop: an
 Intel GPU drives the panel, an NVIDIA renders) Windows composites every frame of
 any borderless fullscreen window, which shows up as "Desktop Window Manager" GPU
-use. `[video] exclusive=1` (the launcher's Display: Exclusive) skips that: the
+use. `[video] exclusive=1` (the start menu's Display mode: Exclusive fullscreen) skips that: the
 game takes the screen exclusively while it's in front and goes back to its
 borderless window when you alt-tab away. It renders on the monitor's GPU, since
 exclusive mode only works there. On the test laptop the desktop compositor went
@@ -131,7 +131,7 @@ frames), `interp_timing=1` (log frame pacing).
 
 ### Distance fog
 
-`[video] fog=original|light|off` (the launcher's Distance fog option). The game
+`[video] fog=original|light|off` (the start menu's Fog distance setting). The game
 uses plain table fog: a colour plus a linear start/end in screen depth per
 scene, switched on per draw. The world is drawn well past where the fog maxes
 out, so there's real scenery behind it. `light` multiplies start and end by

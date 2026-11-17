@@ -5,7 +5,7 @@
  * running underneath and every change shows at once: good for comparing
  * settings side by side. While it's open the game gets no input (pad, game
  * keys, mouse look). Each change is applied live and written to mml.ini right
- * away; the launcher reads those keys back, so both stay in step.
+ * away; the start menu reads the same keys, so both stay in step.
  *
  * Three pages (LB/RB or Q/E), one setting per row, with a line of help for the
  * selected one. The look borrows from the game's own HUD: Mega Man blue
@@ -15,8 +15,8 @@
  * menu_filter_buttons() from the pad poll, and the draw callback while each
  * presented frame is composed.
  *
- * The start menu (menu_start) is the same menu before the game starts, where there is no
- * launcher (Android, later everywhere): every setting the launcher has, the ones that only
+ * The start menu (menu_start) is the same menu before the game starts, on every platform (on
+ * Windows in a window of its own, runner.c): every setting, the ones that only
  * count from the start too (renderer, controls, button mapping), on more pages, and Start to
  * play. It only writes mml.ini; the game reads it when it starts. */
 #include <windows.h>
@@ -175,7 +175,7 @@ static const item g_game_items[] = {
     { 4, IT_TRANSITION, "Room transitions", TRANS_HELP },
 };
 
-/* ---- the start menu's pages: everything the launcher has ----
+/* ---- the start menu's pages: every setting ----
    Names and descriptions say what each setting technically is and what it costs, as a PC game's
    settings do; the description is also where a newcomer finds out what it means. */
 static const char *const START_PAGES[] = { "GAME", "DISPLAY", "GRAPHICS", "CONTROLS", "COMBAT", "BUTTONS" };
@@ -192,8 +192,11 @@ static const choice CH_RENDERER[] = { { "Direct3D 11", "video.renderer=mml;video
 static const choice CH_WINDOW[] = { { "Borderless window", "video.windowed=0;video.exclusive=0" },
                                     { "Exclusive fullscreen", "video.windowed=0;video.exclusive=1" },
                                     { "Windowed", "video.windowed=1;video.exclusive=0" } };
-static const choice CH_ASPECT[] = { { "Fill screen (experimental)", "video.aspect=fill" },
-                                    { "16:9", "video.aspect=16:9" }, { "4:3 original", "video.aspect=4:3" } };
+/* (native_width=0: the width follows the aspect and the monitor; the old Windows launcher wrote a
+   fixed one, which would keep the previous aspect's width) */
+static const choice CH_ASPECT[] = { { "Fill screen (experimental)", "video.aspect=fill;video.native_width=0" },
+                                    { "16:9", "video.aspect=16:9;video.native_width=0" },
+                                    { "4:3 original", "video.aspect=4:3;video.native_width=0" } };
 static const choice CH_ENGINE[] = { { "Original (32-bit)", "general.engine=classic" },
                                     { "Recompiled (64-bit)", "general.engine=standalone" } };
 static const choice CH_INTRO[] = { { "Play", "general.intro=play" }, { "Skip", "general.intro=skip" } };
@@ -212,6 +215,7 @@ static const choice CH_ROLL[] = { { "Original", "controls.roll_speed=512;control
                                   { "Fast", "controls.roll_speed=768;controls.roll_anim=50" },
                                   { "Snappy", "controls.roll_speed=896;controls.roll_anim=80" } };
 static const choice CH_UPDATES[] = { { "On", "general.check_updates=1" }, { "Off", "general.check_updates=0" } };
+static const choice CH_TEXDUMP[] = { { "Off", "textures.dump=0" }, { "On", "textures.dump=1" } };
 static const choice CH_ACTION[] = { { "Jump", "=jump" }, { "Shoot", "=shoot" }, { "Special", "=special" },
                                     { "Talk / check", "=talk" }, { "Roll", "=roll" }, { "Aim / lock-on", "=aim" },
                                     { "Modern on/off", "=orbit" }, { "Menu", "=menu" }, { "Select", "=select" },
@@ -348,6 +352,9 @@ static const item g_start_items[] = {
       "release did. Maximum keeps the full-detail models at any distance, at a small GPU cost." },
     { PG_GRAPHICS, IT_HDTEX, "Texture replacement", "Loads replacement textures (HD texture packs) from "
       "Modernization\\textures. Off uses the game's original textures." },
+    { PG_GRAPHICS, IT_CHOICE, "Texture dump", "For making texture packs: writes every texture the game uses, once, "
+      "to Modernization\\textures\\dump as a PNG. Turn it off again for normal play: writing the files costs a little "
+      "time whenever a new texture appears.", CH_TEXDUMP, NCH(CH_TEXDUMP) },
     { PG_GRAPHICS, IT_ANIMBLEND, "Animation blending", "Mega Man's animation changes cross-fade over a "
       "fraction of a second instead of snapping from one pose to the next: raising and lowering the buster, "
       "starting and stopping, turning a run into a backpedal, landing." },
@@ -517,6 +524,7 @@ static struct {
     int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens, trans;
     int aim_free, walk_shoot, backjog, assist, shcam, anim_blend, camfade;   /* crosshair: 0 off, 1 while aiming, 2 always */
     int hud_scale;                      /* index into HUD_SCALES */
+    unsigned reticle_rgb;               /* [controls] reticle_color when it isn't one of RETICLES (else 0) */
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
     char **presets;
@@ -533,6 +541,14 @@ static struct {
     int kick_dir, sel_page;
     LARGE_INTEGER qpf;
 } M;
+
+/* the reticle colour: a preset, or (M.reticle == NRETICLES) a colour of its own from mml.ini, which
+   stays one of the choices (M.reticle_rgb) */
+#define NRETICLES ((int)(sizeof RETICLES / sizeof RETICLES[0]))
+static unsigned reticle_rgb(void)
+{
+    return M.reticle < NRETICLES ? RETICLES[M.reticle].rgb : M.reticle_rgb;
+}
 
 static int gf_busy(void)
 {
@@ -587,7 +603,7 @@ static const char *choice_pair(const item *it, const char *p, char *sec, char *k
 
 /* which choice mml.ini holds (by each choice's first value), else the item's default */
 /* ---- the keyboard's keys (IT_KEY rows) ---- */
-static const struct { const char *key, *def; } KEY_DEFS[] = {   /* (mml_gui.py KEY_DEFAULTS, controls.c) */
+static const struct { const char *key, *def; } KEY_DEFS[] = {   /* (controls.c) */
     { "key_up", "W,UP" }, { "key_down", "S,DOWN" }, { "key_left", "A,LEFT" }, { "key_right", "D,RIGHT" },
     { "key_walk", "LCTRL" }, { "key_jump", "SPACE" }, { "key_shoot", "MOUSE1" }, { "key_aim", "MOUSE2" },
     { "key_roll", "LSHIFT" }, { "key_talk", "E" }, { "key_special", "Q" }, { "key_menu", "TAB" },
@@ -630,7 +646,7 @@ static void key_get(const item *it, char *a, char *b, size_t n)
     key_trim_upper(b);
 }
 
-/* a key's name as the screen shows it (mml_gui.py KEY_LABELS) */
+/* a key's name as the screen shows it */
 static const char *key_label(const char *name)
 {
     static const struct { const char *name, *label; } L[] = {
@@ -777,7 +793,7 @@ static const char *shader_path(void)
 
 static int effective_scale(void)
 {
-    /* CRT presets want the game's own resolution (the launcher's rule too) */
+    /* CRT presets want the game's own resolution */
     if (shader_path()[0] && M.res == 0)
         return M.shader_game_res ? 1 : 0;
     return M.res;
@@ -853,7 +869,7 @@ static void apply(int kind)
             note("That preset failed to load (see mml.log)");
         gfx_set_scene(effective_scale(), M.msaa);
         if (p[0] && _strnicmp(p, M.game_dir, gl) == 0 && p[gl] == '\\')
-            strcpy_s(rel, sizeof rel, p + gl + 1);   /* inside the game folder: relative, like the launcher */
+            strcpy_s(rel, sizeof rel, p + gl + 1);   /* inside the game folder: relative, so the folder can move */
         else
             strcpy_s(rel, sizeof rel, p);
         ini_str("video", "shader", rel);
@@ -897,7 +913,7 @@ static void apply(int kind)
         ini_int("controls", "invert_y", M.inv_y);
         if (kind != IT_INVERT_Y)
             break;
-        /* like the launcher, invert Y covers the mouse too */
+        /* invert Y covers the mouse too */
         ini_int("controls", "mouse_invert_y", M.inv_y);
         /* fall through */
     case IT_MOUSE:
@@ -910,8 +926,8 @@ static void apply(int kind)
     case IT_RETICLE: {
         char hex[8];
         if (!M.start)
-            lockon_set_color(RETICLES[M.reticle].rgb);
-        _snprintf_s(hex, sizeof hex, _TRUNCATE, "%06X", RETICLES[M.reticle].rgb);
+            lockon_set_color(reticle_rgb());
+        _snprintf_s(hex, sizeof hex, _TRUNCATE, "%06X", reticle_rgb());
         ini_str("controls", "reticle_color", hex);
         break;
     }
@@ -1037,7 +1053,7 @@ static void change(int kind, int dir)
     case IT_INVERT_X: M.inv_x = !M.inv_x; break;
     case IT_INVERT_Y: M.inv_y = !M.inv_y; break;
     case IT_MOUSE: M.mouse = cycle(M.mouse, 6, dir); break;
-    case IT_RETICLE: M.reticle = cycle(M.reticle, (int)(sizeof RETICLES / sizeof RETICLES[0]), dir); break;
+    case IT_RETICLE: M.reticle = cycle(M.reticle, NRETICLES + (M.reticle_rgb != 0), dir); break;
     case IT_AIM: M.aim_camera = !M.aim_camera; break;
     case IT_LOCKCAM: M.lock_shoulder = !M.lock_shoulder; break;
     case IT_AIMSENS: M.aim_sens = cycle(M.aim_sens, 4, dir); break;
@@ -1205,7 +1221,12 @@ static void value_text(int kind, char *out, size_t n)
         else
             strcpy_s(out, n, "Off");
         break;
-    case IT_RETICLE: strcpy_s(out, n, RETICLES[M.reticle].name); break;
+    case IT_RETICLE:
+        if (M.reticle < NRETICLES)
+            strcpy_s(out, n, RETICLES[M.reticle].name);
+        else
+            _snprintf_s(out, n, _TRUNCATE, "Custom (%06X)", M.reticle_rgb);
+        break;
     case IT_AIM: strcpy_s(out, n, M.aim_camera ? "Camera" : "Character"); break;
     case IT_LOCKCAM: strcpy_s(out, n, M.lock_shoulder ? "Over the shoulder" : "Classic"); break;
     case IT_AIMSENS: _snprintf_s(out, n, _TRUNCATE, "%d%%", AIMSENS[M.aim_sens]); break;
@@ -1586,7 +1607,7 @@ static void draw_value(const item *it, float vx, float cy, float u, int selected
     }
     if (it->kind == IT_RETICLE) {   /* a little lock-on marker in that colour */
         float r = u * 0.3f;
-        uint32_t c = 0xFF000000 | RETICLES[M.reticle].rgb;
+        uint32_t c = 0xFF000000 | reticle_rgb();
         x -= r * 2;
         gfx_ui_ring(x + r, cy, r, r * 0.25f, ui_col(c));
         ui_line(x + r, cy - r * 1.5f, x + r, cy - r * 0.6f, r * 0.25f, c);
@@ -2917,11 +2938,20 @@ static void load_values(const char *ini, const char *game_dir)
                   ? nearest_index(MOUSE + 1, 5, GetPrivateProfileIntA("controls", "mouse_speed", 100, ini)) + 1 : 0;
     GetPrivateProfileStringA("controls", "reticle_color", "FFD840", s, sizeof s, ini);
     {
-        unsigned rgb = (unsigned)strtoul(s, NULL, 16);
+        const char *h = s[0] == '#' ? s + 1 : s;
+        char *end;
+        unsigned rgb = (unsigned)strtoul(h, &end, 16) & 0xFFFFFF;
         M.reticle = 0;
-        for (i = 0; i < (int)(sizeof RETICLES / sizeof RETICLES[0]); i++)
+        M.reticle_rgb = 0;
+        for (i = 0; i < NRETICLES; i++)
             if (RETICLES[i].rgb == rgb)
-                M.reticle = i;
+                break;
+        if (i < NRETICLES)
+            M.reticle = i;
+        else if (end != h && rgb) {   /* (a colour of its own: from the old Windows launcher, or set by hand) */
+            M.reticle = NRETICLES;
+            M.reticle_rgb = rgb;
+        }
     }
     GetPrivateProfileStringA("controls", "aim", "character", s, sizeof s, ini);
     M.aim_camera = _stricmp(s, "camera") == 0;

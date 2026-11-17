@@ -4,7 +4,7 @@ The Modern renderer can swap any of the game's textures for your own PNGs, at an
 
 ## Making a pack
 
-1. In the launcher, Graphics tab, set **Dump originals** to On (or `[textures] dump=1` in
+1. In the start menu, Graphics page, set **Texture dump** to On (or `[textures] dump=1` in
    `mml.ini`) and play through the areas you want to cover. Every texture the game uses
    is written once to `Modernization\textures\dump\<hash>.png`.
 2. Each dump is a whole 256x256 texture page with its palette already applied, so the
@@ -17,7 +17,7 @@ The Modern renderer can swap any of the game's textures for your own PNGs, at an
    `dump` folder, for example `Modernization\textures\my-pack\1bc08d0c.png`. Subfolders
    are fine, so packs can be kept apart. A folder whose name starts with `_` or ends with
    `.off` is skipped, which switches that pack off without moving it.
-5. With **HD pack** On (the default, `[textures] replace=1`) the game picks it up on the
+5. With **Texture replacement** On (the default, `[textures] replace=1`) the game picks it up on the
    next start.
 
 Turn dumping off again for normal play: writing PNGs costs a little time whenever a new

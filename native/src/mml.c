@@ -669,7 +669,7 @@ static int install_intro(void)
  * The main window procedure (0x4A6A5E) still reacts to F8 (toggle its own
  * windowed mode and re-run the DirectDraw setup), F7 (cycle a display setting,
  * same re-init) and F11 (GDI debug text drawn straight onto the DirectDraw back
- * buffer). None of that fits our renderer or the launcher's display options, so
+ * buffer). None of that fits our renderer or the menus' display options, so
  * their compares are pointed at VK 0xFF (never sent). F9 (the port's own pause,
  * any key resumes) and the F10/Alt menu swallowing stay as they are. */
 static void disable_dev_keys(void)

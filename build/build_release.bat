@@ -1,6 +1,7 @@
 @echo off
 REM One command to produce an updated installer after any code change.
-REM Rebuilds mml.dll and the launcher, re-assembles the package, and rebuilds the installer.
+REM Rebuilds mml.dll and the 64-bit engine with the start menu, re-assembles the package, and
+REM rebuilds the installer.
 REM Set MML_GAME_DIR to your game folder first (it holds the wrapper DLLs and the intro).
 setlocal
 set "ROOT=%~dp0.."
@@ -20,22 +21,11 @@ if "%RECOMP_CLANG%"=="" (
   popd & pause & exit /b 1
 )
 
-echo [0/3] Building mml.dll and the standalone game (64-bit)...
+echo [1/3] Building mml.dll and the standalone game (64-bit)...
 call "%ROOT%\native\build.bat"
 if errorlevel 1 (echo mml.dll build failed & popd & pause & exit /b 1)
 call "%ROOT%\native\build_runner.bat" x64
 if errorlevel 1 (echo mml_run64.exe build failed & popd & pause & exit /b 1)
-
-REM the launcher imports patch_manifest.py, so write it before building the launcher
-python "%ROOT%\tools\make_patcher.py" --manifest-only
-if errorlevel 1 (echo make_patcher failed & popd & pause & exit /b 1)
-
-echo [1/3] Building the launcher...
-python -m PyInstaller --noconfirm --onefile --windowed --name "MML Launcher" ^
-  --icon "%ROOT%\art\mml.ico" --add-data "%ROOT%\art;art" ^
-  --distpath "%ROOT%\dist" --workpath "%TEMP%\mml_build" --specpath "%TEMP%\mml_build" ^
-  "%ROOT%\src\mml_gui.py"
-if errorlevel 1 (echo launcher build failed & popd & pause & exit /b 1)
 
 echo [2/3] Assembling the release package...
 python "%ROOT%\tools\make_patcher.py"

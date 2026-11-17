@@ -1,14 +1,11 @@
 @echo off
 REM Build "MML-Setup.exe", the graphical installer end users run.
 REM Prerequisites:
-REM   - run build_gui.bat first (it produces the launcher this bundles)
+REM   - native\build.bat and native\build_runner.bat x64 (mml.dll, and mml_run64.exe: the start
+REM     menu and the standalone game); build_release.bat does all of it in one go
 REM   - set MML_GAME_DIR to your game folder (make_patcher needs the wrapper DLLs and intro)
 setlocal
 for %%I in ("%~dp0..") do set "ROOT=%%~fI"
-
-if not exist "%ROOT%\dist\MML Launcher.exe" (
-  echo Run build_gui.bat first. & pause & exit /b 1
-)
 
 echo Assembling the release package...
 python "%ROOT%\tools\make_patcher.py"

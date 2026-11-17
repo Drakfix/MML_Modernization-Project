@@ -106,7 +106,7 @@ static int skip_start_menu(const char *dir, const char *ini)
 }
 
 #ifndef _WIN32
-/* The start menu, where there is no launcher ([general] start_menu, on by default): the window
+/* The start menu ([general] start_menu, on by default): the window
  * and the renderer are made here, before the game; the game takes the same ones when it asks
  * for its window and device, so Play goes straight in. 0 = the app closed. */
 static int start_menu(const char *dir)
@@ -190,14 +190,14 @@ static int runner_main(void)
 }
 
 #ifdef _WIN32
-/* ---- the start menu on Windows (mml_run64.exe --menu), in place of the Python launcher ----
+/* ---- the start menu on Windows (mml_run64.exe --menu): Setup's shortcut starts it ----
    The same start menu as on Android and Linux, in a window of its own. Play starts the chosen game
    engine as a program of its own, so the renderer, display mode and engine just picked apply from
    its first frame: the Classic engine is the game's own exe (with mml.dll), the Standalone one
    this program without --menu. The menu's log is Modernization\menu.log (the game rewrites
    mml.log when it starts). */
 
-/* the native widescreen width: 480 lines at the monitor's aspect, even (mml_gui.py native_width) */
+/* the native widescreen width: 480 lines at the monitor's aspect, even */
 static int native_width(void)
 {
     int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
@@ -205,7 +205,7 @@ static int native_width(void)
 }
 
 /* DDrawCompat.ini for the Compatibility renderer, from DDrawCompat.ini.16to9 with the settings
-   mml.ini holds (mml_gui.py write_ini) */
+   mml.ini holds */
 static void write_ddrawcompat_ini(const char *dir, const char *ini)
 {
     char base[MAX_PATH], out[MAX_PATH], line[512], aspect[16], v[6][96];

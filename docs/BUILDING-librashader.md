@@ -94,6 +94,6 @@ match.
   app's files folder (`librashader\librashader.db.1`).
 - Vulkan uses render-pass mode (no dynamic rendering), so it needs nothing beyond the
   backend's Vulkan 1.1 device.
-- Presets aren't shipped (most are GPL). Users point the launcher at their own copy of
+- Presets aren't shipped (most are GPL). Users point the start menu at their own copy of
   libretro's [slang-shaders](https://github.com/libretro/slang-shaders), or put them in
   `Modernization\shaders`.
