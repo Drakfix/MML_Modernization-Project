@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.9.2 beta.** The 0.1 releases are kept on the
+**Current version: 0.9.4 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -79,6 +79,19 @@ copy.
   draw all the way to the sides. The new 16:9 keeps a 16:9 picture, with bars on wider screens.
 - **Fix:** at Jet Skate speed, Mega Man's fists swapped places in the in-between frames, so his
   arm flickered and deformed.
+
+**0.9.4:**
+
+- **Shader presets everywhere.** RetroArch shader presets now work with Vulkan, in the
+  Recompiled engine, on Android and on Linux, not only with the Classic engine on Direct3D 11.
+- **Camera keeps Mega Man in view.** Locking on to tall or high targets, aiming at the sky and
+  standing against a wall no longer put the camera above him where he can't be seen.
+- **Fix:** in cutscenes, characters right next to the camera disappeared from the shot.
+- **Fix:** after a lock-on or aim ended mid-run, Mega Man could stay stuck between aiming and
+  walking ([#16](../../issues/16)).
+- **Fix:** on screens wider than 16:9, scenery and characters near the sides popped in and out.
+- **Fix:** with animation blending, a quick forward then back while aiming showed Mega Man on his
+  side for a frame.
 
 ## What's new in 0.8
 
@@ -241,8 +254,8 @@ the Japanese line being spoken.
 - **Renderers.** Direct3D 11 or Vulkan on Windows, Vulkan on Android and Linux.
 - **Display modes** (Windows). Borderless (the default, with normal Alt+Tab, screenshots and
   capture), exclusive fullscreen or windowed.
-- **Post-processing** (Windows, Direct3D 11). RetroArch shader presets (CRT and others)
-  through librashader, and ReShade with a working depth buffer.
+- **Post-processing.** RetroArch shader presets (CRT and others) through librashader, with
+  either renderer on every platform, and ReShade with a working depth buffer (Windows, Direct3D 11).
 - **HD texture packs.** Replace any game texture with a PNG of any size, or dump the
   originals to make your own.
 - **Animation blending.** Mega Man's animation changes cross-fade instead of snapping.
@@ -657,7 +670,7 @@ game and the saves: copy the `DASH_*.MCD` files out of it first if you want to k
 
 - Some in-engine cutscenes may show black or missing textures.
 - Antialiasing disables depth-based ReShade effects.
-- Shader presets and ReShade depth work only with the Classic engine on Direct3D 11.
+- ReShade depth works only with the Classic engine on Direct3D 11.
 - The in-game settings menu, notices, title-screen shortcuts and the way back to the start menu
   require the project's own renderers (not DirectDraw legacy).
 - With the Legacy controller backend, the controller still reaches the game while the in-game
@@ -679,7 +692,6 @@ game and the saves: copy the `DASH_*.MCD` files out of it first if you want to k
 
 - **Linux:** testing on real hardware and the Steam Deck, and a build for older distributions.
 - **Touch controls** on Android.
-- Shader presets for the Vulkan renderer and the standalone engine.
 - Later candidates: bloom and ambient occlusion, HUD repositioning options, and further mod
   support.
 
