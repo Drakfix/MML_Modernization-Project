@@ -48,6 +48,7 @@
 #include "texreplace.h"
 #include "ui_style.h"
 #include "anim_blend.h"
+#include "difficulty.h"
 #include "updater.h"
 #include "voice_build.h"
 
@@ -124,6 +125,8 @@ static const choice CH_PROMPTS[] = { { "Auto", "controls.button_prompts=auto" },
                                      { "PlayStation 4", "controls.button_prompts=ps4" },
                                      { "PlayStation 5", "controls.button_prompts=ps5" },
                                      { "Nintendo Switch", "controls.button_prompts=switch" } };
+/* [general] all_difficulties: Easy, Normal and Hard on the title menu from the start (difficulty.c) */
+static const choice CH_DIFFS[] = { { "Off", "general.all_difficulties=0" }, { "On", "general.all_difficulties=1" } };
 #define PROMPTS_HELP "How these menus name the controller's buttons. Auto follows the controller connected."
 
 static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "COMBAT", "GAME" };
@@ -173,6 +176,8 @@ static const item g_game_items[] = {
     { 3, IT_CROSSHAIR, "Crosshair", XH_HELP },
     { 3, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to, and of the crosshair." },
     { 4, IT_TRANSITION, "Room transitions", TRANS_HELP },
+    { 4, IT_CHOICE, "All difficulties", "Easy, Normal and Hard on the title menu without clearing the game first. "
+      "Saves aren't changed.", CH_DIFFS, (int)(sizeof CH_DIFFS / sizeof CH_DIFFS[0]) },
 };
 
 /* ---- the start menu's pages: every setting ----
@@ -277,6 +282,10 @@ static const item g_start_items[] = {
       "ladder, into a building. Original keeps the 1997 timing, made to hide loading from the disc. 2x to 8x play "
       "the wipe, the black screen and the room setup that many times faster; the game itself never runs faster "
       "than normal." },
+    { PAGE_FILES, IT_CHOICE, "All difficulties", "Offers Easy, Normal and Hard on the title menu from the start: "
+      "pick one there before NEW GAME. In the original, clearing the game adds the difficulty choice with Hard, "
+      "and clearing it on Hard or in under three hours adds Easy. The difficulty plays exactly as an unlocked "
+      "one. Saves aren't changed: the unlocks the game keeps in them stay as they are.", CH_DIFFS, NCH(CH_DIFFS) },
     { PAGE_FILES, IT_SECTION, "Updates", NULL, NULL, 0, PL_ANDROID | PL_WIN | PL_LINUX },
     { PAGE_FILES, IT_UP_ACTION, "Update", "Looks for a newer release on GitHub, downloads its APK and hands it to "
       "Android's installer. Android may ask once to allow installs from this app, and to confirm.",
@@ -730,6 +739,7 @@ static void choice_write(const item *it, int c)
     while (p && *p && (p = choice_pair(it, p, sec, key, val, sizeof sec)) != NULL)
         ini_str(sec, key, val);
     pad_prompts_load(M.ini);   /* (button prompts: the new names show at once) */
+    difficulty_load(M.ini);    /* (all difficulties: the title menu follows at once) */
 }
 
 static int item_index(const item *it)

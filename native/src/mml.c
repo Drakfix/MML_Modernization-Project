@@ -25,6 +25,7 @@
 #include "anim_blend.h"
 #include "controls.h"
 #include "crosshair.h"
+#include "difficulty.h"
 #include "input.h"
 #include "hints.h"
 #include "intro_video.h"
@@ -922,6 +923,9 @@ void mml_init(void)
      * to the camera (the PS1 draws them; actorcull.c) */
     if (GetPrivateProfileIntA("debug", "close_actors", 1, g_ini))
         actorcull_install();
+    /* [general] all_difficulties=1: Easy, Normal and Hard on the title menu without a cleared save
+     * (difficulty.c; installed either way, the menus turn it on and off) */
+    difficulty_install(g_ini);
     if (GetPrivateProfileIntA("debug", "quick_save", 1, g_ini)) {   /* on by default; =0 turns it off */
         quicksave_install(g_game_dir);
     }

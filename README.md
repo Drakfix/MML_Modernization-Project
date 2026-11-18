@@ -320,6 +320,8 @@ the Japanese line being spoken.
 - **Timing fix** for the cutscene audio drift on modern PCs.
 - **Faster room transitions** (optional): doors and ladders play their transition 2, 4 or 8 times
   faster.
+- **All difficulties from the start** (optional): Easy, Normal and Hard on the title menu without
+  clearing the game first. Saves are not changed.
 
 ### Subtitles and Japanese voices (optional, US version, experimental)
 
@@ -596,7 +598,7 @@ menu shows each setting's full description and choices beside the list.
 
 | Page | Settings |
 |------|----------|
-| Game | Version to play, importing each version, English subtitles, voice language, localization names (US / Japanese), start menu at launch (show / skip), intro video, title screen hints, room transitions, updates |
+| Game | Version to play, importing each version, English subtitles, voice language, localization names (US / Japanese), start menu at launch (show / skip), intro video, title screen hints, room transitions, all difficulties, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio (fill screen / 16:9 / 4:3), frame rate (30 / 60 / 120), FPS counter, V-Sync, executable |
 | Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement, texture dump, animation blending, HUD size |
 | Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), button prompts (Auto / Xbox / PlayStation 4 / PlayStation 5 / Switch), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |
