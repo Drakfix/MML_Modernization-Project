@@ -265,6 +265,7 @@ static int g_lock_test;   /* Z-targeting: locked on, facing toward the target */
 /* face hold: Mega Man keeps facing face_dir and moves freely around it (strafe, backstep); lock-on
    faces the target, camera aim ([controls] aim=camera) faces where the camera looks while firing */
 static volatile LONG face_hold, face_dir, cam_aim, aim_ready;
+static int fh_body;        /* +0x116 holds a face hold's body turn (the run's), to undo once the hold ends */
 static int g_aim_camera, g_crosshair;   /* crosshair: 0 off, 1 while aiming, 2 always (with camera aim) */
 static int g_aim_free;     /* [controls] aim_button=free: the aim button never locks on, it aims over the shoulder */
 static int g_sh_always;    /* [controls] camera_shoulder: the camera over the shoulder all the time; aiming zooms in */
@@ -1711,6 +1712,9 @@ static void on_cam_apply(regs_t *r)
         d = ((face_dir - cur - d + 2048) & 0xfff) - 2048;
         ready = !(cam_aim || sh_aim) || lock_active || (d <= AIM_FIRE_TOL && d >= -AIM_FIRE_TOL) ||
                 (LONG)(frame_tick - aim_since) >= AIM_FIRE_WAIT;
+    } else if (fh_body && S16(PL_MOVE_ANGLE) != 0) {
+        /* a face hold just ended with the body turned: face_hold_body_release turns the facing with
+           the body (writing the stick's here first showed his body off by the turn for a frame) */
     } else if (move_active && !roll_latch && (gate > 0 || pos_move_credit > 0)) {
         if (P8(PL_STATE) == 3 && !(P8(PL_INPUT_FLAGS) & 0x60)) {
             /* on skates he carves: the facing turns toward the stick at a limited rate */
@@ -2316,6 +2320,7 @@ static void ws_enter_run(int dir)
     P8(PL_RUN_DIR_PREV) = 0;
     P8(PL_RUN_DIR) = (uint8_t)dir;
     S16(PL_MOVE_ANGLE) = (int16_t)(dir == 1 ? 0x400 : dir == 3 ? -0x400 : 0);   /* (re-aimed at apply time) */
+    fh_body = 1;
     S16(PL_VEL_FWD) = 0x200;
     P8(PL_FIRE_FLAGS) |= 4;
     P8(0x54D) = 1;
@@ -2556,6 +2561,66 @@ void controls_style_notice(int show)
     g_style_notice = show != 0;
 }
 
+/* Issue #16. In a face hold the run turns the body toward the travel with +0x116 (on_apply_velocity),
+ * eased, while the facing stays on the target. Outside a face hold the game moves him along the
+ * facing minus +0x116, and nothing set it back: when the hold ended mid-run (lock-on or aim let go,
+ * the stick still held) the body's turn of that moment became his heading, so he ran off the stick
+ * (up to about 60 degrees while the body was still swinging after a change of direction) until he
+ * stopped; standing, his body stayed turned away from his facing, through the next lock-on too. Only
+ * a sideways run (+0x112 != 0) was put back, and that snapped the body. Now, once the hold is over:
+ * moving, he goes where the stick points and the body's offset from it runs out at the hold's own
+ * rate (BODY_EASE per update, about 0.3 s); standing (or stopping), the facing takes the body's
+ * direction and the turn is cleared at once, which changes nothing on screen. */
+static int fh_easing;      /* the body is turning back to the stick... */
+static int fh_known;       /* ...and fh_yaw holds where it points (world, 12-bit units): tracked through */
+static double fh_yaw;      /* the hold, since the camera update that ends it already turns the facing to
+                              the stick before this update (facing - +0x116 is no longer the body then) */
+static double fh_off;      /* the body's offset from the stick, running out */
+
+static void face_hold_body_release(void)
+{
+    int st = P8(PL_STATE), cur = (RD32(G_PLAYER_FACING) >> 16) & 0xfff, mv = S16(PL_MOVE_ANGLE);
+    if (!fh_body) {
+        fh_easing = fh_known = 0;
+        return;
+    }
+    if (face_hold) {
+        fh_yaw = (double)((cur - mv) & 0xfff);
+        fh_known = 1;
+        fh_easing = 0;
+        return;
+    }
+    if (P8(PL_INPUT_FLAGS) & 0x60)   /* (scripted or locked input: wait) */
+        return;
+    if (!mv || (st != 0 && st != 1 && st != 2 && st != 6)) {   /* (a jump, a roll, the skates: their own turn now) */
+        fh_body = fh_easing = fh_known = 0;
+        return;
+    }
+    if (!fh_known)
+        fh_yaw = (double)((cur - mv) & 0xfff);
+    fh_known = 1;
+    if (st == 0 || !cam_active || !move_active || roll_ours) {
+        write_facing(iround(fh_yaw));
+        S16(PL_MOVE_ANGLE) = 0;
+        fh_body = fh_easing = fh_known = 0;
+        return;
+    }
+    /* moving: the body's offset from the stick at the end of the hold runs out (it doesn't chase a
+       stick that keeps turning: the body would trail it) */
+    if (!fh_easing)
+        fh_off = signed12((iround(fh_yaw) - (move_face & 0xfff)) & 0xfff);
+    fh_easing = 1;
+    fh_off *= 1.0 - BODY_EASE;
+    mv = -iround(fh_off);
+    if (mv >= -16 && mv <= 16) {
+        mv = 0;
+        fh_body = fh_easing = fh_known = 0;
+    }
+    fh_yaw = (double)((move_face - mv) & 0xfff);
+    write_facing(move_face);
+    S16(PL_MOVE_ANGLE) = (int16_t)mv;
+}
+
 static void on_player_update(regs_t *r)
 {
     if (r->eax != G_PLAYER)
@@ -2581,6 +2646,7 @@ static void on_player_update(regs_t *r)
             air_steered = 0;
         }
     }
+    face_hold_body_release();
     if (talk_hidden) {
         P16(PL_MASK_TALK) = talk_saved;
         talk_hidden = 0;
@@ -2649,10 +2715,10 @@ static void on_player_update(regs_t *r)
         if (face_hold) {
             int rel = ((move_face - face_dir + 2048) & 0xfff) - 2048;
             want = rel >= -512 && rel <= 512 ? 0 : rel > 512 && rel <= 1536 ? 3 : rel < -512 && rel >= -1536 ? 1 : 2;
-        } else if (P8(PL_RUN_DIR) != 0) {
+        } else if (P8(PL_RUN_DIR) != 0 && !fh_easing) {
             write_facing(move_face);   /* facing = travel, body where it was */
             S16(PL_MOVE_ANGLE) = 0;
-        }
+        }   /* (after a face hold, face_hold_body_release turns the body back) */
         if (want != P8(PL_RUN_DIR)) {
             P8(PL_RUN_DIR_PREV) = P8(PL_RUN_DIR);
             P8(PL_RUN_DIR) = (uint8_t)want;
@@ -2694,6 +2760,7 @@ static void on_apply_velocity(regs_t *r)
     if (face_hold && move_active && st == 2) {
         int f = (RD32(G_PLAYER_FACING) >> 16) & 0xfff;
         S16(PL_MOVE_ANGLE) = (int16_t)(((f - move_face + 2048) & 0xfff) - 2048);
+        fh_body = 1;
     }
     /* jumps move along the facing too (travel = facing - +0x116), so turning him to shoot in
      * the air swung the drift to the target / the camera's way. In a face hold the drift
@@ -2770,6 +2837,7 @@ static void on_apply_velocity(regs_t *r)
             else if (body < -2048)
                 body += 4096;
             S16(PL_MOVE_ANGLE) = (int16_t)iround(body);
+            fh_body = 1;
             rel = va - (f - body) * (PI / 2048.0);
             r->edx = (uint32_t)(int32_t)iround(vs * cos(rel));
             r->ecx = (uint32_t)(int32_t)iround(-vs * sin(rel) * WS_SIDE_SIGN);
