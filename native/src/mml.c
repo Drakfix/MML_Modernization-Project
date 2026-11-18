@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "actorcull.h"
 #include "ambience.h"
 #include "apicensus.h"
 #include "anim_blend.h"
@@ -917,6 +918,10 @@ void mml_init(void)
                     GetPrivateProfileIntA("textures", "dump", 0, g_ini));
     if (GetPrivateProfileIntA("debug", "clip_uv", 1, g_ini))
         clipfix_install();
+    /* [debug] close_actors=0 restores the patched game's cull of actors whose origin is very close
+     * to the camera (the PS1 draws them; actorcull.c) */
+    if (GetPrivateProfileIntA("debug", "close_actors", 1, g_ini))
+        actorcull_install();
     if (GetPrivateProfileIntA("debug", "quick_save", 1, g_ini)) {   /* on by default; =0 turns it off */
         quicksave_install(g_game_dir);
     }

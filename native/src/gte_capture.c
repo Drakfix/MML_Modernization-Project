@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <stdint.h>
 
+#include "actorcull.h"
 #include "gte_capture.h"
 #include "guest.h"
 #include "hook.h"
@@ -82,18 +83,35 @@ static void report(uint32_t ret, uint32_t v, uint32_t sxy)
     }
 }
 
+static int g_capture;      /* interp.c gets the vertices */
+static int g_rtps_hooked;
+
 /* r->esp is the game's esp minus 4 (the stub's pushfd) */
-static void on_rtps(regs_t *r)    { report(GVAR(uint32_t, r->esp + 4 + 16), G_GTE_V0, G_GTE_SXY2); }
+static void on_rtps(regs_t *r)
+{
+    uint32_t ret = GVAR(uint32_t, r->esp + 4 + 16);
+    if (g_capture)
+        report(ret, G_GTE_V0, G_GTE_SXY2);
+    actorcull_after_rtps(ret);   /* after the report: interp keeps the exact screen point */
+}
 static void on_rtpt_v0(regs_t *r) { report(GVAR(uint32_t, r->esp + 4 + 8), G_GTE_V0, G_GTE_SXY0); }
 static void on_rtpt_v1(regs_t *r) { report(GVAR(uint32_t, r->esp + 4 + 8), G_GTE_V1, G_GTE_SXY1); }
 static void on_rtpt_v2(regs_t *r) { report(GVAR(uint32_t, r->esp + 4 + 8), G_GTE_V2, G_GTE_SXY2); }
 
+static const uint8_t mov_eax_sz3[] = { 0xA1, 0xA0, 0xEB, 0x77, 0x00 };    /* mov eax,[0x77EBA0] */
+static const uint8_t mov_ebx_cam[] = { 0xBB, 0x28, 0xEB, 0x77, 0x00 };    /* mov ebx,0x77EB28 */
+
+/* The RTPS hook serves interp.c and actorcull.c; whichever installs first places it. */
+int gte_rtps_hook(void)
+{
+    if (!g_rtps_hooked)
+        g_rtps_hooked = hook_mid(SITE_RTPS, sizeof mov_eax_sz3, mov_eax_sz3, on_rtps);
+    return g_rtps_hooked;
+}
+
 int gte_capture_install(int census)
 {
-    static const uint8_t mov_eax_sz3[] = { 0xA1, 0xA0, 0xEB, 0x77, 0x00 };    /* mov eax,[0x77EBA0] */
-    static const uint8_t mov_ebx_cam[] = { 0xBB, 0x28, 0xEB, 0x77, 0x00 };    /* mov ebx,0x77EB28 */
-
-    if (!hook_mid(SITE_RTPS, sizeof mov_eax_sz3, mov_eax_sz3, on_rtps) ||
+    if (!gte_rtps_hook() ||
         !hook_mid(SITE_RTPT_V0, sizeof mov_ebx_cam, mov_ebx_cam, on_rtpt_v0) ||
         !hook_mid(SITE_RTPT_V1, sizeof mov_ebx_cam, mov_ebx_cam, on_rtpt_v1) ||
         !hook_mid(SITE_RTPT_V2, sizeof mov_eax_sz3, mov_eax_sz3, on_rtpt_v2)) {
@@ -102,6 +120,7 @@ int gte_capture_install(int census)
     }
     QueryPerformanceFrequency(&g_qpf);
     g_census = census;
+    g_capture = 1;
     log_printf("interp: GTE capture on");
     return 1;
 }
