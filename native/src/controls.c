@@ -33,6 +33,7 @@
 #include "guest.h"
 #include "hook.h"
 #include "iat.h"
+#include "display.h"
 #include "kbm.h"
 #include "input.h"
 #include "lockon.h"
@@ -67,7 +68,22 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define WALK_MIN_PCT     40      /* walk speed/animation at the lightest tilt */
 #define RUN_MIN_PCT      50      /* run speed/animation right past the walk range */
 #define ROLL_BUFFER      12      /* player updates a roll press waits for a chance to start */
-#define LOOK_ORBIT_MAX   100     /* the camera orbits up to this pitch; looking further up tilts in place */
+#define LOOK_ORBIT_MAX   100     /* the camera orbits up to this pitch; looking further up tilts in place... */
+/* ...as long as Mega Man stays in the picture (place_camera: the orbit, the shoulder views, lock-on) */
+#define FRAME_FOCUS      100     /* his shoulders: this far above his position (y grows downward)... */
+#define FRAME_KEEP       0.62    /* ...at most this far down the half screen */
+#define FRAME_KEEP_X     0.6     /* his middle at most this far out to the side of the half screen (the shoulder
+                                    view up close)... */
+#define FRAME_CLOSE      120     /* ...measured as if the camera were at least this far (closer: it stays beside
+                                    his head rather than inside it) */
+#define FRAME_VIEW_LOW   130     /* the rig comes down no lower than a view point this far above his position... */
+#define FRAME_CAM_FLOOR  40      /* ...and a camera this far (both y grow downward) */
+#define FRAME_MIN_DIST   180     /* looking up, lowering the camera stops before it comes this close to his chest */
+#define FRAME_ORBIT_MAX  0x2C0   /* ...or goes this low (62 deg) */
+#define FRAME_TILT_MAX   0x80    /* the view tilts down from the pitch asked for at most this much (11 deg) */
+#define FRAME_EASE       0.3     /* per 1/60 s: the framing's moves (rig down, camera lower, view point in) */
+#define G_GTE_OFX_ADDR   0x77EBCCu   /* s32: the projection's centre (160, 120) */
+#define G_GTE_OFY_ADDR   0x77EBD0u
 #define ORBIT_SETTLE     20      /* camera calls the game camera keeps after a handover */
 #define LOCK_CAM_EASE    0.12    /* per 1/60 s: how fast the camera swings behind Mega Man on lock-on */
 /* over-the-shoulder lock-on camera ([controls] lockon_camera=shoulder) */
@@ -78,8 +94,8 @@ typedef DWORD(WINAPI *xgs_t)(DWORD, xstate_t *);
 #define ADS_ZOOM         1.3     /* camera_shoulder, aiming: the view zooms in this much (like a shooter's ADS) */
 #define ADS_EASE         0.2     /* per 1/60 s, in and out */
 #define TIGHT_ROOM       0.75    /* less free room behind the shoulder view than this share of its distance: tight */
-#define TIGHT_CENTER     0.7     /* ...then the view slides back toward the middle by up to this share */
-#define TIGHT_LIFT       70      /* ...and up over his head by up to this much (y grows downward) */
+#define TIGHT_CENTER     0.4     /* ...then the view slides back toward the middle by up to this share */
+#define TIGHT_LIFT       35      /* ...and up over his head by up to this much (y grows downward) */
 #define COAST_FRAMES     8       /* 1/60 s: in a burst, a run goes on through a stick gap this short */
 #define BODY_EASE        0.35    /* per update: the strafe run's body turn eases toward its travel */
 #define SH_EASE          0.14    /* per 1/60 s: easing into / out of the shoulder framing */
@@ -260,6 +276,10 @@ static double sh_tight;    /* 0..1: how cramped the room behind the shoulder vie
 #define FADE_FAR         380     /* ...and fully opaque from here */
 #define FADE_MIN         0.25
 #define FADE_EASE        0.2     /* per 1/60 s */
+#define FADE_CLEAR       0.8     /* ...but at least this opaque while he's clear of the view's centre... */
+#define FADE_CLEAR_GAP   0.15    /* ...by this much (half screen heights; less: in between) */
+#define FADE_HEAD        145     /* his outline on screen: the head this far above his position... */
+#define FADE_BODY_HALF   45      /* ...and this wide either side of him */
 static int g_fade_on = 1, g_fade_log;   /* [controls] camera_fade; (testing: MML_FADE_LOG=1) */
 static volatile LONG g_player_alpha = 255;
 static int g_aim_assist;   /* [controls] aim_assist: slower camera and a tighter crosshair over an enemy */
@@ -347,6 +367,9 @@ static volatile LONG cam_fresh;                /* the camera updates paused (a r
 static double g_yaw_speed = YAW_SPEED, g_pitch_speed = PITCH_SPEED, g_stick_dz = STICK_DZ;
 static double cam_dist_cur = -1;
 static int32_t *g_view_target;   /* handed to the game (EAX): in guest memory */
+static int32_t *g_frame_target;  /* (the view point moved toward Mega Man: place_camera) */
+static double frame_aim_up;      /* the view stopped short of the pitch asked for by this much (angle units, up):
+                                    the aim goes on up the screen (aim_point_update) */
 static int st_active, prev_key, prev_click;
 static LARGE_INTEGER qpc_last, qpc_freq;
 
@@ -1182,15 +1205,159 @@ static void view_past_orbit(regs_t *r, const int32_t *t, int d, int yaw, double 
  * The camera orbits the target only up to LOOK_ORBIT_MAX; looking further up
  * keeps it there and tilts the view through a virtual target. `mode` keeps the
  * eased distance per camera (0 orbit, 1 stock aim). */
+/* How far below the view's centre Mega Man's shoulders (FRAME_FOCUS) are, in angle units (+ = below), for a camera
+ * `d` from the view point `t` at orbit pitch `orbit` and a view pitch `pitch` (positives up). The
+ * vertical plane through the view holds it exactly: his sideways offset (the shoulder view point)
+ * projects along the screen's right and leaves the height on screen alone. */
+static double frame_below(const int32_t *t, int d, int yaw, double orbit, double pitch)
+{
+    double a = (yaw & 0xfff) * (PI / 2048.0), b = -orbit * (PI / 2048.0);
+    double cx = t[0] - d * sin(a) * cos(b), cy = t[1] - d * sin(b), cz = t[2] - d * cos(a) * cos(b);
+    double fwd = (S16(0x14) - cx) * sin(a) + (S16(0x18) - cz) * cos(a);   /* along the view, flat */
+    double up = cy - (S16(0x16) - FRAME_FOCUS);                             /* y grows downward */
+    if (fwd < 1)
+        fwd = 1;
+    return pitch - atan2(up, fwd) * (2048.0 / PI);
+}
+
+/* Sideways: the shoulder view point sits SH_SIDE beside him, which puts him toward an edge, and off
+ * it once the camera comes close (the floor when looking up, a wall behind). How far the view point
+ * moves toward him to keep him within FRAME_KEEP_X of the half screen (0: no need). */
+static double frame_side(const int32_t *t, int d, int yaw, double orbit)
+{
+    double a = (yaw & 0xfff) * (PI / 2048.0), b = -orbit * (PI / 2048.0), hx = mml_h_x(), half, fwd, off, lim;
+    double cx = t[0] - d * sin(a) * cos(b), cz = t[2] - d * cos(a) * cos(b);
+    if (!(hx > 1))
+        return 0;
+    half = display_native_width() > 640 ? display_native_width() / 4.0 : GVAR(int32_t, G_GTE_OFX_ADDR);
+    fwd = (S16(0x14) - cx) * sin(a) + (S16(0x18) - cz) * cos(a);
+    off = (S16(0x14) - t[0]) * cos(a) - (S16(0x18) - t[2]) * sin(a);   /* along the view's right */
+    lim = FRAME_KEEP_X * half / hx * (fwd > FRAME_CLOSE ? fwd : FRAME_CLOSE);   /* (closer: beside his head) */
+    return off > lim ? off - lim : off < -lim ? off + lim : 0;
+}
+
+/* the camera's distance from the view point at that orbit pitch: the collision, or less while it eases
+   back out after a wall */
+static int frame_dist(const int32_t *t, int dist, int yaw, double orbit)
+{
+    int d = cam_collide(t, dist, yaw, -iround(orbit));
+    return cam_dist_cur >= 0 && cam_dist_cur < d ? iround(cam_dist_cur) : d;
+}
+
+/* ...and from his chest, leaving out the sideways part (the view point moves in from the side
+   afterwards, frame_side) */
+static double frame_chest_dist(const int32_t *t, int d, int yaw, double orbit)
+{
+    double a = (yaw & 0xfff) * (PI / 2048.0), b = -orbit * (PI / 2048.0);
+    double cx = t[0] - d * sin(a) * cos(b), cz = t[2] - d * cos(a) * cos(b);
+    double fwd = (S16(0x14) - cx) * sin(a) + (S16(0x18) - cz) * cos(a), up = t[1] - d * sin(b) - (S16(0x16) - AIM_CHEST);
+    return sqrt(fwd * fwd + up * up);
+}
+
+/* the most his shoulders may sit below the view's centre: FRAME_KEEP of the half screen, at the
+   projection (zoom) in use now */
+static double frame_room(void)
+{
+    double h = GVAR(float, G_GTE_H_FLOAT), ofy = GVAR(int32_t, G_GTE_OFY_ADDR);
+    if (!(h > 1) || ofy <= 0)
+        return 1e9;
+    return atan(FRAME_KEEP * ofy / h) * (2048.0 / PI);
+}
+
+/* The orbit pitch, from `orbit` down (the camera lower), that keeps his shoulders in a view tilted
+   `pitch`: no closer to his chest than `near_d` (0: any), no lower than FRAME_ORBIT_MAX */
+static double frame_lower(const int32_t *t, int dist, int yaw, double orbit, double pitch, double room, double near_d)
+{
+    double o = orbit, o_prev = orbit, lo, hi;
+    int k;
+    for (k = 0; k < 4; k++) {
+        int dk = frame_dist(t, dist, yaw, o);
+        double over = frame_below(t, dk, yaw, o, pitch) - room;
+        if (near_d > 0 && frame_chest_dist(t, dk, yaw, o) < near_d - 1) {   /* too close: back to the lowest that isn't */
+            for (lo = o_prev, hi = o; hi - lo > 2;) {
+                double mid = (lo + hi) / 2;
+                if (frame_chest_dist(t, frame_dist(t, dist, yaw, mid), yaw, mid) < near_d - 1)
+                    hi = mid;
+                else
+                    lo = mid;
+            }
+            return lo;
+        }
+        if (over <= 0.5)
+            break;
+        o_prev = o;
+        o = o + over > FRAME_ORBIT_MAX ? FRAME_ORBIT_MAX : o + over;
+    }
+    return o;
+}
+
 static void place_camera(regs_t *r, int yaw, int pitch, int mode)
 {
     static int last_mode = -1;
     const int32_t *t = (const int32_t *)GUEST(r->eax);
     int orbit = pitch > LOOK_ORBIT_MAX ? LOOK_ORBIT_MAX : pitch;
-    int want, d;
+    int want, d, view = pitch;
+    double room = mode == 0 ? frame_room() : 1e9;
     if (mode != last_mode)
         cam_dist_cur = -1;
     last_mode = mode;
+    /* Keep Mega Man in the picture (the orbit; the stock aim camera stays the game's).
+       A camera pulled in close (a wall at his back, a narrow hall) sat as high as the view point, which
+       floats over his head (the game's target, plus the shoulder view's lift): it looked level over
+       him while he was below the screen. The whole rig comes down instead, view point and camera
+       together, as far as a level view needs to show his shoulders (not below his head, the camera
+       not into the floor).
+       Looking up steeply (the sky, a tall enemy locked on), a camera that stays at the orbit's limit
+       leaves him below the screen: it swings lower behind him, as far as his shoulders need, stopping
+       before the floor pulls it in closer than FRAME_MIN_DIST. Only then does the view stop tilting
+       (the aim goes on up the screen, frame_aim_up). */
+    if (room < 1e8) {
+        static double e_drop, e_low, e_side;   /* eased: a wall passing behind him moves the camera smoothly */
+        static LARGE_INTEGER last;
+        LARGE_INTEGER now;
+        double o, cy, up, fwd, a = (yaw & 0xfff) * (PI / 2048.0), sh, lvl = (pitch < 0 ? pitch : 0) - room, ease;
+        int k, dk, t1 = t[1];
+        QueryPerformanceCounter(&now);
+        ease = last.QuadPart && cam_dist_cur >= 0
+                   ? 1.0 - pow(1.0 - FRAME_EASE, clampd((double)(now.QuadPart - last.QuadPart) / qpc_freq.QuadPart, 0, 0.1) * 60.0)
+                   : 1.0;   /* (a fresh camera: at once) */
+        last = now;
+        if (!g_frame_target)
+            g_frame_target = (int32_t *)GUEST(guest_alloc(16));
+        memcpy(g_frame_target, t, 16);
+        t = g_frame_target;
+        r->eax = GADDR(g_frame_target);
+        for (k = 0; k < 2; k++) {   /* down (y grows downward); the collision may change on the way */
+            double drop, b = -orbit * (PI / 2048.0);
+            dk = frame_dist(t, (int)r->edx, yaw, orbit);
+            cy = t[1] - dk * sin(b);
+            fwd = (S16(0x14) - (t[0] - dk * sin(a) * cos(b))) * sin(a) + (S16(0x18) - (t[2] - dk * cos(a) * cos(b))) * cos(a);
+            up = cy - (S16(0x16) - FRAME_FOCUS);   /* his shoulders above the camera (- = below it) */
+            drop = (fwd > 1 ? fwd : 1) * tan(lvl * (PI / 2048.0)) - up;
+            if (drop > (S16(0x16) - FRAME_VIEW_LOW) - t[1])
+                drop = (S16(0x16) - FRAME_VIEW_LOW) - t[1];
+            if (drop > (S16(0x16) - FRAME_CAM_FLOOR) - cy)
+                drop = (S16(0x16) - FRAME_CAM_FLOOR) - cy;
+            if (drop < 1)
+                break;
+            g_frame_target[1] += iround(drop);
+        }
+        o = orbit;
+        if (pitch > 0) {
+            double cd = frame_chest_dist(t, frame_dist(t, (int)r->edx, yaw, o), yaw, o);
+            o = frame_lower(t, (int)r->edx, yaw, o, pitch, room, cd < FRAME_MIN_DIST ? cd : FRAME_MIN_DIST);
+        }
+        /* ...and in from the side */
+        sh = frame_side(t, frame_dist(t, (int)r->edx, yaw, iround(o)), yaw, iround(o));
+        /* what this update wants, eased */
+        e_drop += (g_frame_target[1] - t1 - e_drop) * ease;
+        e_low += (o - orbit - e_low) * ease;
+        e_side += (sh - e_side) * ease;
+        g_frame_target[1] = t1 + iround(e_drop);
+        orbit += iround(e_low);
+        g_frame_target[0] += iround(e_side * cos(a));
+        g_frame_target[2] -= iround(e_side * sin(a));
+    }
     /* pull in at once, ease back out */
     want = cam_collide(t, (int)r->edx, yaw, -orbit);
     if (cam_dist_cur < 0 || want < cam_dist_cur)
@@ -1198,10 +1365,32 @@ static void place_camera(regs_t *r, int yaw, int pitch, int mode)
     else
         cam_dist_cur += (want - cam_dist_cur) * CAM_EASE_OUT;
     d = iround(cam_dist_cur);
+    /* still below the screen (the floor stopped the camera, or the camera sits high and close: a wall
+       at his back): the view tilts down just enough to keep him in it */
+    if (room < 1e8) {
+        double over = frame_below(t, d, yaw, orbit, view) - room;
+        if (over > FRAME_TILT_MAX)
+            over = FRAME_TILT_MAX;
+        if (over > 0)
+            view -= iround(over);
+    }
+    if (g_fade_log && mode == 0) {
+        static int n;
+        if (++n % 10 == 0)
+            log_printf("frame: pitch %d orbit %d view %d dist %d/%d room %.0f below %.0f", pitch, orbit, view, d,
+                       (int)r->edx, room, frame_below(t, d, yaw, orbit, view));
+    }
+    /* the aim keeps the pitch asked for: the crosshair moves up the screen from where the view stopped
+       (kept inside the screen) */
+    frame_aim_up = 0;
+    if (room < 1e8 && view < pitch) {
+        double h = GVAR(float, G_GTE_H_FLOAT), lim = atan(0.8 * GVAR(int32_t, G_GTE_OFY_ADDR) / h) * (2048.0 / PI);
+        frame_aim_up = pitch - view < lim ? pitch - view : lim;
+    }
     r->edx = (uint32_t)d;
-    r->ecx = (uint32_t)(-pitch & 0xffff);   /* cam_apply_angles negates ECX */
-    if (pitch > orbit)
-        view_past_orbit(r, t, d, yaw, orbit, pitch);
+    r->ecx = (uint32_t)(-view & 0xffff);   /* cam_apply_angles negates ECX */
+    if (view != orbit)
+        view_past_orbit(r, t, d, yaw, orbit, view);
 }
 
 /* The boat rides: the game's camera swings down behind Mega Man as he aims up, and at the top
@@ -1322,15 +1511,30 @@ static void player_fade_update(void)
     static int n;
     double cx = RD32(G_CAM_PLACED), cy = RD32(G_CAM_PLACED + 4), cz = RD32(G_CAM_PLACED + 8);
     double dx = cx - S16(0x14), dy = cy - (S16(0x16) - AIM_CHEST), dz = cz - S16(0x18);
-    double d = sqrt(dx * dx + dy * dy + dz * dz), want = 1.0;
-    if (g_fade_on && cam_active && !rail_live())   /* (whoever placed the camera: also while it settles) */
+    double d = sqrt(dx * dx + dy * dy + dz * dz), want = 1.0, gap = -1;
+    if (g_fade_on && cam_active && !rail_live()) {   /* (whoever placed the camera: also while it settles) */
+        double hx, hy, fx, fy, ofx = GVAR(int32_t, G_GTE_OFX_ADDR), ofy = GVAR(int32_t, G_GTE_OFY_ADDR), floor_a;
         want = FADE_MIN + (1.0 - FADE_MIN) * clampd((d - FADE_NEAR) / (FADE_FAR - FADE_NEAR), 0, 1);
+        /* Up close he's only in the way where he covers the middle of the view (the crosshair): a camera
+           low behind him looking up, or beside him, shows him at an edge, and he stays solid enough to
+           follow (dodging needs him in sight). His outline on screen from head to feet, FADE_BODY_HALF
+           wide; the gap from the screen's centre to it, in half screen heights. */
+        if (want < 1.0 && ofy > 0 && lockon_project(S16(0x14), S16(0x16) - FADE_HEAD, S16(0x18), &hx, &hy) &&
+            lockon_project(S16(0x14), S16(0x16), S16(0x18), &fx, &fy)) {
+            double dep = d > 1 ? d : 1, half = mml_h_x() * FADE_BODY_HALF / dep;
+            double gx = fabs((hx + fx) / 2 - ofx) - half, gy = hy > ofy ? hy - ofy : fy < ofy ? ofy - fy : 0;
+            gap = (gx > gy ? gx : gy) / ofy;
+            floor_a = FADE_MIN + (FADE_CLEAR - FADE_MIN) * clampd(gap / FADE_CLEAR_GAP, 0, 1);
+            if (want < floor_a)
+                want = floor_a;
+        }
+    }
     cur += (want - cur) * FADE_EASE;
     if (fabs(cur - want) < 0.004)
         cur = want;
     InterlockedExchange(&g_player_alpha, (LONG)iround(cur * 255));
     if (g_fade_log && ++n % 10 == 0)
-        log_printf("fade: camera %.0f from his chest, alpha %.2f", d, cur);
+        log_printf("fade: camera %.0f from his chest, clear of the centre by %.2f, alpha %.2f", d, gap, cur);
 }
 
 int controls_player_alpha(void)
@@ -1351,7 +1555,7 @@ static void aim_point_update(void)
 {
     double yaw = (RD16(G_CAM_YAW_NOW) & 0xfff) * (PI / 2048.0);
     int pr = RD16(G_CAM_PITCH_NOW) & 0xfff;
-    double p = -(pr > 2048 ? pr - 4096 : pr) * (PI / 2048.0);
+    double p = -((pr > 2048 ? pr - 4096 : pr) + frame_aim_up) * (PI / 2048.0);   /* (up past where the view stopped) */
     double fx = sin(yaw) * cos(p), fy = sin(p), fz = cos(yaw) * cos(p);
     double cx = RD32(G_CAM_PLACED), cy = RD32(G_CAM_PLACED + 4), cz = RD32(G_CAM_PLACED + 8);
     double px = S16(0x14), py = S16(0x16) - AIM_CHEST, pz = S16(0x18), dist = AIM_DIST, dx, dz, h;
@@ -1543,6 +1747,7 @@ static void on_cam_apply(regs_t *r)
         move_start_grace--;
 
 
+    frame_aim_up = 0;   /* (place_camera sets it again for the orbit) */
     if (is_rail_cam) {
         /* the boat rides (scripted rig, any controls): the camera stays above the water */
         rail_camera(r);
