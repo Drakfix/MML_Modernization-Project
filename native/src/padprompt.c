@@ -4,6 +4,7 @@
 
 #include "input.h"
 #include "padprompt.h"
+#include "touch.h"
 
 enum { PS_AUTO = -1 };
 static volatile int g_setting = PS_AUTO;
@@ -57,6 +58,8 @@ int pad_family(void)
     int s = g_setting;
     if (s != PS_AUTO)
         return s;
+    if (touch_visible())   /* (the touch controls: Xbox, not a controller used before) */
+        return PF_XBOX;
     switch (input_pad_type()) {   /* (the controller connected now, or the last one) */
     case T_PS3: return PF_PS3;
     case T_PS4: return PF_PS4;

@@ -200,6 +200,11 @@ static void ps_symbol(float cx, float cy, float s, int b, uint32_t col)
    draws them; x to x + 2r (returned) */
 float ui_pad_face(float x, float cy, float r, int b)
 {
+    return ui_pad_face_ex(x, cy, r, b, 0.62f);
+}
+
+float ui_pad_face_ex(float x, float cy, float r, int b, float text_scale)
+{
     static const uint32_t XBOX[4] = { 0xFF3FA34D, 0xFFD8443C, 0xFF2F7BE0, 0xFFE0A81C };
     static const uint32_t PS[4] = { 0xFF8FB4F0, 0xFFF07070, 0xFFE88AD0, 0xFF4FD8B0 };
     float cx = x + r;
@@ -212,13 +217,13 @@ float ui_pad_face(float x, float cy, float r, int b)
         ps_symbol(cx, cy, r * 0.62f, b, f == PF_PS5 ? 0xFFDCE2EA : PS[b]);
     } else {
         const char *label = pad_cap(b);
-        float tw = gfx_ui_font_width(UI_FONT_BODY, label, 0.62f);
+        float tw = gfx_ui_font_width(UI_FONT_BODY, label, text_scale);
         int sw = f == PF_SWITCH;
         gfx_ui_circle(cx, cy, r, ui_col(sw ? 0xFFE8ECF2 : XBOX[b]));
         if (!sw)
             gfx_ui_ring(cx, cy, r, r * 0.16f, ui_col(0x60FFFFFF));
-        ui_text(cx - tw / 2, cy - gfx_ui_font_line(UI_FONT_BODY, 0.62f) / 2, label, sw ? 0xFF141A24 : 0xFFFFFFFF,
-                0.62f);
+        ui_text(cx - tw / 2, cy - gfx_ui_font_line(UI_FONT_BODY, text_scale) / 2, label, sw ? 0xFF141A24 : 0xFFFFFFFF,
+                text_scale);
     }
     return r * 2;
 }

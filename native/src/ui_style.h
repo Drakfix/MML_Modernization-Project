@@ -38,5 +38,6 @@ float ui_cap_width(float h, const char *label);   /* (the width ui_cap will take
 float ui_key_cap(float x, float cy, float h, const char *label);   /* controller button: dark */
 float ui_key_cap_width(float h, const char *label);   /* (the width ui_key_cap will take) */
 float ui_pad_face(float x, float cy, float r, int b);   /* a face button (PB_A..PB_Y): returns 2r */
+float ui_pad_face_ex(float x, float cy, float r, int b, float text_scale);   /* (its letter at this size) */
 int ui_pad_icon(float cx, float cy, float r, int b);    /* Back / Start as an icon where it is one (1) */
 float ui_kb_cap(float x, float cy, float h, const char *label);    /* keyboard key: light */

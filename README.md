@@ -355,7 +355,7 @@ the Japanese line being spoken.
   copied to the device.
 - **Android 9 or newer** on a 64-bit (arm64) device with **Vulkan 1.1**.
 - About **2.5 GB** of free space (the game is copied into the app).
-- A **controller** or a handheld with built-in controls. Touch controls are not available yet.
+- A **controller**, a handheld with built-in controls, or the on-screen touch controls.
 
 **Linux (experimental)**
 
@@ -507,6 +507,26 @@ On Android, the system's **Back** button closes the settings menu, or closes the
 pressed twice. In the start menu, **Start** plays and **B** quits. On the title screen, hold
 **Back** for 1.5 seconds to go back to the start menu.
 
+### Touch controls (Android)
+
+Without a controller, Android shows on-screen controls laid out like a controller, drawn
+semi-transparent over the game. Several fingers work at once, so you can move, turn the camera
+and press buttons together.
+
+| Area | What it does |
+|------|--------------|
+| Left side of the screen | Left stick: touch anywhere there and drag to move (the stick appears under your thumb); double-tap and hold for L3 |
+| Right side of the screen | Camera: drag anywhere outside the buttons, like a right stick; double-tap and hold for R3 |
+| A, B, X, Y (right) | The face buttons; slide your thumb from one to the next |
+| LT, LB (top left), RB, RT (top right) | Triggers and shoulder buttons |
+| Back (under LT), Start (under RT) | Back and Start; press both for the settings menu |
+
+The buttons carry the names set in **Button prompts** (Xbox letters for Auto). **Touch controls**
+(Controls page, Android only) sets when they show: **Auto** (the default) only while no controller
+is connected, so they hide when one connects and return when it disconnects; **On** always;
+**Off** never. **Touch opacity** (20% to 80%, default 40%) sets how see-through they are; a button
+or stick you are pressing is drawn stronger. A layout you can edit is planned after 1.0.
+
 ### Mouse and keyboard (Windows and Linux, modern controls)
 
 | Input | Action |
@@ -602,7 +622,7 @@ menu shows each setting's full description and choices beside the list.
 | Game | Version to play, importing each version, English subtitles, voice language, localization names (US / Japanese), start menu at launch (show / skip), intro video, title screen hints, room transitions, all difficulties, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio (fill screen / 16:9 / 4:3), frame rate (30 / 60 / 120), FPS counter, V-Sync, executable |
 | Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, draw distance (full / up to the fog), level of detail, texture replacement, texture dump, animation blending, HUD size |
-| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), button prompts (Auto / Xbox / PlayStation 4 / PlayStation 5 / Switch), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |
+| Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), button prompts (Auto / Xbox / PlayStation 4 / PlayStation 5 / Switch), touch controls (Auto / On / Off, Android) and their opacity, camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |
 | Combat | Combat style (Classic / Adventure / Shooter presets, or Custom), camera position (behind / over the shoulder), fade up close, aim button (lock-on / free aim), lock-on camera, shots aim, aim sensitivity, aim assist, move while shooting, backpedal (walk / jog), crosshair (off / while aiming / always), reticle colour |
 | Buttons | Controller and keyboard remapping |
 
@@ -678,7 +698,7 @@ game and the saves: copy the `DASH_*.MCD` files out of it first if you want to k
   require the project's own renderers (not DirectDraw legacy).
 - With the Legacy controller backend, the controller still reaches the game while the in-game
   menu is open.
-- Android: no touch controls, and no mouse and keyboard support yet.
+- Android: no mouse and keyboard support yet. The touch controls' layout can't be changed yet.
 - The subtitles and the Japanese voices are experimental: they have not been checked through
   the whole game yet.
 - With the Japanese voices, the subtitles (timed to the English voice acting) are not always
@@ -694,7 +714,7 @@ game and the saves: copy the `DASH_*.MCD` files out of it first if you want to k
 ## Roadmap
 
 - **Linux:** testing on real hardware and the Steam Deck, and a build for older distributions.
-- **Touch controls** on Android.
+- **Touch controls:** a layout you can edit (after 1.0).
 - Later candidates: bloom and ambient occlusion, HUD repositioning options, and further mod
   support.
 

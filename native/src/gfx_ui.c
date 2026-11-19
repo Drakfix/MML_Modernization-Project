@@ -36,7 +36,7 @@ static struct {
     ui_glyph glyph[UI_FONTS][LAST_CHAR + 1];
     ui_vert verts[MAX_VERTS];
     int nverts;
-    struct { gfx_ui_draw_fn fn; void *user; } draw[8];
+    struct { gfx_ui_draw_fn fn; void *user; } draw[8], top;
     int ndraw;
 } U;
 
@@ -58,6 +58,12 @@ void gfx_ui_add_draw(gfx_ui_draw_fn draw, void *user)
         U.draw[U.ndraw].user = user;
         U.ndraw++;
     }
+}
+
+void gfx_ui_set_top_draw(gfx_ui_draw_fn draw, void *user)
+{
+    U.top.fn = draw;
+    U.top.user = user;
 }
 
 /* both fonts at px line height into the atlas, and a solid 4x4 block at (0,0) for plain shapes */
@@ -246,7 +252,7 @@ float gfx_ui_text(float x, float y, const char *s, uint32_t argb, float scale)
 static int run_draws(int w, int h)
 {
     int px, i;
-    if (!U.ndraw || U.failed || w <= 0 || h <= 0)
+    if ((!U.ndraw && !U.top.fn) || U.failed || w <= 0 || h <= 0)
         return 0;
     px = h / 30 < 14 ? 14 : h / 30 > 96 ? 96 : h / 30;   /* text follows the window size */
     if (px != U.font_px && !make_font(px)) {
@@ -257,6 +263,8 @@ static int run_draws(int w, int h)
     U.nverts = 0;
     for (i = 0; i < U.ndraw; i++)
         U.draw[i].fn(U.draw[i].user, w, h);
+    if (U.top.fn)
+        U.top.fn(U.top.user, w, h);
     return U.nverts;
 }
 

@@ -30,6 +30,7 @@
 #include "display.h"
 #include "fog.h"
 #include "terrain.h"
+#include "touch.h"
 #include "frame_rec.h"
 #include "fps_counter.h"
 #include "gamefiles.h"
@@ -59,6 +60,7 @@ enum {
     IT_FPS, IT_SHOWFPS, IT_VSYNC, IT_RES, IT_MSAA, IT_TEXFILTER, IT_UPSCALE,
     IT_SHADER, IT_SHADER_RES, IT_FOG, IT_LOD, IT_HDTEX,
     IT_HUD_SCALE,    /* size of the corner HUD: gauges and minimap ([video] hud_scale) */
+    IT_TOUCH_OPACITY,   /* the touch controls' opacity, Android ([controls] touch_opacity) */
     IT_ANIMBLEND,    /* animation blending ([video] anim_blend) */
     IT_CAMSPEED, IT_INVERT_X, IT_INVERT_Y, IT_MOUSE, IT_RETICLE, IT_AIM, IT_CROSSHAIR, IT_LOCKCAM, IT_AIMSENS,
     IT_STYLE,        /* combat style: a preset of the rows below (Classic / Adventure / Shooter), or Custom */
@@ -130,6 +132,9 @@ static const choice CH_PROMPTS[] = { { "Auto", "controls.button_prompts=auto" },
 static const choice CH_DIFFS[] = { { "Off", "general.all_difficulties=0" }, { "On", "general.all_difficulties=1" } };
 /* [video] draw_distance: the level drawn to the horizon, or only a little past the distance fog (terrain.c) */
 static const choice CH_DRAWDIST[] = { { "Full", "video.draw_distance=full" }, { "Up to the fog", "video.draw_distance=fog" } };
+/* [controls] touch_controls: the on-screen controls (touch.c, Android) */
+static const choice CH_TOUCH[] = { { "Auto", "controls.touch_controls=auto" }, { "On", "controls.touch_controls=on" },
+                                   { "Off", "controls.touch_controls=off" } };
 #define PROMPTS_HELP "How these menus name the controller's buttons. Auto follows the controller connected."
 
 static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "COMBAT", "GAME" };
@@ -169,6 +174,10 @@ static const item g_game_items[] = {
     { 2, IT_INVERT_Y, "Invert camera Y", "Flips up and down on the camera stick and the mouse." },
     { 2, IT_MOUSE, "Mouse & keyboard", "Mouse look speed. Off turns the mouse and keyboard controls off." },
     { 2, IT_CHOICE, "Button prompts", PROMPTS_HELP, CH_PROMPTS, (int)(sizeof CH_PROMPTS / sizeof CH_PROMPTS[0]) },
+    { 2, IT_CHOICE, "Touch controls", "On-screen controls. Auto shows them only while no controller is connected.",
+      CH_TOUCH, (int)(sizeof CH_TOUCH / sizeof CH_TOUCH[0]), PL_ANDROID },
+    { 2, IT_TOUCH_OPACITY, "Touch opacity", "How see-through the touch controls are. A pressed button shows "
+      "stronger.", NULL, 0, PL_ANDROID },
     { 3, IT_STYLE, "Combat style", STYLE_HELP },
     { 3, IT_SHCAM, "Camera position", SHCAM_HELP },
     { 3, IT_CAMFADE, "Fade up close", "Mega Man turns see-through when the camera comes close to him." },
@@ -400,6 +409,14 @@ static const item g_start_items[] = {
       "controller's buttons, each as its own controller shows them: Xbox letters on their colours, the "
       "PlayStation 4's coloured symbols, the PlayStation 5's plain symbols and icons, or the Switch's white "
       "buttons. Auto follows the controller connected (Xbox for one it doesn't recognize).", CH_PROMPTS, NCH(CH_PROMPTS) },
+    { PG_CONTROLS, IT_CHOICE, "Touch controls", "On-screen controls drawn over the game, for playing without a "
+      "controller. Auto shows them only while no controller is connected: they hide when one connects and come back "
+      "when it disconnects. Touch the left side of the screen to move, drag on the right side to turn the camera, "
+      "and double-tap and hold there for " PT_R3 " (on the left side: " PT_L3 "). The buttons are named as Button prompts sets (Xbox for Auto).",
+      CH_TOUCH, NCH(CH_TOUCH), PL_ANDROID },
+    { PG_CONTROLS, IT_TOUCH_OPACITY, "Touch opacity", "How solid the touch controls are drawn over the game, "
+      "from 20% (faint) to 80% (nearly solid). A button or stick you are pressing is drawn stronger, so you "
+      "can see it react. The change shows at once.", NULL, 0, PL_ANDROID },
     { PG_CONTROLS, IT_SECTION, "Camera" },
     { PG_CONTROLS, IT_CAMSPEED, "Camera sensitivity", "How fast the right stick turns the camera, relative to the "
       "default." },
@@ -505,6 +522,8 @@ static const int MOUSE[] = { 0, 50, 75, 100, 150, 200 };
 static const int AIMSENS[] = { 40, 60, 80, 100 };
 static const int TRANS[] = { 1, 2, 4, 8 };
 static const int HUD_SCALES[] = { 100, 90, 80, 70, 60 };
+static const int TOUCH_OPACITIES[] = { 20, 30, 40, 50, 60, 70, 80 };
+#define NTOUCH_OP ((int)(sizeof TOUCH_OPACITIES / sizeof TOUCH_OPACITIES[0]))
 static const struct { const char *name; unsigned rgb; } RETICLES[] = {
     { "Yellow", 0xFFD840 }, { "Orange", 0xFF9A2E }, { "Red", 0xFF4040 }, { "Pink", 0xFF6EC7 },
     { "Purple", 0xB47CFF }, { "Blue", 0x4AA3FF }, { "Cyan", 0x3EE0E0 }, { "Green", 0x5BE36B },
@@ -544,6 +563,7 @@ static struct {
     int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens, trans;
     int aim_free, walk_shoot, backjog, assist, shcam, anim_blend, camfade;   /* crosshair: 0 off, 1 while aiming, 2 always */
     int hud_scale;                      /* index into HUD_SCALES */
+    int touch_op;                       /* index into TOUCH_OPACITIES */
     unsigned reticle_rgb;               /* [controls] reticle_color when it isn't one of RETICLES (else 0) */
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
@@ -752,6 +772,7 @@ static void choice_write(const item *it, int c)
     pad_prompts_load(M.ini);   /* (button prompts: the new names show at once) */
     difficulty_load(M.ini);    /* (all difficulties: the title menu follows at once) */
     terrain_draw_distance_load(M.ini);   /* (draw distance: from the next frame) */
+    touch_load(M.ini);                   /* (touch controls: shown or hidden at once) */
 }
 
 static int item_index(const item *it)
@@ -1031,6 +1052,10 @@ static void apply(int kind)
         ini_str("video", "hud_scale", b);
         break;
     }
+    case IT_TOUCH_OPACITY:
+        ini_int("controls", "touch_opacity", TOUCH_OPACITIES[M.touch_op]);
+        touch_load(M.ini);   /* (shown at once, the start menu too) */
+        break;
     default:
         break;
     }
@@ -1081,6 +1106,7 @@ static void change(int kind, int dir)
     case IT_AIMSENS: M.aim_sens = cycle(M.aim_sens, 4, dir); break;
     case IT_TRANSITION: M.trans = cycle(M.trans, 4, dir); break;
     case IT_HUD_SCALE: M.hud_scale = cycle(M.hud_scale, 5, dir); break;
+    case IT_TOUCH_OPACITY: M.touch_op = cycle(M.touch_op, NTOUCH_OP, dir); break;
     case IT_CROSSHAIR: M.crosshair = cycle(M.crosshair, 3, dir); break;
     case IT_AIMBTN: M.aim_free = !M.aim_free; break;
     case IT_MOVESHOOT: M.walk_shoot = !M.walk_shoot; break;
@@ -1253,6 +1279,7 @@ static void value_text(int kind, char *out, size_t n)
     case IT_LOCKCAM: strcpy_s(out, n, M.lock_shoulder ? "Over the shoulder" : "Classic"); break;
     case IT_AIMSENS: _snprintf_s(out, n, _TRUNCATE, "%d%%", AIMSENS[M.aim_sens]); break;
     case IT_HUD_SCALE: _snprintf_s(out, n, _TRUNCATE, "%d%%", HUD_SCALES[M.hud_scale]); break;
+    case IT_TOUCH_OPACITY: _snprintf_s(out, n, _TRUNCATE, "%d%%", TOUCH_OPACITIES[M.touch_op]); break;
     case IT_TRANSITION:
         if (TRANS[M.trans] == 1)
             strcpy_s(out, n, "Original");
@@ -1350,6 +1377,7 @@ static int gauge(int kind, int *total)
     case IT_MOUSE: *total = 5; return M.mouse;
     case IT_TRANSITION: *total = 3; return M.trans;
     case IT_HUD_SCALE: *total = 4; return 4 - M.hud_scale;
+    case IT_TOUCH_OPACITY: *total = NTOUCH_OP; return M.touch_op + 1;   /* (the faintest still shows a cell) */
     case IT_MSAA: *total = 2; return M.msaa == 1 ? 0 : M.msaa == 4 ? 1 : 2;
     case IT_GF_US:
     case IT_GF_JP:
@@ -2931,6 +2959,7 @@ static void load_values(const char *ini, const char *game_dir)
     strcpy_s(M.ini, sizeof M.ini, ini);
     strcpy_s(M.game_dir, sizeof M.game_dir, game_dir);
     pad_prompts_load(ini);
+    touch_load(ini);   /* (Android: the touch controls, from the start menu on) */
     M.fps = GetPrivateProfileIntA("video", "interp", 1, ini);
     if (M.fps < 0 || M.fps > 2)
         M.fps = 1;
@@ -2952,6 +2981,7 @@ static void load_values(const char *ini, const char *game_dir)
     M.lod_full = _stricmp(s, "original") != 0;
     GetPrivateProfileStringA("video", "hud_scale", "1", s, sizeof s, ini);
     M.hud_scale = nearest_index(HUD_SCALES, 5, (int)(atof(s) * 100.0 + 0.5));
+    M.touch_op = nearest_index(TOUCH_OPACITIES, NTOUCH_OP, GetPrivateProfileIntA("controls", "touch_opacity", 40, ini));
     M.hdtex = GetPrivateProfileIntA("textures", "replace", 1, ini) != 0;
     M.cam_speed = nearest_index(SPEEDS, 6, GetPrivateProfileIntA("controls", "camera_speed_x", 100, ini));
     M.inv_x = GetPrivateProfileIntA("controls", "invert_x", 0, ini) != 0;

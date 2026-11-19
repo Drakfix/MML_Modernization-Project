@@ -7,6 +7,8 @@
  * composed. Colours are 0xAARRGGBB. */
 typedef void (*gfx_ui_draw_fn)(void *user, int w, int h);
 void gfx_ui_add_draw(gfx_ui_draw_fn draw, void *user);
+/* one draw over all the others, whenever they were added (the touch controls) */
+void gfx_ui_set_top_draw(gfx_ui_draw_fn draw, void *user);
 
 /* shapes */
 void gfx_ui_rect(float x, float y, float w, float h, uint32_t argb);

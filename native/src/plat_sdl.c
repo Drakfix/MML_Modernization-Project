@@ -15,6 +15,7 @@
 #include "log.h"
 #include "plat.h"
 #include "plat_sdl.h"
+#include "touch.h"
 
 #define GAME_WINDOW 0x10010u   /* the window handle the game sees */
 
@@ -386,7 +387,18 @@ int plat_pump(void)
         case SDL_EVENT_WINDOW_FOCUS_LOST:
             if (g_on_event)
                 g_on_event(GAME_WINDOW, WM_ACTIVATEAPP, e.type == SDL_EVENT_WINDOW_FOCUS_GAINED, 0, 1);
+            if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST)
+                touch_release_all();
             break;
+#ifdef __ANDROID__
+        case SDL_EVENT_FINGER_DOWN:   /* the touch controls (touch.c) */
+        case SDL_EVENT_FINGER_MOTION:
+        case SDL_EVENT_FINGER_UP:
+        case SDL_EVENT_FINGER_CANCELED:
+            touch_finger(e.type == SDL_EVENT_FINGER_DOWN ? TOUCH_DOWN : e.type == SDL_EVENT_FINGER_MOTION ? TOUCH_MOVE
+                         : TOUCH_UP, (uint64_t)e.tfinger.fingerID, e.tfinger.x, e.tfinger.y);
+            break;
+#endif
         case SDL_EVENT_KEY_DOWN:
             if (e.key.key == SDLK_AC_BACK) {   /* Android's Back: ours (menu.c), not the game's */
                 if (!e.key.repeat)

@@ -30,6 +30,7 @@
 #include "input.h"
 #include "menu.h"
 #include "log.h"
+#include "touch.h"
 
 typedef unsigned char sdl_bool;   /* C99 bool, returned in AL */
 typedef uint32_t sdl_joystick_id;
@@ -258,8 +259,10 @@ static void sdl_read(pad_t *out, int *connected)
     *connected = 0;
     sdl.UpdateGamepads();
     track_gamepad();
-    if (!g_pad)
+    if (!g_pad) {
+        touch_merge(out, connected);   /* (the touch controls, Android) */
         return;
+    }
     for (i = 0; i < sizeof map / sizeof map[0]; i++)
         if (sdl.GetGamepadButton(g_pad, map[i].sdl))
             out->wButtons |= map[i].x;
@@ -270,6 +273,7 @@ static void sdl_read(pad_t *out, int *connected)
     out->bLeftTrigger = trig(sdl.GetGamepadAxis(g_pad, AX_LT));
     out->bRightTrigger = trig(sdl.GetGamepadAxis(g_pad, AX_RT));
     *connected = 1;
+    touch_merge(out, connected);
 }
 
 /* game thread: the latest controller state the SDL thread published */
