@@ -333,6 +333,9 @@ the Japanese line being spoken.
   faster.
 - **All difficulties from the start** (optional): Easy, Normal and Hard on the title menu without
   clearing the game first. Saves are not changed.
+- **Separate volumes** for the music, the sound effects and the voices, in both menus. The
+  music can go above 100%, each track only as far as it plays without distorting, for the quiet
+  tracks some audio mods use.
 
 ### Subtitles and Japanese voices (optional, US version, experimental)
 
@@ -629,7 +632,7 @@ menu shows each setting's full description and choices beside the list.
 
 | Page | Settings |
 |------|----------|
-| Game | Version to play, importing each version, English subtitles, voice language, localization names (US / Japanese), start menu at launch (show / skip), intro video, title screen hints, room transitions, all difficulties, updates |
+| Game | Version to play, importing each version, English subtitles, voice language, localization names (US / Japanese), music volume (up to 400%), effects volume, voice volume, start menu at launch (show / skip), intro video, title screen hints, room transitions, all difficulties, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio (fill screen / 16:9 / 4:3), frame rate (30 / 60 / 120), FPS counter, V-Sync, executable |
 | Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, draw distance (full / up to the fog), level of detail, texture replacement, texture dump, animation blending, HUD size |
 | Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), button prompts (Auto / Xbox / PlayStation 4 / PlayStation 5 / Switch), touch controls (Auto / On / Off, Android) and their opacity, camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |

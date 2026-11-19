@@ -27,6 +27,7 @@
 #include "log.h"
 #include "recomp_rt.h"
 #include "shim.h"
+#include "volume.h"
 
 #define DS_OK              0u
 #define DSERR_INVALIDPARAM 0x80070057u
@@ -36,6 +37,7 @@
 #define DSERR_UNSUPPORTED  0x80004001u
 
 #define DSBCAPS_PRIMARYBUFFER 0x1u
+#define DSBCAPS_STATIC_       0x2u
 #define DSBPLAY_LOOPING       0x1u
 #define DSBSTATUS_PLAYING     0x1u
 #define DSBSTATUS_LOOPING     0x4u
@@ -118,6 +120,8 @@ typedef struct {
     int playing, looping;
     uint64_t pos;                 /* frames, 32.32 fixed point */
     int32_t volume, pan;          /* DirectSound units (hundredths of a dB) */
+    int cat, stream;              /* music / effect / voice (volume.h, from its last Play); refilled */
+    float peak, cat_gain;         /* its loudest sample (0 not measured); the setting's gain for it */
     float gain_l, gain_r;
     int nnotify;
     uint32_t notify_at[MAX_NOTIFY], notify_ev[MAX_NOTIFY];
@@ -170,7 +174,7 @@ static dsbuf *buf_of(uint32_t obj)
 
 static void set_gains(dsbuf *b)
 {
-    float g = b->volume <= -10000 ? 0.0f : powf(10.0f, (float)b->volume / 2000.0f);
+    float g = b->volume <= -10000 ? 0.0f : powf(10.0f, (float)b->volume / 2000.0f) * b->cat_gain;
     b->gain_l = b->gain_r = g;
     if (b->pan > 0)
         b->gain_l *= b->pan >= 10000 ? 0.0f : powf(10.0f, -(float)b->pan / 2000.0f);
@@ -259,6 +263,8 @@ static void mix_buffer(dsbuf *b, float *out, int frames)
         notify_span(b, start_byte, ((uint32_t)(b->pos >> 32) * (uint32_t)b->align + b->size - start_byte) % b->size);
 }
 
+static long g_vol_gen;   /* the volume settings' change count the gains are from */
+
 static void __cdecl on_audio(void *user, SDL_AudioStream *s, int additional, int total)
 {
     static float mix[2 * 4096];
@@ -272,6 +278,14 @@ static void __cdecl on_audio(void *user, SDL_AudioStream *s, int additional, int
             break;
         memset(mix, 0, sizeof(float) * 2 * (size_t)frames);
         lock();
+        if (g_vol_gen != volume_gen) {   /* a volume setting changed */
+            g_vol_gen = volume_gen;
+            for (k = 0; k < MAX_BUFFERS; k++)
+                if (g_buf[k].used && !g_buf[k].primary) {
+                    g_buf[k].cat_gain = volume_gain(g_buf[k].cat, g_buf[k].stream, g_buf[k].peak);
+                    set_gains(&g_buf[k]);
+                }
+        }
         if (g_log) {   /* every ~5 s: what is playing */
             static uint32_t since;
             since += (uint32_t)frames;
@@ -458,13 +472,42 @@ static uint32_t b_lock(const uint32_t *a)
     return DS_OK;
 }
 
+/* a static music buffer's peak: the louder of the music entry's two parts (intro and loop), so both
+   go up as far (volume.c); each part measured once, it holds the whole track */
+static void music_peak(dsbuf *b)
+{
+    float top = 0.0f;
+    int k;
+    for (k = 0; k < 2; k++) {
+        uint32_t obj = get32(0x55D430u + 8u + 4u * (uint32_t)k);   /* (the music entry's buffers) */
+        dsbuf *m = obj ? buf_of(obj) : NULL;
+        if (!m || m->stream || !m->size)
+            continue;
+        if (m->peak <= 0.0f)
+            m->peak = volume_peak(HPTR(m->mem), m->size, m->bits);
+        if (m->peak > top)
+            top = m->peak;
+    }
+    if (top > b->peak)
+        b->peak = top;
+}
+
 /* Play(this, reserved, priority, flags) */
 static uint32_t b_play(const uint32_t *a)
 {
     dsbuf *b = buf_of(a[0]);
+    int cat;
     if (!b)
         return DSERR_INVALIDPARAM;
+    /* which kind of sound (the game's music and voice entries hold the buffer now); a static
+       music buffer's loudest sample, once (it holds the whole track: how far it can go up) */
+    cat = volume_category(a[0], b->channels);
+    if (cat == VOL_MUSIC && !b->stream)
+        music_peak(b);
     lock();
+    b->cat = cat;
+    b->cat_gain = volume_gain(cat, b->stream, b->peak);
+    set_gains(b);
     b->looping = (a[3] & DSBPLAY_LOOPING) != 0;
     b->playing = 1;
     unlock();
@@ -635,11 +678,13 @@ static uint32_t d_create_sound_buffer(const uint32_t *a)
         }
         b->channels = ch, b->bits = bits, b->rate = (int)rate, b->align = align;
         b->size = bytes - bytes % align;
+        b->stream = (flags & DSBCAPS_STATIC_) == 0;   /* (the game's streams are refilled, its sounds static) */
         b->mem = guest_alloc(b->size);
         if (!b->mem)
             return DSERR_OUTOFMEMORY;
     }
     b->refs = 1;
+    b->cat_gain = 1.0f;
     b->obj = new_object(g_vt_buf, (uint32_t)i);
     set_gains(b);
     lock();

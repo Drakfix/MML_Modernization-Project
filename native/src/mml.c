@@ -59,6 +59,7 @@
 #include "subtitles.h"
 #include "gamefiles.h"
 #include "widecull.h"
+#include "volume.h"
 
 
 static char g_game_dir[MAX_PATH];   /* the playing version's folder: its program, data and saves */
@@ -874,6 +875,7 @@ void mml_init(void)
         input_jp_buttons(_stricmp(in, "japanese") != 0);
     }
     ambience_install(g_ini);   /* room ambience loops ([general] ambience_loop) */
+    volume_install(g_ini);     /* music, effect and voice volumes ([general] music_volume, ...) */
     {   /* the Japanese names in the US text: the dialogue as it loads, the labels, the subtitles below */
         char nm[16];
         ini_string("general", "names", "us", nm, sizeof nm);

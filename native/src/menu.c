@@ -53,6 +53,7 @@
 #include "difficulty.h"
 #include "updater.h"
 #include "voice_build.h"
+#include "volume.h"
 
 #define MAX_PRESETS 4096
 
@@ -71,6 +72,7 @@ enum {
     IT_SHCAM,        /* camera position: behind / over the shoulder ([controls] camera_shoulder) */
     IT_CAMFADE,      /* Mega Man fades when the camera is close ([controls] camera_fade) */
     IT_TRANSITION,   /* room transition speed ([general] transition_speed) */
+    IT_MUSIC_VOL, IT_SOUND_VOL, IT_VOICE_VOL,   /* volumes ([general] music_volume, sound_volume, voice_volume) */
     /* the keyboard's keys for the modern controls ([controls] key_*: two each), and putting them back */
     IT_KEY, IT_KEY_RESET,
     IT_SECTION,  /* a heading over the rows after it (the start menu's): not selectable
@@ -190,6 +192,10 @@ static const item g_game_items[] = {
     { 3, IT_BACKPEDAL, "Backpedal", BACKPEDAL_HELP },
     { 3, IT_CROSSHAIR, "Crosshair", XH_HELP },
     { 3, IT_RETICLE, "Lock-on reticle", "Colour of the marker on the enemy you're locked on to, and of the crosshair." },
+    { 4, IT_MUSIC_VOL, "Music volume", "The background music. Above 100% plays it louder, each track only as far as "
+      "it goes without distorting." },
+    { 4, IT_SOUND_VOL, "Effects volume", "Sound effects: shots, jumps, enemies, machines, the forest's ambience." },
+    { 4, IT_VOICE_VOL, "Voice volume", "The voice acting in cutscenes and conversations." },
     { 4, IT_TRANSITION, "Room transitions", TRANS_HELP },
     { 4, IT_CHOICE, "All difficulties", "Easy, Normal and Hard on the title menu without clearing the game first. "
       "Saves aren't changed.", CH_DIFFS, (int)(sizeof CH_DIFFS / sizeof CH_DIFFS[0]) },
@@ -284,6 +290,16 @@ static const item g_start_items[] = {
       "(Rockman in Trigger's and Juno's titles), the Rock Buster, the Kobun for the Servbots, Digouters for "
       "Diggers, Reaverbirds for Reaverbots, deflectors for refractors and the Great Legacy for the Mother Lode. "
       "The lines stay the US script's. Experimental.", CH_NAMES, NCH(CH_NAMES) },
+    { PAGE_FILES, IT_SECTION, "Audio" },
+    { PAGE_FILES, IT_MUSIC_VOL, "Music volume", "The volume of the background music, apart from the other sounds. "
+      "100% plays the music files as they are. Above 100% makes them louder, each track only as far as its loudest "
+      "moment allows without distortion: quiet tracks (such as those of some audio mods, which can be 20 dB quieter "
+      "than the original release's) gain the most, the original tracks little or nothing. This menu's music follows "
+      "it too. The change is heard at once, in game as well (F1 menu)." },
+    { PAGE_FILES, IT_SOUND_VOL, "Effects volume", "The volume of the sound effects: shots, jumps, footsteps, enemies, "
+      "machines, menu sounds and the forest's ambience." },
+    { PAGE_FILES, IT_VOICE_VOL, "Voice volume", "The volume of the voice acting in cutscenes and conversations, in "
+      "either voice language." },
     { PAGE_FILES, IT_SECTION, "Launch" },
     { PAGE_FILES, IT_CHOICE, "Start menu at launch", "Show opens this menu every time. Skip starts the game straight "
       "away with the saved settings. To come back here, hold " PT_BACK " (controller) or F2 (keyboard) on the game's "
@@ -523,6 +539,11 @@ static const int AIMSENS[] = { 40, 60, 80, 100 };
 static const int TRANS[] = { 1, 2, 4, 8 };
 static const int HUD_SCALES[] = { 100, 90, 80, 70, 60 };
 static const int TOUCH_OPACITIES[] = { 20, 30, 40, 50, 60, 70, 80 };
+/* volumes: the music can go above 100% (volume.c: as far as each track's peak allows) */
+static const int MUSIC_VOLS[] = { 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 200, 300, 400 };
+static const int VOLS[] = { 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 };
+#define NMUSIC_VOL ((int)(sizeof MUSIC_VOLS / sizeof MUSIC_VOLS[0]))
+#define NVOL ((int)(sizeof VOLS / sizeof VOLS[0]))
 #define NTOUCH_OP ((int)(sizeof TOUCH_OPACITIES / sizeof TOUCH_OPACITIES[0]))
 static const struct { const char *name; unsigned rgb; } RETICLES[] = {
     { "Yellow", 0xFFD840 }, { "Orange", 0xFF9A2E }, { "Red", 0xFF4040 }, { "Pink", 0xFF6EC7 },
@@ -564,6 +585,7 @@ static struct {
     int aim_free, walk_shoot, backjog, assist, shcam, anim_blend, camfade;   /* crosshair: 0 off, 1 while aiming, 2 always */
     int hud_scale;                      /* index into HUD_SCALES */
     int touch_op;                       /* index into TOUCH_OPACITIES */
+    int music_vol, sound_vol, voice_vol; /* indices into MUSIC_VOLS, VOLS, VOLS */
     unsigned reticle_rgb;               /* [controls] reticle_color when it isn't one of RETICLES (else 0) */
     int shader;                         /* index into presets, -1 = off */
     char shader_custom[MAX_PATH];       /* a preset from the ini outside the shaders folder */
@@ -1052,6 +1074,18 @@ static void apply(int kind)
         ini_str("video", "hud_scale", b);
         break;
     }
+    case IT_MUSIC_VOL:
+        volume_set(VOL_MUSIC, MUSIC_VOLS[M.music_vol]);   /* (the start menu's music too) */
+        ini_int("general", "music_volume", MUSIC_VOLS[M.music_vol]);
+        break;
+    case IT_SOUND_VOL:
+        volume_set(VOL_SOUND, VOLS[M.sound_vol]);
+        ini_int("general", "sound_volume", VOLS[M.sound_vol]);
+        break;
+    case IT_VOICE_VOL:
+        volume_set(VOL_VOICE, VOLS[M.voice_vol]);
+        ini_int("general", "voice_volume", VOLS[M.voice_vol]);
+        break;
     case IT_TOUCH_OPACITY:
         ini_int("controls", "touch_opacity", TOUCH_OPACITIES[M.touch_op]);
         touch_load(M.ini);   /* (shown at once, the start menu too) */
@@ -1107,6 +1141,9 @@ static void change(int kind, int dir)
     case IT_TRANSITION: M.trans = cycle(M.trans, 4, dir); break;
     case IT_HUD_SCALE: M.hud_scale = cycle(M.hud_scale, 5, dir); break;
     case IT_TOUCH_OPACITY: M.touch_op = cycle(M.touch_op, NTOUCH_OP, dir); break;
+    case IT_MUSIC_VOL: M.music_vol = cycle(M.music_vol, NMUSIC_VOL, dir); break;
+    case IT_SOUND_VOL: M.sound_vol = cycle(M.sound_vol, NVOL, dir); break;
+    case IT_VOICE_VOL: M.voice_vol = cycle(M.voice_vol, NVOL, dir); break;
     case IT_CROSSHAIR: M.crosshair = cycle(M.crosshair, 3, dir); break;
     case IT_AIMBTN: M.aim_free = !M.aim_free; break;
     case IT_MOVESHOOT: M.walk_shoot = !M.walk_shoot; break;
@@ -1280,6 +1317,21 @@ static void value_text(int kind, char *out, size_t n)
     case IT_AIMSENS: _snprintf_s(out, n, _TRUNCATE, "%d%%", AIMSENS[M.aim_sens]); break;
     case IT_HUD_SCALE: _snprintf_s(out, n, _TRUNCATE, "%d%%", HUD_SCALES[M.hud_scale]); break;
     case IT_TOUCH_OPACITY: _snprintf_s(out, n, _TRUNCATE, "%d%%", TOUCH_OPACITIES[M.touch_op]); break;
+    case IT_MUSIC_VOL:
+        if (MUSIC_VOLS[M.music_vol])
+            _snprintf_s(out, n, _TRUNCATE, "%d%%", MUSIC_VOLS[M.music_vol]);
+        else
+            strcpy_s(out, n, "Off");
+        break;
+    case IT_SOUND_VOL:
+    case IT_VOICE_VOL: {
+        int v = VOLS[kind == IT_SOUND_VOL ? M.sound_vol : M.voice_vol];
+        if (v)
+            _snprintf_s(out, n, _TRUNCATE, "%d%%", v);
+        else
+            strcpy_s(out, n, "Off");
+        break;
+    }
     case IT_TRANSITION:
         if (TRANS[M.trans] == 1)
             strcpy_s(out, n, "Original");
@@ -1378,6 +1430,9 @@ static int gauge(int kind, int *total)
     case IT_TRANSITION: *total = 3; return M.trans;
     case IT_HUD_SCALE: *total = 4; return 4 - M.hud_scale;
     case IT_TOUCH_OPACITY: *total = NTOUCH_OP; return M.touch_op + 1;   /* (the faintest still shows a cell) */
+    case IT_MUSIC_VOL: *total = 10; return MUSIC_VOLS[M.music_vol] >= 100 ? 10 : M.music_vol;   /* (100% fills it) */
+    case IT_SOUND_VOL: *total = 10; return M.sound_vol;
+    case IT_VOICE_VOL: *total = 10; return M.voice_vol;
     case IT_MSAA: *total = 2; return M.msaa == 1 ? 0 : M.msaa == 4 ? 1 : 2;
     case IT_GF_US:
     case IT_GF_JP:
@@ -2982,6 +3037,9 @@ static void load_values(const char *ini, const char *game_dir)
     GetPrivateProfileStringA("video", "hud_scale", "1", s, sizeof s, ini);
     M.hud_scale = nearest_index(HUD_SCALES, 5, (int)(atof(s) * 100.0 + 0.5));
     M.touch_op = nearest_index(TOUCH_OPACITIES, NTOUCH_OP, GetPrivateProfileIntA("controls", "touch_opacity", 40, ini));
+    M.music_vol = nearest_index(MUSIC_VOLS, NMUSIC_VOL, GetPrivateProfileIntA("general", "music_volume", 100, ini));
+    M.sound_vol = nearest_index(VOLS, NVOL, GetPrivateProfileIntA("general", "sound_volume", 100, ini));
+    M.voice_vol = nearest_index(VOLS, NVOL, GetPrivateProfileIntA("general", "voice_volume", 100, ini));
     M.hdtex = GetPrivateProfileIntA("textures", "replace", 1, ini) != 0;
     M.cam_speed = nearest_index(SPEEDS, 6, GetPrivateProfileIntA("controls", "camera_speed_x", 100, ini));
     M.inv_x = GetPrivateProfileIntA("controls", "invert_x", 0, ini) != 0;

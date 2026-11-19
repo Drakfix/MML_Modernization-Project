@@ -9,6 +9,7 @@
 #include "input.h"
 #include "log.h"
 #include "menu_music.h"
+#include "volume.h"
 
 typedef struct { int format, channels, freq; } sdl_spec;   /* SDL_AudioSpec */
 typedef struct SDL_AudioStream SDL_AudioStream;
@@ -28,6 +29,7 @@ static struct {
 static SDL_AudioStream *g_stream;
 static uint8_t *g_buf;
 static uint32_t g_len;
+static float g_peak;   /* the track's loudest sample (how far the Music volume can take it up) */
 
 #define SDL_INIT_AUDIO_ 0x10u
 #define SDL_DEFAULT_PLAYBACK 0xFFFFFFFFu
@@ -68,7 +70,9 @@ void menu_music_start(const char *game_dir, const char *ini)
         g_buf = NULL;
         return;
     }
-    sdl.SetAudioStreamGain(g_stream, GAIN);
+    volume_load(ini);   /* [general] music_volume (the menu changes it live) */
+    g_peak = spec.format == 0x8010 ? volume_peak(g_buf, g_len, 16) : spec.format == 0x0008 ? volume_peak(g_buf, g_len, 8) : 0.0f;
+    sdl.SetAudioStreamGain(g_stream, GAIN * volume_gain(VOL_MUSIC, g_peak <= 0.0f, g_peak));
     sdl.PutAudioStreamData(g_stream, g_buf, (int)g_len);
     sdl.ResumeAudioStreamDevice(g_stream);
     log_printf("menu: music %s", name);
@@ -80,7 +84,7 @@ void menu_music_frame(float volume)
         return;
     if (sdl.GetAudioStreamQueued(g_stream) < (int)(g_len / 4))   /* the track again, before it runs out */
         sdl.PutAudioStreamData(g_stream, g_buf, (int)g_len);
-    sdl.SetAudioStreamGain(g_stream, GAIN * volume);
+    sdl.SetAudioStreamGain(g_stream, GAIN * volume * volume_gain(VOL_MUSIC, g_peak <= 0.0f, g_peak));
 }
 
 void menu_music_stop(void)
