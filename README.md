@@ -249,8 +249,9 @@ the Japanese line being spoken.
 - **Resolution and image quality.** Render at your display's resolution or at 1x to 5x the
   game's resolution, with up to 8x MSAA, 16x anisotropic filtering and a choice of bilinear or
   nearest-neighbour upscaling.
-- **Draw distance options.** Lighter or no distance fog, and full-detail models at any
-  distance instead of the original low-poly swaps.
+- **Draw distance options.** Lighter or no distance fog, full-detail models at any distance
+  instead of the original low-poly swaps, and a draw distance that can stop just past the fog
+  for slower devices.
 - **Renderers.** Direct3D 11 or Vulkan on Windows, Vulkan on Android and Linux.
 - **Display modes** (Windows). Borderless (the default, with normal Alt+Tab, screenshots and
   capture), exclusive fullscreen or windowed.
@@ -600,7 +601,7 @@ menu shows each setting's full description and choices beside the list.
 |------|----------|
 | Game | Version to play, importing each version, English subtitles, voice language, localization names (US / Japanese), start menu at launch (show / skip), intro video, title screen hints, room transitions, all difficulties, updates |
 | Display | Graphics API (Direct3D 11 / Vulkan / DirectDraw legacy), display mode, render resolution, aspect ratio (fill screen / 16:9 / 4:3), frame rate (30 / 60 / 120), FPS counter, V-Sync, executable |
-| Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, level of detail, texture replacement, texture dump, animation blending, HUD size |
+| Graphics | Anti-aliasing, texture filtering, upscaling filter, shader preset and its input resolution, fog distance, draw distance (full / up to the fog), level of detail, texture replacement, texture dump, animation blending, HUD size |
 | Controls | Control scheme, modern controls on launch, input API, confirm button (Rockman DASH), button prompts (Auto / Xbox / PlayStation 4 / PlayStation 5 / Switch), camera sensitivity and inversion, stick dead zone, light stick tilt, dodge roll speed, mouse sensitivity |
 | Combat | Combat style (Classic / Adventure / Shooter presets, or Custom), camera position (behind / over the shoulder), fade up close, aim button (lock-on / free aim), lock-on camera, shots aim, aim sensitivity, aim assist, move while shooting, backpedal (walk / jog), crosshair (off / while aiming / always), reticle colour |
 | Buttons | Controller and keyboard remapping |

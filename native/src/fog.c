@@ -15,6 +15,7 @@
 #include "fog.h"
 #include "hook.h"
 #include "log.h"
+#include "terrain.h"
 
 #define VT_SET_RENDER_STATE 22
 #define RS_FOGENABLE        28
@@ -30,6 +31,9 @@ static set_rs_t g_next_set_rs;
 static void *g_dev;
 static DWORD g_start, g_end;
 static int g_have_range;
+/* whether the game drew with fog lately (it switches fog per draw; a scene without fog never does) */
+static int g_fog_drawn, g_frames_without;
+#define FOG_GONE_FRAMES 15
 
 static DWORD scaled(DWORD value)
 {
@@ -52,6 +56,8 @@ static HRESULT WINAPI fog_set_rs(void *dev, DWORD state, DWORD value)
         g_end = value;
         g_have_range |= 2;
     }
+    if (state == RS_FOGENABLE && value)
+        g_fog_drawn = 1;
     if (state == RS_FOGENABLE && g_mode == FOG_OFF) {
         value = FALSE;
     } else if (state == RS_FOGTABLESTART || state == RS_FOGTABLEEND) {
@@ -89,11 +95,32 @@ int fog_mode(void)
     return g_mode;
 }
 
+/* the terrain's range follows the fog: where it is full this frame, 0 = no fog in the picture */
+static void report_fog_end(void)
+{
+    float end = 0.0f;
+    DWORD v;
+    if (g_fog_drawn)
+        g_frames_without = 0;
+    else if (g_frames_without < FOG_GONE_FRAMES)
+        g_frames_without++;
+    g_fog_drawn = 0;
+    if (g_mode != FOG_OFF && (g_have_range & 2) && g_frames_without < FOG_GONE_FRAMES) {
+        v = scaled(g_end);
+        memcpy(&end, &v, 4);
+        if (!(end > 0.0f))
+            end = 0.0f;
+    }
+    terrain_fog_end(end);
+}
+
 void fog_frame(void)
 {
     void **vt;
-    if (g_next_set_rs)   /* hooked even for "original", so it can change in game */
+    if (g_next_set_rs) {   /* hooked even for "original", so it can change in game */
+        report_fog_end();
         return;
+    }
     vt = ddshim_device_vtable();
     if (vt) {
         void *mine = (void *)fog_set_rs;

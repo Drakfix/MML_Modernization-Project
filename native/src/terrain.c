@@ -67,6 +67,7 @@
 #define RING 16384u
 #define SZ_TO_Z (1.0f / 16384.0f)     /* packet z = SZ * 6.1035e-05 */
 #define RHW_K 0.1f                    /* the handlers' rhw = 0.1 / z */
+#define FAR_SZ_MAX 0xFFFF             /* bucket SZ >> 3 stays inside the 8192-entry ordering tables */
 
 typedef struct {
     int n;                            /* 3 or 4, in packet order */
@@ -90,6 +91,10 @@ static clip_entry g_ring[RING];
 static unsigned g_next;
 static int g_clip_on;
 static float g_near_scale = 1.0f;   /* [debug] clip_near_scale: test the clipper visibly */
+static int g_far_on;                  /* terrain_far_install: longer terrain range, buckets clamped */
+static unsigned g_far_clamped, g_far_frames;
+static int g_far_check;               /* dev (environment MML_FAR_CHECK=1): the clamp reads the right slots */
+static unsigned g_far_match, g_far_mismatch;
 static draw_prim_t g_next_draw;
 static unsigned g_census_frames;
 static unsigned g_tagged, g_dropped, g_clipped, g_stale, g_onscreen;
@@ -160,6 +165,24 @@ static void on_emit_cell(regs_t *r)
     short v[4][3];
     int sz[4], n, i;
 
+    if (g_far_on) {
+        /* the polygon's ordering-table bucket comes next: the largest of these four depths >> 3 */
+        int32_t *depth = (int32_t *)GUEST(r->esp + 4 + 8);   /* the game's [esp+8] .. [esp+0x14] */
+        if (g_far_check && op == OP_QUAD) {   /* dev: the slots must be this quad's four depths */
+            int same = 1;
+            for (i = 0; i < 4; i++)
+                same &= depth[i] == fifo[3 - i] || depth[i] == fifo[i];
+            if (same)
+                g_far_match++;
+            else
+                g_far_mismatch++;
+        }
+        for (i = 0; i < 4; i++)
+            if (depth[i] > FAR_SZ_MAX) {
+                depth[i] = FAR_SZ_MAX;
+                g_far_clamped++;
+            }
+    }
     if (op == OP_QUAD) {
         n = 4;
         sz[0] = fifo[3]; sz[1] = fifo[2]; sz[2] = fifo[1]; sz[3] = fifo[0];
@@ -378,6 +401,114 @@ int terrain_clip_install(float near_scale)
     return 1;
 }
 
+/* ---- terrain range (draw distance) ----
+ * Every frame FUN_00433C30 loads the terrain's depth cap from a table by the room's scale
+ * (u8 0x77EABF: 0, 1, 2; the second table when 0x77EAC0 & 4) into 0x77EAA8, and the chunk test
+ * (0x434537) drops every chunk whose centre has (z >> 2) >= the cap. Vanilla 0xE00 (14336 units);
+ * the exe patch doubled the table (RE-notes 3.33), which the Lake's gate channel and Clozer Woods'
+ * far side still pass. Doubled again here (57344 units, whole rooms).
+ * What kept the cap down was the ordering table: a terrain polygon goes into bucket
+ * (largest vertex depth >> 3) of the 8192-entry tables (.mmlo, 3.39) with no bounds check, and the
+ * second table is the exe's last section, so a polygon at 65536 or more would write past it. The
+ * emitter hooks above clamp those depths to 65535 first (bucket 8191, the farthest: drawn first,
+ * the depth buffer still sorts it), so no cap can overflow it.
+ *
+ * [video] draw_distance=fog (the menu's Draw distance: Up to the fog; Full is the default): with
+ * distance fog on, the range follows the fog (terrain_fog_end): it ends a little past where the fog
+ * is full, never nearer than the 2001 release's own cap (which already drew a little past its fog:
+ * Downtown fog full at 11469, cap 14336), so slower devices draw less. Past the fog's end the level
+ * is drawn in the plain fog colour, which is invisible only against a fog-coloured sky: at Lake
+ * Jyun the fogged far wall stood white against the blue sky, and there the sky shows instead. */
+#define G_CAP_TABLE   GA(0x511760u)   /* u16 per room scale, stride 4 */
+#define G_CAP_TABLE_B GA(0x51176Cu)   /* the same when 0x77EAC0 & 4 */
+#define FOG_RANGE_MUL  1.15f          /* range past the fog's end: 15% ... */
+#define FOG_RANGE_ADD  1024           /* ... plus two cells (a chunk's centre stands in for all of it) */
+
+static const uint16_t k_cap_vanilla[2][3] = { { 0xE00, 0x680, 0x300 }, { 0xD80, 0x620, 0x2C0 } };
+static const uint16_t k_cap_patched[2][3] = { { 0x1C00, 0xD00, 0x600 }, { 0x1B00, 0xC40, 0x580 } };
+static uint16_t g_cap_cur[2][3];
+static int g_cap_ok, g_fog_range, g_fog_units = -1;
+
+static uintptr_t cap_addr(int t, int s)
+{
+    return (t ? G_CAP_TABLE_B : G_CAP_TABLE) + 4u * (uintptr_t)s;
+}
+
+/* [video] draw_distance (start-up and the menus): full, or fog = up to the fog */
+void terrain_draw_distance_load(const char *ini)
+{
+    char v[16];
+    GetPrivateProfileStringA("video", "draw_distance", "full", v, sizeof v, ini);
+    g_fog_range = _stricmp(v, "fog") == 0;
+    g_fog_units = -1;   /* the next frame sets the range again */
+}
+
+int terrain_range_install(int doubled)
+{
+    int t, s;
+    for (t = 0; t < 2; t++)
+        for (s = 0; s < 3; s++)
+            if (!mem_expect(cap_addr(t, s), &k_cap_patched[t][s], 2)) {
+                log_printf("terrain: depth cap table unexpected, terrain range left as patched");
+                return 0;
+            }
+    memcpy(g_cap_cur, k_cap_patched, sizeof g_cap_cur);
+    g_cap_ok = 1;
+    if (!doubled)
+        return 1;
+    if (!g_clip_on) {
+        log_printf("terrain: no emitter hooks, terrain range not doubled");
+        return 1;
+    }
+    {
+        char v[4] = "";
+        GetEnvironmentVariableA("MML_FAR_CHECK", v, sizeof v);
+        g_far_check = v[0] == '1';
+    }
+    g_far_on = 1;   /* the clamp first: the emitters may run on another thread */
+    for (t = 0; t < 2; t++)
+        for (s = 0; s < 3; s++) {
+            g_cap_cur[t][s] = (uint16_t)(k_cap_patched[t][s] * 2);
+            mem_write(cap_addr(t, s), &g_cap_cur[t][s], 2);
+        }
+    log_printf("terrain: range doubled (depth cap 0x%X = %d units), far buckets clamped", g_cap_cur[0][0],
+               g_cap_cur[0][0] * 4);
+    return 1;
+}
+
+/* fog.c, every frame: where the fog is full, in packet depth (camera z / 16384; 0 = no fog) */
+void terrain_fog_end(float end_z)
+{
+    int units = 0, t, s;
+    if (!g_cap_ok)
+        return;
+    if (g_fog_range && end_z > 0.0f)
+        units = end_z >= 8.0f ? 0 : (int)(end_z * 16384.0f * FOG_RANGE_MUL) + FOG_RANGE_ADD;
+    if (units == g_fog_units)
+        return;
+    g_fog_units = units;
+    for (t = 0; t < 2; t++)
+        for (s = 0; s < 3; s++) {
+            int top = g_far_on ? k_cap_patched[t][s] * 2 : k_cap_patched[t][s], want = top;
+            if (units) {
+                want = units >> 2;
+                if (want < k_cap_vanilla[t][s])
+                    want = k_cap_vanilla[t][s];
+                if (want > top)
+                    want = top;
+            }
+            if (want != g_cap_cur[t][s]) {
+                g_cap_cur[t][s] = (uint16_t)want;
+                host_write(GUEST(cap_addr(t, s)), &g_cap_cur[t][s], 2);
+            }
+        }
+    if (units)
+        log_printf("terrain: fog full at %d units, terrain drawn to %d", (int)(end_z * 16384.0f), g_cap_cur[0][0] * 4);
+    else
+        log_printf("terrain: %s, terrain drawn to %d", g_fog_range ? "no fog" : "draw distance full",
+                   g_cap_cur[0][0] * 4);
+}
+
 /* ---- census (dev) ---- */
 
 #define MAX_SITES 32
@@ -426,6 +557,15 @@ void terrain_frame(void)
             host_write(&vt[VT_DRAW_PRIMITIVE], &mine, sizeof mine);
             log_printf("terrain: DrawPrimitive hooked (vtable %p)", (void *)vt);
         }
+    }
+    if (g_far_on && ++g_far_frames >= (g_far_check ? 300u : 1800u)) {
+        if (g_far_clamped)
+            log_printf("terrain: %u far polygon depths clamped to the last bucket (%u frames)", g_far_clamped,
+                       g_far_frames);
+        if (g_far_check)
+            log_printf("terrain: far check: %u quads' depth slots match the GTE, %u don't", g_far_match,
+                       g_far_mismatch);
+        g_far_frames = g_far_clamped = g_far_match = g_far_mismatch = 0;
     }
     if (!g_census_frames || ++g_census_frames < 60)
         return;

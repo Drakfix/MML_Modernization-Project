@@ -29,6 +29,7 @@
 #include "ddshim.h"
 #include "display.h"
 #include "fog.h"
+#include "terrain.h"
 #include "frame_rec.h"
 #include "fps_counter.h"
 #include "gamefiles.h"
@@ -127,6 +128,8 @@ static const choice CH_PROMPTS[] = { { "Auto", "controls.button_prompts=auto" },
                                      { "Nintendo Switch", "controls.button_prompts=switch" } };
 /* [general] all_difficulties: Easy, Normal and Hard on the title menu from the start (difficulty.c) */
 static const choice CH_DIFFS[] = { { "Off", "general.all_difficulties=0" }, { "On", "general.all_difficulties=1" } };
+/* [video] draw_distance: the level drawn to the horizon, or only a little past the distance fog (terrain.c) */
+static const choice CH_DRAWDIST[] = { { "Full", "video.draw_distance=full" }, { "Up to the fog", "video.draw_distance=fog" } };
 #define PROMPTS_HELP "How these menus name the controller's buttons. Auto follows the controller connected."
 
 static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "COMBAT", "GAME" };
@@ -154,6 +157,9 @@ static const item g_game_items[] = {
     { 1, IT_SHADER, "Shader", "RetroArch shader presets (CRT looks and more) from the Modernization\\shaders folder." },
     { 1, IT_SHADER_RES, "Shader input", "What the shader works on. CRT presets look right at the game's own resolution." },
     { 1, IT_FOG, "Distance fog", "The original fog, a lighter one that lets you see further, or none at all." },
+    { 1, IT_CHOICE, "Draw distance", "Up to the fog stops drawing a little past the fog: faster on slow devices, "
+      "but in some open areas the sky shows where faraway scenery stood in the fog.", CH_DRAWDIST,
+      (int)(sizeof CH_DRAWDIST / sizeof CH_DRAWDIST[0]) },
     { 1, IT_LOD, "Model detail", "Full detail keeps faraway models at their best instead of swapping in low-poly ones." },
     { 1, IT_HDTEX, "HD textures", "Replacement textures from the Modernization\\textures folder." },
     { 1, IT_HUD_SCALE, "HUD size", "Shrinks the life and weapon gauges and the minimap into their corners of the screen." },
@@ -357,6 +363,11 @@ static const item g_start_items[] = {
       "render resolution.", NULL, 0, PL_WIN | PL_ANDROID | PL_LINUX },
     { PG_GRAPHICS, IT_FOG, "Fog distance", "The game's distance fog. Original keeps it as released; Reduced pushes "
       "it further out, so more of the level is visible; Off removes it." },
+    { PG_GRAPHICS, IT_CHOICE, "Draw distance", "How far away the level is drawn. Full draws whole areas out to the "
+      "horizon. Up to the fog stops a little past the point where the distance fog hides everything, so less is "
+      "drawn and slower devices run faster; in some open areas (Lake Jyun) the sky then shows where faraway "
+      "scenery stood as a shape in the fog. With Fog distance Off, both draw the whole area.", CH_DRAWDIST,
+      NCH(CH_DRAWDIST) },
     { PG_GRAPHICS, IT_LOD, "Level of detail", "Original swaps distant models for low-polygon versions, as the 2001 "
       "release did. Maximum keeps the full-detail models at any distance, at a small GPU cost." },
     { PG_GRAPHICS, IT_HDTEX, "Texture replacement", "Loads replacement textures (HD texture packs) from "
@@ -740,6 +751,7 @@ static void choice_write(const item *it, int c)
         ini_str(sec, key, val);
     pad_prompts_load(M.ini);   /* (button prompts: the new names show at once) */
     difficulty_load(M.ini);    /* (all difficulties: the title menu follows at once) */
+    terrain_draw_distance_load(M.ini);   /* (draw distance: from the next frame) */
 }
 
 static int item_index(const item *it)
