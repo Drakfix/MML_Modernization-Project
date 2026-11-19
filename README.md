@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.9.4 beta.** The 0.1 releases are kept on the
+**Current version: 0.9.5 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -93,7 +93,17 @@ copy.
 - **Fix:** with animation blending, a quick forward then back while aiming showed Mega Man on his
   side for a frame.
 
-## What's new in 0.8
+**0.9.5:**
+
+- **Touch controls** (Android). A controller drawn over the game, for playing without one: a
+  floating stick on the left, camera drag on the right, and the face, shoulder and menu buttons.
+  **Auto** shows them only while no controller is connected. See
+  [Touch controls](#touch-controls-android).
+- **All difficulties from the start** (optional): Easy, Normal and Hard on the title menu without
+  clearing the game first. Saves are not changed.
+- **Longer draw distance.** The terrain is drawn twice as far, so the far side of the biggest maps
+  (such as the gate behind Lake Jyun's far wall) no longer shows sky. A new **Draw distance**
+  setting can end it just past the fog instead, for slower devices.
 
 - **Start menu on Windows.** The settings, the game import and the updates now live in the same
   start menu as on Android and Linux, before the game starts. Setup installs the app into a
