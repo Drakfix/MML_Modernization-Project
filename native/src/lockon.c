@@ -28,6 +28,7 @@
 #include "display.h"
 #include "game.h"
 #include "guest.h"
+#include "homing.h"
 #include "hook.h"
 #include "lockon.h"
 #include "log.h"
@@ -198,6 +199,7 @@ static int next_to(int cur, int dir)
 static void on_target_store(regs_t *r)
 {
     int k = -1, sw;
+    homing_frame();   /* (the shots this frame were just spawned) */
     collect();   /* every frame: camera aim's view ray hits these too (lockon_volumes) */
     g_nvol = g_ncand;
     for (k = 0; k < g_ncand; k++) {

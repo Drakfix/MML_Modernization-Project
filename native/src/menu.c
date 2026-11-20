@@ -40,6 +40,7 @@
 #include "input.h"
 #include "padprompt.h"
 #include "kbm.h"
+#include "homing.h"
 #include "lockon.h"
 #include "lod.h"
 #include "log.h"
@@ -69,6 +70,7 @@ enum {
     IT_MOVESHOOT,    /* move while shooting ([controls] walk_shoot) */
     IT_BACKPEDAL,    /* backpedal while shooting: walk / jog ([controls] backpedal) */
     IT_ASSIST,       /* aim assist ([controls] aim_assist) */
+    IT_HOMING,       /* shot homing ([controls] shot_homing: off, low, high) */
     IT_SHCAM,        /* camera position: behind / over the shoulder ([controls] camera_shoulder) */
     IT_CAMFADE,      /* Mega Man fades when the camera is close ([controls] camera_fade) */
     IT_TRANSITION,   /* room transition speed ([general] transition_speed) */
@@ -148,6 +150,8 @@ static const char *const GAME_PAGES[] = { "VIDEO", "PICTURE", "CONTROLS", "COMBA
 #define MOVESHOOT_HELP "On: backpedal while shooting, and move every way while locked on. Off: as the original."
 #define BACKPEDAL_HELP "Moving away from the target while shooting. Walk: a quick walk backward. Jog: faster."
 #define ASSIST_HELP "Over an enemy, the camera turns slower and the crosshair closes in."
+#define HOMING_HELP "Crosshair-aimed shots. High: as the original, they curve onto an enemy anywhere up or down the " \
+    "screen. Low: only onto the one under the crosshair. Off: they fly straight."
 #define SHCAM_HELP "Over the shoulder: the camera stays beside Mega Man, and aiming zooms in."
 #define AIMSENS_HELP "Camera speed while aiming over the shoulder with no target, for finer aim."
 #define TRANS_HELP "Plays room changes (doors, ladders) faster: the wipe, the black screen and the room setup. "     "The game was made to hide loading from the disc there; now the next room is ready long before."
@@ -188,6 +192,7 @@ static const item g_game_items[] = {
     { 3, IT_AIM, "Shots aim", AIM_HELP },
     { 3, IT_AIMSENS, "Aim sensitivity", AIMSENS_HELP },
     { 3, IT_ASSIST, "Aim assist", ASSIST_HELP },
+    { 3, IT_HOMING, "Shot homing", HOMING_HELP },
     { 3, IT_MOVESHOOT, "Move while shooting", MOVESHOOT_HELP },
     { 3, IT_BACKPEDAL, "Backpedal", BACKPEDAL_HELP },
     { 3, IT_CROSSHAIR, "Crosshair", XH_HELP },
@@ -457,7 +462,8 @@ static const item g_start_items[] = {
       "classic camera and shots where Mega Man faces; lock-on keeps him in place, as in the original. Adventure: "
       "lock-on over the shoulder, and Mega Man strafes around the target and jogs backward while shooting. "
       "Shooter: the camera stays over the shoulder, the aim button zooms in to aim freely with no lock-on, "
-      "shots go to the crosshair, and aim assist slows the camera over enemies. Changing an option below "
+      "shots go to the crosshair, and aim assist slows the camera over enemies. Shot homing: High for Classic, "
+      "Low for Adventure, Off for Shooter. Changing an option below "
       "shows Custom." },
     { PG_COMBAT, IT_SECTION, "Aiming" },
     { PG_COMBAT, IT_SHCAM, "Camera position", "Behind: the camera follows behind Mega Man, as usual. Over the "
@@ -476,6 +482,10 @@ static const item g_start_items[] = {
       "target, relative to the normal camera speed. Lower is finer aim." },
     { PG_COMBAT, IT_ASSIST, "Aim assist", "While the crosshair is over an enemy, the camera turns slower and "
       "the crosshair closes in, so it's easier to stay on target." },
+    { PG_COMBAT, IT_HOMING, "Shot homing", "How the buster's shots aimed with the crosshair home in on "
+      "enemies. High: as in the original game, a shot curves onto an enemy near the middle of the screen at any "
+      "height, even one above or below where you aimed. Low: it follows only the enemy under the crosshair. "
+      "Off: it flies straight. Lock-on and the special weapons keep their homing." },
     { PG_COMBAT, IT_SECTION, "Moving while shooting" },
     { PG_COMBAT, IT_MOVESHOOT, "Move while shooting", "On: Mega Man can walk backward while shooting (the "
       "shot plays on his arms), and while locked on or aiming he moves every way around the target instead of "
@@ -582,7 +592,7 @@ static struct {
     /* values */
     int fps, showfps, vsync, res, msaa, shader_game_res, nearest, texf, fog, lod_full, hdtex;   /* texf: TEXF_* */
     int cam_speed, inv_x, inv_y, mouse, reticle, aim_camera, crosshair, lock_shoulder, aim_sens, trans;
-    int aim_free, walk_shoot, backjog, assist, shcam, anim_blend, camfade;   /* crosshair: 0 off, 1 while aiming, 2 always */
+    int aim_free, walk_shoot, backjog, assist, homing, shcam, anim_blend, camfade;   /* crosshair: 0 off, 1 while aiming, 2 always */
     int hud_scale;                      /* index into HUD_SCALES */
     int touch_op;                       /* index into TOUCH_OPACITIES */
     int music_vol, sound_vol, voice_vol; /* indices into MUSIC_VOLS, VOLS, VOLS */
@@ -867,11 +877,11 @@ static int effective_scale(void)
 /* Combat styles: presets of the aiming rows. The row shows the one the rows match, or Custom. */
 static const struct {
     const char *name;
-    int aim_free, lock_shoulder, aim_camera, walk_shoot, backjog, crosshair, assist, shcam;
+    int aim_free, lock_shoulder, aim_camera, walk_shoot, backjog, crosshair, assist, shcam, homing;
 } STYLES[] = {
-    { "Classic",   0, 0, 0, 0, 0, 0, 0, 0 },
-    { "Adventure", 0, 1, 0, 1, 1, 1, 0, 0 },
-    { "Shooter",   1, 1, 1, 1, 1, 2, 1, 1 },
+    { "Classic",   0, 0, 0, 0, 0, 0, 0, 0, HOMING_HIGH },
+    { "Adventure", 0, 1, 0, 1, 1, 1, 0, 0, HOMING_LOW },
+    { "Shooter",   1, 1, 1, 1, 1, 2, 1, 1, HOMING_OFF },
 };
 #define NSTYLES ((int)(sizeof STYLES / sizeof STYLES[0]))
 
@@ -882,7 +892,7 @@ static int style_index(void)
         if (STYLES[c].aim_free == M.aim_free && STYLES[c].lock_shoulder == M.lock_shoulder &&
             STYLES[c].aim_camera == M.aim_camera && STYLES[c].walk_shoot == M.walk_shoot &&
             STYLES[c].backjog == M.backjog && STYLES[c].crosshair == M.crosshair && STYLES[c].assist == M.assist &&
-            STYLES[c].shcam == M.shcam)
+            STYLES[c].shcam == M.shcam && STYLES[c].homing == M.homing)
             return c;
     return -1;
 }
@@ -897,6 +907,7 @@ static void style_set(int c)
     M.crosshair = STYLES[c].crosshair;
     M.assist = STYLES[c].assist;
     M.shcam = STYLES[c].shcam;
+    M.homing = STYLES[c].homing;
 }
 
 static void apply(int kind)
@@ -1023,6 +1034,13 @@ static void apply(int kind)
             controls_aim_assist(M.assist);
         ini_int("controls", "aim_assist", M.assist);
         break;
+    case IT_HOMING: {
+        static const char *const names[] = { "off", "low", "high" };
+        if (!M.start)
+            homing_set(M.homing);
+        ini_str("controls", "shot_homing", names[M.homing]);
+        break;
+    }
     case IT_SHCAM:
         if (!M.start)
             controls_camera_shoulder(M.shcam);
@@ -1046,6 +1064,7 @@ static void apply(int kind)
         apply(IT_MOVESHOOT);
         apply(IT_BACKPEDAL);
         apply(IT_ASSIST);
+        apply(IT_HOMING);
         apply(IT_SHCAM);
         break;
     case IT_LOCKCAM: {
@@ -1149,6 +1168,7 @@ static void change(int kind, int dir)
     case IT_MOVESHOOT: M.walk_shoot = !M.walk_shoot; break;
     case IT_BACKPEDAL: M.backjog = !M.backjog; break;
     case IT_ASSIST: M.assist = !M.assist; break;
+    case IT_HOMING: M.homing = cycle(M.homing, 3, dir); break;
     case IT_SHCAM: M.shcam = !M.shcam; break;
     case IT_ANIMBLEND: M.anim_blend = !M.anim_blend; break;
     case IT_CAMFADE: M.camfade = !M.camfade; break;
@@ -1343,6 +1363,7 @@ static void value_text(int kind, char *out, size_t n)
     case IT_MOVESHOOT: strcpy_s(out, n, M.walk_shoot ? "On" : "Off"); break;
     case IT_BACKPEDAL: strcpy_s(out, n, M.backjog ? "Jog" : "Walk"); break;
     case IT_ASSIST: strcpy_s(out, n, M.assist ? "On" : "Off"); break;
+    case IT_HOMING: strcpy_s(out, n, M.homing == HOMING_HIGH ? "High" : M.homing == HOMING_LOW ? "Low" : "Off"); break;
     case IT_SHCAM: strcpy_s(out, n, M.shcam ? "Over the shoulder" : "Behind"); break;
     case IT_ANIMBLEND: strcpy_s(out, n, M.anim_blend ? "On" : "Off"); break;
     case IT_CAMFADE: strcpy_s(out, n, M.camfade ? "On" : "Off"); break;
@@ -3073,6 +3094,7 @@ static void load_values(const char *ini, const char *game_dir)
     GetPrivateProfileStringA("controls", "backpedal", "walk", s, sizeof s, ini);
     M.backjog = _stricmp(s, "jog") == 0;
     M.assist = GetPrivateProfileIntA("controls", "aim_assist", 0, ini) != 0;
+    M.homing = homing_read(ini);
     M.shcam = GetPrivateProfileIntA("controls", "camera_shoulder", 0, ini) != 0;
     M.anim_blend = GetPrivateProfileIntA("video", "anim_blend", 1, ini) != 0;
     M.camfade = GetPrivateProfileIntA("controls", "camera_fade", 1, ini) != 0;

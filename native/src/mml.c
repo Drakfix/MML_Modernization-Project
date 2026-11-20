@@ -29,6 +29,7 @@
 #include "input.h"
 #include "hints.h"
 #include "intro_video.h"
+#include "homing.h"
 #include "lockon.h"
 #include "ddshim.h"
 #include "display.h"
@@ -850,6 +851,7 @@ void mml_init(void)
         controls_aim_button(_stricmp(ab, "free") == 0);
     }
     controls_aim_assist(GetPrivateProfileIntA("controls", "aim_assist", 0, g_ini));
+    homing_load(g_ini);
     controls_camera_shoulder(GetPrivateProfileIntA("controls", "camera_shoulder", 0, g_ini));
     controls_camera_fade(GetPrivateProfileIntA("controls", "camera_fade", 1, g_ini));
     controls_style_notice(!GetPrivateProfileIntA("controls", "combat_style_seen", 0, g_ini));

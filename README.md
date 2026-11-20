@@ -596,6 +596,7 @@ game.
 | `aim_button` | `lockon` (default): Z-targeting; `free`: aim over the shoulder at the crosshair, no lock-on |
 | `camera_shoulder` | `0` (default); `1`: the camera stays over the shoulder, and aiming zooms in |
 | `aim_assist` | `0` (default); `1`: the camera slows and the crosshair closes in over an enemy |
+| `shot_homing` | crosshair-aimed buster shots: `high` (the original): they home in on an enemy near the middle of the screen at any height; `low`: only on the enemy under the crosshair; `off`: never. Lock-on and special weapons keep their homing. The combat styles set it (Classic `high`, Adventure `low`, Shooter `off`); left out, it follows the aiming settings the same way |
 | `backpedal` | `walk` (default): backpedal while firing; `jog` (experimental): the run played backward, faster |
 
 Backpedaling and moving while locked on apply to the buster. The special weapons keep Mega Man

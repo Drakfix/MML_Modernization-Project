@@ -1620,8 +1620,11 @@ static int pitch_to(double x, double y, double z)
 /* what FUN_0042A85C returns now: the game's own value, the camera-aimed pitch, or (locked on) the
    pitch to the target. The buster finds a locked enemy by itself (the game's own targeting, which
    lock-on feeds), but the special weapons only take this pitch: level, without it (issue #13). */
+static volatile LONG shots_aimed;   /* shots go to the crosshair (camera or shoulder aim, no lock): homing.c */
+
 static void shot_pitch_sync(void)
 {
+    shots_aimed = 0;
     if (!g_shot_flag)
         return;
     if (lock_active) {
@@ -1630,10 +1633,16 @@ static void shot_pitch_sync(void)
     } else if ((cam_aim || sh_aim) && face_hold) {
         *g_shot_pitch = pitch_to(aim_px, aim_py, aim_pz);
         *g_shot_flag = 1;
+        shots_aimed = 1;
     } else {
         *g_shot_pitch = GVAR(int32_t, G_AIMCAM_PITCH);
         *g_shot_flag = GVAR(uint8_t, G_AIMCAM_ON);
     }
+}
+
+int controls_shots_aimed(void)
+{
+    return (int)shots_aimed && !rail_live();
 }
 
 int controls_aim_point(double *x, double *y, double *z)

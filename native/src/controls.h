@@ -69,6 +69,8 @@ float controls_crosshair(void);
 /* the world point camera-aimed shots go toward (the camera's view, a fixed distance out);
    0 = no vertical aim (shots stay level) */
 int controls_aim_point(double *x, double *y, double *z);
+/* the buster's shots are aimed at that point now (camera or shoulder aim, nothing locked) */
+int controls_shots_aimed(void);
 
 /* Button remapping for the orbit-camera layout: reads [controls] btn_a .. btn_start
  * (jump, shoot, special, talk, roll, aim, orbit, menu, select, none). */
