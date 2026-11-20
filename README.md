@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.9.5 beta.** The 0.1 releases are kept on the
+**Current version: 0.9.6 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -104,6 +104,18 @@ copy.
 - **Longer draw distance.** The terrain is drawn twice as far, so the far side of the biggest maps
   (such as the gate behind Lake Jyun's far wall) no longer shows sky. A new **Draw distance**
   setting can end it just past the fog instead, for slower devices.
+
+**0.9.6:**
+
+- **Separate volumes** for the music, the sound effects and the voices, in both menus
+  ([#17](../../issues/17)). The music can go up to 400%, each track only as far as it plays
+  without distorting, for the quiet tracks some audio mods use.
+- **Shot homing setting** ([#6](../../issues/6)). With the crosshair, the original homing pulled
+  buster shots onto an enemy above or below where you aimed. **Shot homing** (Combat page) keeps
+  it (**High**), limits it to the enemy under the crosshair (**Low**), or turns it off (**Off**).
+  The combat styles set it: Classic High, Adventure Low, Shooter Off.
+
+## What's new in 0.8
 
 - **Start menu on Windows.** The settings, the game import and the updates now live in the same
   start menu as on Android and Linux, before the game starts. Setup installs the app into a
