@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.9.6 beta.** The 0.1 releases are kept on the
+**Current version: 0.9.7 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -114,6 +114,12 @@ copy.
   buster shots onto an enemy above or below where you aimed. **Shot homing** (Combat page) keeps
   it (**High**), limits it to the enemy under the crosshair (**Low**), or turns it off (**Off**).
   The combat styles set it: Classic High, Adventure Low, Shooter Off.
+
+**0.9.7:**
+
+- **60 fps at 4:3** ([#18](../../issues/18)). With **Aspect ratio: 4:3 original**, the in-between
+  frames repeated the previous one, so the game moved at 30 fps. They are interpolated again, and
+  the opening's sky no longer shows the sea at the top of the picture.
 
 ## What's new in 0.8
 

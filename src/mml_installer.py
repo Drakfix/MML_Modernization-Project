@@ -24,7 +24,7 @@ import time
 import patch_manifest as M
 
 APP_NAME = "Mega Man Legends - Modernization Project"
-VERSION = "0.9.6-beta"
+VERSION = "0.9.7-beta"
 
 
 def _res_dir():
