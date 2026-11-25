@@ -76,6 +76,7 @@ static int g_cur_group = HUD_GROUP_NONE;
 static float g_top_box[4], g_top_prev[4];
 static int g_top_seen, g_top_prev_seen;
 static int g_active;
+static int g_track_only;   /* 640 wide: buckets tracked for the interpolation, vertices untouched */
 static draw_prim_t g_draw_prim;
 static draw_indexed_t g_draw_indexed;
 static unsigned g_draw_calls, g_indexed_calls, g_other_fvf;
@@ -193,7 +194,7 @@ const void *g_display_raw_verts;
 
 static HRESULT WINAPI hooked_draw_prim(void *dev, DWORD type, DWORD fvf, void *verts, DWORD count, DWORD flags)
 {
-    void *v = shifted(fvf, verts, count);
+    void *v = g_track_only ? NULL : shifted(fvf, verts, count);
     HRESULT hr;
     g_draw_calls++;
     g_display_raw_verts = verts;
@@ -205,7 +206,7 @@ static HRESULT WINAPI hooked_draw_prim(void *dev, DWORD type, DWORD fvf, void *v
 static HRESULT WINAPI hooked_draw_indexed(void *dev, DWORD type, DWORD fvf, void *verts, DWORD vcount,
                                           WORD *idx, DWORD icount, DWORD flags)
 {
-    void *v = shifted(fvf, verts, vcount);
+    void *v = g_track_only ? NULL : shifted(fvf, verts, vcount);
     g_indexed_calls++;
     return g_draw_indexed(dev, type, fvf, v ? v : verts, vcount, idx, icount, flags);
 }
@@ -271,6 +272,21 @@ int display_install(int screen_w, int screen_h, int width, int hud_anchor, float
     packets_install();
     log_printf("display: native widescreen %dx480, 2D/3D shifted by %.1f px (DDrawCompat must allow %dx480), HUD %s, scale %.2f",
                g_width, g_offset_x, g_width, g_hud_anchor ? "at the edges" : "centred", g_hud_scale);
+    return 1;
+}
+
+/* Without the wide surface (4:3, or the anamorphic stretch) the picture stays the game's own, but
+ * the interpolation still needs to know which bucket each draw comes from (the 3D world is bucket
+ * 4): the walker is tracked and the draws hooked, their vertices passed through as they are. */
+int display_install_tracking(void)
+{
+    if (g_active)
+        return 1;
+    if (!packets_install())
+        return 0;
+    g_track_only = 1;
+    g_active = 1;
+    log_printf("display: 640x480, draws tracked for the interpolation only");
     return 1;
 }
 

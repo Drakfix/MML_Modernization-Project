@@ -802,6 +802,8 @@ void mml_init(void)
     }
     else
         log_printf("widescreen: 4:3 selected, vanilla projection");
+    if (!g_native_wide)
+        display_install_tracking();   /* the 60/120 fps in-between frames need the draws' buckets */
     intro_plays = install_intro();
     ini_string("controls", "mode", "modern", controls, sizeof controls);
     controls_install(_stricmp(controls, "vanilla") != 0, intro_plays);
