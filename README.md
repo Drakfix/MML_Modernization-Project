@@ -10,7 +10,7 @@ music and voices always come from your copy. It does include a translation of th
 program code (see [How it works](#how-it-works)), which only runs with the files of your own
 copy.
 
-**Current version: 0.9.7 beta.** The 0.1 releases are kept on the
+**Current version: 0.9.8 beta.** The 0.1 releases are kept on the
 [`legacy-0.1`](../../tree/legacy-0.1) branch and are no longer maintained.
 
 ## Contents
@@ -120,6 +120,13 @@ copy.
 - **60 fps at 4:3** ([#18](../../issues/18)). With **Aspect ratio: 4:3 original**, the in-between
   frames repeated the previous one, so the game moved at 30 fps. They are interpolated again, and
   the opening's sky no longer shows the sea at the top of the picture.
+
+**0.9.8:**
+
+- **Green Sharukurusu in the Cardon Ruins** ([#20](../../issues/20)). The enemy was nearly
+  invisible, or wore scraps of other textures. The US version's stage file puts its texture in the
+  wrong place; the app now corrects this as the game loads the file. Your game files are not
+  changed.
 
 ## What's new in 0.8
 
