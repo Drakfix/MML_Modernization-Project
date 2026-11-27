@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "datafix.h"
 #include "log.h"
 #include "names.h"
 #include "recomp_rt.h"
@@ -24,7 +25,7 @@
 static FILE *g_files[MAX_FILES];
 static int g_log;
 
-/* files served from memory: a stage file with the Japanese names (names.c), read-only */
+/* files served from memory: a stage file we changed (datafix.c, names.c), read-only */
 typedef struct {
     uint8_t *data;
     size_t size, pos;
@@ -47,19 +48,29 @@ static mem_file *mem_of(uint32_t h)
 #define ftell64 ftello
 #endif
 
-/* the file just opened for reading, as names.c would have it: into memory (1) or left (0) */
-static int names_swap(FILE *f, const char *path, int i)
+/* the file just opened for reading, as the game gets it: with our fixes to its data (datafix.c)
+   and the Japanese names in its text (names.c). Into memory (1), or nothing to change (0) */
+static int patched_file(FILE *f, const char *path, int i)
 {
     int64_t size;
-    uint8_t *d, *out;
+    uint8_t *d, *out = NULL;
     size_t got, n = 0;
-    if (!names_active() || fseek64(f, 0, SEEK_END) != 0 || (size = ftell64(f)) <= 0 || size > (64 << 20))
+    int fix = datafix_wants(path);
+    if ((!fix && !names_active()) || fseek64(f, 0, SEEK_END) != 0 || (size = ftell64(f)) <= 0 || size > (64 << 20))
         return 0;
     d = (uint8_t *)malloc((size_t)size);
     fseek64(f, 0, SEEK_SET);
     got = d ? fread(d, 1, (size_t)size, f) : 0;
     fseek64(f, 0, SEEK_SET);
-    out = got == (size_t)size ? names_file(path, d, (size_t)size, &n) : NULL;
+    if (got == (size_t)size) {
+        int fixed = fix && datafix_file(path, d, (size_t)size);
+        out = names_file(path, d, (size_t)size, &n);   /* (NULL when the names are off) */
+        if (!out && fixed) {
+            out = d;
+            n = (size_t)size;
+            d = NULL;
+        }
+    }
     free(d);
     if (!out)
         return 0;
@@ -174,7 +185,7 @@ static uint32_t sh_create_file(const uint32_t *a)
         shim_set_error(errno == ENOENT ? not_found(path) : error_from_errno());
         return 0xFFFFFFFFu;
     }
-    if (exists && !wr && disp == OPEN_EXISTING && names_swap(f, path, i)) {
+    if (exists && !wr && disp == OPEN_EXISTING && patched_file(f, path, i)) {
         fclose(f);   /* (served from memory: g_mem[i]) */
         shim_set_error(0);
         return HANDLE_BASE + 4u * (uint32_t)i;
